@@ -1,0 +1,38 @@
+{
+    "cooldown_hours": {
+      "BCHUSDT" : 2,
+      "BNBUSDT" : 2,
+      "MKRUSDT" : 2,
+      "LTCUSDT" : 2,
+      "SOLUSDT" : 8,
+      "ETHUSDT" : 1,
+      "BTCUSDT" : 2
+    },
+    "risk_management": {
+      "BTCUSDT": 0.01,
+      "ETHUSDT": 0.03,
+      "BCHUSDT": 0.03,
+      "stop_loss_percent":1
+    },
+    "FUTURE_LEVERAGE": 2,
+    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "BNBUSDT"], 
+    "trade_checker_pair": [ "BCHUSDT", "BTCUSDT", "BNBUSDT", "ETHUSDT", "MKRUSDT", "LTCUSDT", "SOLUSDT", "ATOMUSDT", "XRPUSDT"],
+    "trading_pairs_precision":{
+      "BTCUSDT": 3,
+      "ETHUSDT": 3,
+      "BCHUSDT": 3,
+      "BNBUSDT": 2,
+      "MKRUSDT": 3,
+      "LTCUSDT": 3,
+      "SOLUSDT": 2,
+      "ATOMUSDT": 3,
+      "XRPUSDT": 3
+    },
+    "FIXED_TRADE_AMOUNT": {
+      "BTCUSDT": 600,
+      "ETHUSDT": 30,
+      "BCHUSDT": 30
+    }
+
+  }
+  

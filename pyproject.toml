@@ -1,0 +1,92 @@
+[project]
+name = "orbit"
+version = "0.1.0"
+description = "AI / Trading research and execution framework"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+authors = [{ name = "Pankaj Kumar" }]
+dynamic = ["dependencies"]
+
+[tool.poetry]
+name = "orbit"
+version = "0.1.0"
+description = "AI / Trading research and execution framework"
+authors = ["Pankaj Kumar"]
+packages = [{ include = "orbit", from = "src" }]
+
+[tool.poetry.scripts]
+orbit = "orbit.core.main:main"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+
+tqdm = "*"
+psutil = "*"
+pympler = "*"
+
+binance-connector = "*"
+binance-futures-connector = "*"
+
+pandas = "*"
+numpy = "1.26.4"
+scipy = "*"
+scikit-learn = "*"
+
+schedule = "*"
+jsonschema = "*"
+logzero = "*"
+colorlog = "*"
+colorama = "*"
+termcolor = "*"
+
+pydantic = "*"
+redis = "*"
+pymongo = "*"
+
+gym = "*"
+timeout-decorator = "*"
+
+anthropic = "*"
+groq = "*"
+openai = "*"
+google-generativeai = "*"
+
+python-dotenv = "*"
+requests = "*"
+websocket-client = "*"
+pillow = "*"
+
+backtrader = "*"
+boto3 = "*"
+yfinance = "*"
+praw = "*"
+snscrape = "*"
+
+wandb = "*"
+langchain = "*"
+langchain-openai = "*"
+langchain-groq = "*"
+langgraph = "*"
+langsmith = "*"
+pycryptodome = "^3.23.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+flake8 = "*"
+black = "*"
+pylint = "*"
+mypy = "*"
+coverage = "*"
+pre-commit = "*"
+
+types-requests = "*"
+types-PyYAML = "*"
+
+[tool.poetry.group.viz.dependencies]
+matplotlib = "*"
+mplfinance = "*"
+graphviz = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
