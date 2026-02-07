@@ -28,6 +28,8 @@ import logging
 import threading
 from typing import List, Dict, Any
 
+load_dotenv()  # Load environment variables from .env file
+
 from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
 from orbit.core.trade_checker import TradeChecker
@@ -38,7 +40,6 @@ from orbit.core.sentimen_cron import Croner
 from orbit.utils.utils import *
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from .env file
 # Constants
 SIGNAL_ANALYSIS_SLEEP = 900  # 15 minutes in seconds
 
