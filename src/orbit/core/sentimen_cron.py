@@ -4,7 +4,7 @@ import time
 import redis
 from orbit.ai.lang_inference import inference
 from orbit.core.exception_manager import ExceptionManager
-from orbit.utils.utils import get_indian_time, process_memory
+from orbit.utils.utils import get_indian_time
 
 
 import logging

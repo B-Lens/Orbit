@@ -1,18 +1,21 @@
-import os
-from orbit_strategies.swing_strategy import *
-from orbit_strategies.reversal_strategy import *
-from orbit_strategies.Agglo_strategy import *
-from orbit_strategies.strategies_base import OCSMA_CrossOver, MovingAverageCrossoverStrategy
+import yaml
+import importlib
+from orbit.strategies.strategies_base import Strategy as BaseStrategy
 
-WHEREIAM = os.environ.get('WHEREIAM')
+def load_class(path: str):
+    module_path, class_name = path.rsplit(".", 1)
+    module = importlib.import_module(module_path)
+    cls = getattr(module, class_name)
+
+    if not issubclass(cls, BaseStrategy):
+        raise TypeError(f"{path} is not a BaseStrategy")
+
+    return cls
+
+with open("config/strategies.yaml") as f:
+    config = yaml.safe_load(f)
+
 STRATEGY_REGISTRY = {
-    'BNBUSDT': ReversalStrategyBNB,
-    'MKRUSDT': MeanReversionBBRSIStrategyMKR,
-    'BCHUSDT': BollingerAdaptiveReversalStrategyBCH,
-    'SOLUSDT': MeanReversionBBRSIStrategySOL,
-    'LTCUSDT': ReversalStrategyLTC,
-    'ETHUSDT': Agglo_ETHERIUM,
-    'BTCUSDT': SwingStrategyBTC,
-    'ocsma_crossover': OCSMA_CrossOver,
-    'moving_crossover': MovingAverageCrossoverStrategy,
+    symbol: load_class(item["strategy"])
+    for symbol, item in config["strategies"].items()
 }
