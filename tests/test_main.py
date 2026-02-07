@@ -3,7 +3,6 @@ from timeout_decorator import timeout
 
 from orbit.core.main import BinanceAutomation
 from orbit.core.sentimen_cron import Croner
-from orbit.ai.chart_inference import gemini_inference, gpt4o_chart_inference
 from orbit.ai.lang_inference import inference
 automation = BinanceAutomation()
 croner = Croner(isTesting=True)
