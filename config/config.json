@@ -15,7 +15,7 @@
       "stop_loss_percent":1
     },
     "FUTURE_LEVERAGE": 2,
-    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "BNBUSDT"], 
+    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT"], 
     "trade_checker_pair": [ "BCHUSDT", "BTCUSDT", "BNBUSDT", "ETHUSDT", "MKRUSDT", "LTCUSDT", "SOLUSDT", "ATOMUSDT", "XRPUSDT"],
     "trading_pairs_precision":{
       "BTCUSDT": 3,
