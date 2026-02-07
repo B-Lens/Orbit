@@ -12,7 +12,7 @@ def load_class(path: str):
 
     return cls
 
-with open("strategies.yaml") as f:
+with open("config/strategies.yaml") as f:
     config = yaml.safe_load(f)
 
 STRATEGY_REGISTRY = {

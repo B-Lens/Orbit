@@ -8,7 +8,7 @@ from orbit.core.exception_manager import ExceptionManager
 from orbit.utils.utils import get_indian_time
 
 from orbit.core.mongo_handler import MongoHandler
-from orbit.strategies.strategy_registry import STRATEGY_REGISTRY, WHEREIAM
+from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 # Initialize logging
 logger = logging.getLogger("Orbit")
@@ -17,7 +17,6 @@ logger = logging.getLogger("Orbit")
 class SignalAnalyzer(Authenticator):
     def __init__(self):
         super().__init__()
-        self.send_logs(data=None, description=f'WHEREIAM = {WHEREIAM}', fields=None)
         self.redis_client = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True)
 
         try:
