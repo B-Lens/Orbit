@@ -1,7 +1,6 @@
 import traceback
 
 import logging
-from config.config import *
 from orbit.core.discord_manager import DiscordManager
 
 logger = logging.getLogger("Orbit")

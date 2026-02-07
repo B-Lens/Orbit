@@ -4,7 +4,6 @@ import logging
 from typing import List, Dict, Iterator
 
 from orbit.core.authentication_manager import Authenticator
-from orbit.core.exception_manager import ExceptionManager
 from orbit.utils.utils import get_indian_time
 
 from orbit.core.mongo_handler import MongoHandler
@@ -91,15 +90,6 @@ class SignalAnalyzer(Authenticator):
                 except Exception as e:
                     self.handle_exception(e, f"Exception at inference, SIGNAL = {signal[0]} for {symbol}")
 
-                time.sleep(0.5)
-
-            # Update OHLC data for trade checker pairs not in trading_pairs
-            for symbol in self.trade_checker_pair:
-                if symbol in self.trading_pairs:
-                    continue
-                logging.info(f"Updating OHLC data for {symbol}")
-                self.mongo_handler.handle_mongo_data(symbol)
-                self.send_logs(data=None, description=f'{symbol} OHLC updated')
                 time.sleep(0.5)
 
         except Exception as e:

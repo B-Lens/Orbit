@@ -11,7 +11,6 @@ from orbit.core.authentication_manager import Authenticator
 from orbit.core.mongo_handler import MongoHandler
 from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
-from config.config import *
 
 
 logger = logging.getLogger("Orbit")

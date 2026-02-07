@@ -24,7 +24,6 @@ from orbit.core.authentication_manager import Authenticator
 from orbit.core.order_manager import OrderManager
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 from orbit.core.mongo_handler import MongoHandler
-from config.config import *
 
 import pandas as pd
 
