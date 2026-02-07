@@ -28,7 +28,7 @@ import logging
 import threading
 from typing import List, Dict, Any
 
-from config.config import *
+from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
 from orbit.core.trade_checker import TradeChecker
 from orbit.core.order_manager import OrderManager

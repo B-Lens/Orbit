@@ -4,8 +4,8 @@ import json
 import requests
 
 import logging
-from config.config import *
-from orbit.utils.utils import *
+from config.config import load_config
+from orbit.utils.utils import get_indian_time
 
 logger = logging.getLogger("Orbit")
 

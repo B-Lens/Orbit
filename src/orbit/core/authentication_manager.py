@@ -5,7 +5,7 @@ from binance.um_futures import UMFutures
 from dataclasses import dataclass
 
 import logging
-from config.config import *
+from config.config import load_config
 from orbit.core.exception_manager import ExceptionManager
 
 logger = logging.getLogger("Orbit")

@@ -13,7 +13,6 @@ except Exception:  # pragma: no cover - handled gracefully if pymongo not instal
 import os
 import sys
 import logging
-from config.config import *
 from orbit.core.exception_manager import ExceptionManager
 from typing import List, Optional, Dict, Iterator
 

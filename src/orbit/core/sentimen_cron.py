@@ -8,7 +8,7 @@ from orbit.utils.utils import get_indian_time
 
 
 import logging
-from config.config import *
+from config.config import load_config
 
 logger = logging.getLogger("Orbit")
 
