@@ -27,6 +27,7 @@ import sys
 import logging
 import threading
 from typing import List, Dict, Any
+from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -38,7 +39,6 @@ from orbit.core.authentication_manager import load_config
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
 from orbit.utils.utils import *
-from dotenv import load_dotenv
 
 # Constants
 SIGNAL_ANALYSIS_SLEEP = 900  # 15 minutes in seconds
