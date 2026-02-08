@@ -4,8 +4,10 @@ import json
 import requests
 
 import logging
-from config.config import load_config
 from orbit.utils.utils import get_indian_time
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
 
 logger = logging.getLogger("Orbit")
 
