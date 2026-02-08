@@ -43,10 +43,14 @@ class SignalAnalyzer(Authenticator):
                     self.send_alerts(f"No strategy found for {symbol}", None)
                     continue
 
-                self.strategy = strategy_class(historical_data)
-                signal_ss = time.perf_counter()
-                signal_dict = self.strategy.generate_signals(symbol=symbol)
-                signal_es = time.perf_counter()
+                try:
+                    strategy = strategy_class(historical_data)
+                    signal_ss = time.perf_counter()
+                    signal_dict = strategy.generate_signals(symbol=symbol)
+                    signal_es = time.perf_counter()
+                except Exception as e:
+                    self.handle_exception(e, f"Exception while generating signals for {symbol}")
+                    continue
 
                 if symbol in cooldown_symbols:
                     self.send_cooldown_update(data=None, description=f"{symbol} is in cooldown", fields=None)
