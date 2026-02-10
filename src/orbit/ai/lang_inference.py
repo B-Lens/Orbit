@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from enum import Enum
 from dotenv import load_dotenv
+from orbit.utils.utils import require_env
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -43,9 +44,9 @@ logger = logging.getLogger("Orbit")
 
 # Set up environment variables
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
+os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
+os.environ["OPENAI_API_KEY"] = require_env("OPENAI_API_KEY")
+os.environ["GROQ_API_KEY"] = require_env("GROQ_API_KEY")
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 
 GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"  # Use a more reliable model
