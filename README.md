@@ -14,15 +14,47 @@ AI-assisted decision pipelines
 
 Automated monitoring and execution
 
+## 🛠️ Getting Started
+Prerequisites
+
+Python 3.10+
+
+Linux environment recommended
+
+Redis / MongoDB (optional depending on configuration)
+
+Installation
+git clone https://github.com/ipankaj/Orbit.git
+cd Orbit
+poetry install
+
+Running the Project
+poetry run orbit
+
 
 ## 🤝 Contributing
 
-Contributions are welcome. Orbit is built as a research-driven system and improvements that increase stability, observability, or research capability are encouraged.
+Contributions are welcome. Orbit is a research-driven system, and improvements that enhance:
+
+Stability
+
+Observability
+
+Performance
+
+Research capabilities
+
+Documentation
+
+are highly encouraged.
+
+Please open an issue or submit a pull request with a clear description of changes.
 
 
+## 🙏 Acknowledgements & Copyright
 
-## 📄 License
+Orbit is currently in its early development phase. The project is evolving through ongoing research, experimentation, and iteration. Appreciation goes to everyone who shares ideas, feedback, and technical insights that help shape the direction of the system.
 
-This project is licensed under the MIT License.
+This project reflects a continuous learning process and aims to grow into a stable and research-driven trading framework over time.
 
-You are free to use, modify, and distribute this software with proper attribution. See the LICENSE file for full details.
+Copyright © 2026 Pankaj Kumar. All rights reserved
