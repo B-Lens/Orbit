@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from scipy.signal import argrelextrema
 import datetime
@@ -9,6 +10,11 @@ import mplfinance as mpf
 import logging
 logger = logging.getLogger("Orbit")
 
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+    if value is None or value == "":
+        raise RuntimeError(f"{name} environment variable is not set")
+    return value
 
 def get_indian_time():
     utc_now = datetime.datetime.utcnow()
