@@ -23,7 +23,7 @@ def fetch_news():
         return []  # or handle this error case gracefully
 
     if 'error' in news_data:
-        print("Error in News API response:", news_data['error'])
+        print("Error in News API response. Check server logs or monitoring for details.")
         return []
     print("Successfully fetched news data.")
     articles = []
