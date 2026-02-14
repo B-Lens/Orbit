@@ -1,5 +1,6 @@
 # enhanced_workflow.py
 import asyncio
+import os
 import time
 import logging
 from datetime import datetime
@@ -9,6 +10,12 @@ from clients.reddit_client import RedditClient
 from analysis.reddit_sentiment import WeightedRedditAnalyzer
 from models.mongodb_models import MongoDBManager, SentimentRecord
 from config.reddit_config import WEIGHTED_SUBREDDITS
+from src.orbit.utils.utils import require_env
+from langsmith import traceable
+
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
+
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +37,36 @@ class SentimentWorkflow:
             'fetch_indicators': fetch_market_indicators,
             'parse_sentiment': parse_sentiment
         }
+
+    @traceable(name="fetch_reddit_posts")
+    def fetch_reddit(self):
+        return self.reddit_client.fetch_weighted_posts(
+            hours_back=6,
+            posts_per_subreddit=15
+        )
+
+    @traceable(name="calculate_dynamic_weights")
+    def calculate_weights(self, reddit_posts_data):
+        return self.reddit_client.calculate_dynamic_weights(
+            reddit_posts_data
+        )
+
+    @traceable(name="aggregate_reddit_sentiment")
+    def aggregate_sentiment(self, sentiments):
+        return self.reddit_analyzer.aggregate_weighted_sentiment(sentiments)
+
+    @traceable(name="fetch_news")
+    def fetch_news(self):
+        return self.legacy_functions["fetch_news"].invoke("crypto market")
+
+    @traceable(name="fetch_indicators")
+    def fetch_indicators(self):
+        return self.legacy_functions["fetch_indicators"]()
+
+    @traceable(name="save_to_mongodb")
+    def save_db(self, *args, **kwargs):
+        return self._save_to_database(*args, **kwargs)
+
     
     async def run_analysis(self) -> Dict[str, Any]:
         """Run complete enhanced sentiment analysis"""
@@ -69,8 +106,6 @@ class SentimentWorkflow:
             top_posts = self.reddit_analyzer.get_top_influential_posts(all_sentiments)
 
             print(f"Top Influential Posts: {top_posts}")
-
-            return
             
             # Step 6: Run legacy analyses (news, indicators)
             logger.info("Running legacy analyses...")
