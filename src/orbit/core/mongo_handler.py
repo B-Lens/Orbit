@@ -50,7 +50,6 @@ class MongoHandler(ExceptionManager):
                 [("symbol", ASCENDING), ("interval", ASCENDING), ("timestamp", ASCENDING)],
                 unique=True,
             )
-            # self.collection.create_index("expireAt", expireAfterSeconds=0)
         except Exception as exc:
             logger.error(f"Error initializing MongoDB: {exc}")
             self.collection = None
