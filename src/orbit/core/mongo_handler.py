@@ -55,6 +55,50 @@ class MongoHandler(ExceptionManager):
             logger.error(f"Error initializing MongoDB: {exc}")
             self.collection = None
 
+    def clear_ohlcv_collection(self) -> None:
+        """Delete all OHLCV data from MongoDB."""
+        if self.collection is None:
+            logger.warning("Mongo collection not available.")
+            return
+
+        try:
+            result = self.collection.delete_many({})
+            logger.info(f"Deleted {result.deleted_count} documents from OHLCV collection.")
+        except Exception as exc:
+            self.handle_exception(exc, "Error clearing OHLCV collection")
+
+    def clear_symbol_data(self, symbol: str, interval: str = "15m") -> None:
+        """Delete OHLCV data for a specific symbol."""
+        if self.collection is None:
+            logger.warning("Mongo collection not available.")
+            return
+
+        try:
+            result = self.collection.delete_many({
+                "symbol": symbol,
+                "interval": interval
+            })
+            logger.info(f"Deleted {result.deleted_count} records for {symbol} ({interval}).")
+        except Exception as exc:
+            self.handle_exception(exc, f"Error clearing data for {symbol}")
+
+    def clear_old_data(self, days: int = 60) -> None:
+        """Delete OHLCV data older than specified days."""
+        if self.collection is None:
+            logger.warning("Mongo collection not available.")
+            return
+
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+            result = self.collection.delete_many({
+                "expireAt": {"$lt": cutoff}
+            })
+
+            logger.info(f"Deleted {result.deleted_count} old records.")
+        except Exception as exc:
+            self.handle_exception(exc, "Error clearing old data")
+
     def get_mongo_historical_data(self, symbol: str, interval: str = "15m") -> pd.DataFrame:
         """Retrieve historical OHLCV data from MongoDB."""
         if self.collection is None:
