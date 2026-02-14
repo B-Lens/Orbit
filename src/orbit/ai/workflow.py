@@ -3,7 +3,7 @@ import asyncio
 import time
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from clients.reddit_client import RedditClient
 from analysis.reddit_sentiment import WeightedRedditAnalyzer
@@ -63,9 +63,14 @@ class SentimentWorkflow:
             # Step 4: Aggregate weighted sentiments
             logger.info("Aggregating weighted sentiments...")
             reddit_result = self.reddit_analyzer.aggregate_weighted_sentiment(all_sentiments)
+            print(f"Aggregated Reddit Sentiment: {reddit_result}")
             
             # Step 5: Get top influential posts
             top_posts = self.reddit_analyzer.get_top_influential_posts(all_sentiments)
+
+            print(f"Top Influential Posts: {top_posts}")
+
+            return
             
             # Step 6: Run legacy analyses (news, indicators)
             logger.info("Running legacy analyses...")

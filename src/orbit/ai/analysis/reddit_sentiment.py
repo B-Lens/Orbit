@@ -1,9 +1,13 @@
 # analysis/weighted_reddit_sentiment.py
+import json
+import logging
 from typing import List, Dict, Any
 import numpy as np
 from datetime import datetime
 from pydantic import BaseModel, Field
 from config.reddit_config import CATEGORY_SENTIMENT_IMPACT
+
+logger = logging.getLogger(__name__)
 
 class RedditSentimentEntry(BaseModel):
     """Model for individual Reddit post sentiment"""
