@@ -154,7 +154,11 @@ class MongoHandler(ExceptionManager):
             return historical_data
 
         historical_data_db = new_data.copy().reset_index()
-        historical_data_db["timestamp"] = pd.to_numeric(historical_data_db["timestamp"])
+        historical_data_db["timestamp"] = (
+            historical_data_db["timestamp"]
+            .astype("int64") // 1_000_000
+        )
+
         self.store_historical_data(symbol, historical_data_db)
 
         return historical_data
