@@ -21,7 +21,7 @@ load_dotenv()  # Load environment variables from .env file
 os.environ["GROQ_API_KEY"] = require_env("GROQ_API_KEY")
 GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"  # Use a more reliable model
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Orbit")
 
 class MarketIndicators(BaseModel):
     """Model for market indicators."""
