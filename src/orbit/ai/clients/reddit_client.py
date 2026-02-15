@@ -14,7 +14,7 @@ load_dotenv()  # Load environment variables from .env file
 logger = logging.getLogger("Orbit")
 
 class RedditClient:
-    def __init__(self):
+    def __init__(self) -> None:
         self.reddit = praw.Reddit(
             client_id=os.getenv('REDDIT_CLIENT_ID'),
             client_secret=os.getenv('REDDIT_CLIENT_SECRET'),

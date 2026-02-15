@@ -40,7 +40,7 @@ class CategoryAggregation(BaseModel):
     weighted_contribution: float
 
 class WeightedRedditAnalyzer:
-    def __init__(self, llm):
+    def __init__(self, llm) -> None:
         self.llm = llm
         
     async def analyze_post_sentiment(
@@ -63,7 +63,7 @@ class WeightedRedditAnalyzer:
         
         Respond in JSON format:
         {{
-            "sentiment": "bullish|bearish|neutral",
+            "sentiment": "BULLISH|BEARISH|NEUTRAL",
             "confidence": 0.0-1.0,
             "relevance": 0.0-1.0 (how relevant is this to crypto/market sentiment),
             "explanation": "brief explanation"
@@ -76,7 +76,7 @@ class WeightedRedditAnalyzer:
         except Exception as e:
             logger.error(f"LLM analysis failed: {e}, using fallback")
             sentiment_data = {
-                "sentiment": "neutral",
+                "sentiment": "NEUTRAL",
                 "confidence": 0.3,
                 "relevance": 0.5,
                 "explanation": "Analysis failed"
@@ -134,10 +134,10 @@ class WeightedRedditAnalyzer:
             
             # Convert sentiment to numeric
             sentiment_num = {
-                'bullish': 1.0,
-                'neutral': 0.0,
-                'bearish': -1.0
-            }.get(entry.raw_sentiment.lower(), 0.0)
+                'BULLISH': 1.0,
+                'NEUTRAL': 0.0,
+                'BEARISH': -1.0
+            }.get(entry.raw_sentiment.upper(), 0.0)
             
             # Apply confidence to sentiment
             adjusted_sentiment = sentiment_num * entry.confidence
@@ -204,7 +204,7 @@ class WeightedRedditAnalyzer:
         sorted_posts = sorted(
             sentiments, 
             key=lambda x: x.final_weight * abs(
-                1 if x.raw_sentiment == 'bullish' else -1 if x.raw_sentiment == 'bearish' else 0
+                1 if x.raw_sentiment == 'BULLISH' else -1 if x.raw_sentiment == 'BEARISH' else 0
             ),
             reverse=True
         )
