@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from bson import ObjectId
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Orbit")
 
 class PyObjectId(ObjectId):
     @classmethod

@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import redis
+import asyncio
 from orbit.ai.lang_inference_workflow import inference
 from orbit.ai.sentimental_workflow import SentimentWorkflow
 from orbit.ai.utils.utils import initialize_llm
@@ -54,7 +55,7 @@ class Croner(ExceptionManager):
                     self.redis_client.setex("market_sentiments", 3600, sentiment)
 
                     # Sentimental Workflow 
-                    result = self.sentimental_workflow.run_analysis()
+                    result = asyncio.run(self.sentimental_workflow.run_analysis())
                     self.send_market_sentiment(
                         data=f"Sentimental Workflow Result",
                         description=None,
