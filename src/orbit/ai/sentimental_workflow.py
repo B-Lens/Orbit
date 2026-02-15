@@ -162,7 +162,6 @@ class SentimentWorkflow:
                     "confidence": reddit_result["confidence"],
                     "posts_analyzed": reddit_result["total_posts_analyzed"],
                     "category_breakdown": reddit_result["category_breakdown"],
-                    "top_influential_posts": top_posts,
                 },
                 "market_indicators": {
                     "vix": indicators.vix,
