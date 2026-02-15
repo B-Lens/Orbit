@@ -1,6 +1,7 @@
 # analysis/weighted_reddit_sentiment.py
 import json
 import logging
+import re
 from typing import List, Dict, Any
 import numpy as np
 from datetime import datetime
@@ -39,6 +40,13 @@ class CategoryAggregation(BaseModel):
     impact_factor: float
     weighted_contribution: float
 
+def extract_json(text: str) -> dict:
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError("No JSON found in LLM response")
+
+    return json.loads(match.group(0))
+
 class WeightedRedditAnalyzer:
     def __init__(self, llm) -> None:
         self.llm = llm
@@ -72,9 +80,11 @@ class WeightedRedditAnalyzer:
         
         try:
             result = await self.llm.ainvoke(prompt)
-            sentiment_data = json.loads(result.content)
+            print(f"LLM Result for post {post['id']}: {result.content}")
+            sentiment_data = extract_json(result.content)
+            print(f"Extracted Sentiment Data for post {post['id']}: {sentiment_data}")
         except Exception as e:
-            logger.error(f"LLM analysis failed: {e}, using fallback")
+            logger.exception(f"LLM analysis failed: {e}, using fallback")
             sentiment_data = {
                 "sentiment": "NEUTRAL",
                 "confidence": 0.3,

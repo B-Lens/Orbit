@@ -42,8 +42,8 @@ class SentimentRecord(BaseModel):
     market_indicators: Dict[str, Any]
     
     # Market Context (optional)
-    btc_price: Optional[float] = None
-    eth_price: Optional[float] = None
+    BTCUSDT: Optional[float] = None
+    ETHUSDT: Optional[float] = None
     
     # Metadata
     version: str = "2.0"

@@ -2,6 +2,7 @@
 import os
 import time
 import logging
+from tqdm import tqdm
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -111,10 +112,10 @@ class SentimentWorkflow:
             logger.info("Analyzing Reddit posts...")
             all_sentiments: List[RedditSentimentEntry] = []
 
-            for subreddit_name, data in reddit_posts_data.items():
+            for subreddit_name, data in tqdm(reddit_posts_data.items()):
                 weight = dynamic_weights.get(subreddit_name, 0.5)
 
-                for post in data["posts"]:
+                for post in tqdm(data["posts"]):
                     sentiment = await self.reddit_analyzer.analyze_post_sentiment(
                         post, weight
                     )
