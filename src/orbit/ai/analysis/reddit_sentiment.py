@@ -5,7 +5,7 @@ from typing import List, Dict, Any
 import numpy as np
 from datetime import datetime
 from pydantic import BaseModel, Field
-from config.reddit_config import CATEGORY_SENTIMENT_IMPACT
+from orbit.ai.config.reddit_config import CATEGORY_SENTIMENT_IMPACT
 
 logger = logging.getLogger(__name__)
 

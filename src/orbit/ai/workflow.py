@@ -6,11 +6,13 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List
 
-from clients.reddit_client import RedditClient
-from analysis.reddit_sentiment import WeightedRedditAnalyzer
-from models.mongodb_models import MongoDBManager, SentimentRecord
-from config.reddit_config import WEIGHTED_SUBREDDITS
-from src.orbit.utils.utils import require_env
+from orbit.ai.clients.reddit_client import RedditClient
+from orbit.ai.clients.news_client import fetch_news_articles
+from orbit.ai.analysis.reddit_sentiment import WeightedRedditAnalyzer
+from orbit.ai.models.mongodb_models import MongoDBManager, SentimentRecord
+from orbit.ai.config.reddit_config import WEIGHTED_SUBREDDITS
+from orbit.ai.utils.utils import fetch_market_indicators, parse_sentiment, SentimentType
+from orbit.utils.utils import require_env
 from langsmith import traceable
 
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -26,14 +28,8 @@ class SentimentWorkflow:
         self.reddit_analyzer = WeightedRedditAnalyzer(llm)
         self.mongodb = MongoDBManager()
         
-        # Your existing components
-        from lang_inference import (
-            fetch_news_sentiment, 
-            fetch_market_indicators,
-            parse_sentiment
-        )
         self.legacy_functions = {
-            'fetch_news': fetch_news_sentiment,
+            'fetch_news': fetch_news_articles,
             'fetch_indicators': fetch_market_indicators,
             'parse_sentiment': parse_sentiment
         }
@@ -182,8 +178,8 @@ class SentimentWorkflow:
         combined_score = (
             reddit_result['overall_score'] * reddit_weight +
             news_sentiment.confidence * news_weight * (
-                1 if news_sentiment.sentiment.value == 'BULLISH' else
-                -1 if news_sentiment.sentiment.value == 'BEARISH' else 0
+                1 if news_sentiment.sentiment == SentimentType.BULLISH else
+                -1 if news_sentiment.sentiment == SentimentType.BEARISH else 0
             )
         )
         

@@ -40,7 +40,7 @@ def fetch_news_articles(query: str) -> str:
         return "No valid news content found."
 
     if 'error' in news_data:
-        logger.error(f"Error in News API response: {news_data['error']}")
+        logger.error("Error in News API response from NewsData API")
         return "No valid news content found."
     
     articles = []

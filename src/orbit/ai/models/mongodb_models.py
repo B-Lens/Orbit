@@ -1,5 +1,6 @@
 # models/mongodb_models.py
 import os
+import pandas as pd
 from pymongo import MongoClient, ASCENDING, DESCENDING, TEXT
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any

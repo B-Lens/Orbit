@@ -8,11 +8,12 @@ import yfinance as yf
 import pandas as pd
 from functools import lru_cache
 from typing import Optional
+from enum import Enum
 from pydantic import BaseModel, Field, field_validator
-from langchain_core.chat_models import BaseChatModel
-from langchain_core.chat_models import ChatGroq
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_groq import ChatGroq
 from langchain_core.tools import tool
-from src.orbit.utils.utils import require_env
+from orbit.utils.utils import require_env
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
@@ -36,6 +37,25 @@ class MarketIndicators(BaseModel):
                 "put_call_ratio": 0.85
             }
         }
+
+# Pydantic Models for better type safety and validation
+class SentimentType(str, Enum):
+    """Enumeration for sentiment types."""
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+    NEUTRAL = "NEUTRAL"
+
+class SentimentResult(BaseModel):
+    """Model for parsed sentiment results."""
+    sentiment: SentimentType = Field(..., description="The sentiment classification")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score between 0 and 1")
+    explanation: str = Field(default="", description="Explanation for the sentiment")
+    
+    @field_validator('confidence')
+    @classmethod
+    def validate_confidence(cls, v: float) -> float:
+        """Ensure confidence is between 0 and 1."""
+        return max(0.0, min(1.0, v))
 
 # Initialize LLM with fallback
 def initialize_llm()-> Optional[BaseChatModel]:
@@ -115,3 +135,47 @@ def fetch_market_indicators() -> MarketIndicators:
         logger.error(f"Error fetching Fear & Greed Index: {e}")
 
     return indicators
+
+
+def parse_sentiment(sentiment: str) -> SentimentResult:
+    """Parse sentiment string and extract sentiment, confidence, and explanation."""
+    logger.debug(f"Parsing sentiment: {sentiment}")
+    
+    if not isinstance(sentiment, str) or "Sentiment:" not in sentiment:
+        return SentimentResult(sentiment=SentimentType.NEUTRAL, confidence=0.0, explanation="")
+    
+    try:
+        # More robust parsing that handles different formats
+        sentiment_val = SentimentType.NEUTRAL
+        confidence = 0.0
+        explanation = ""
+        
+        # Extract sentiment
+        if "Sentiment:" in sentiment:
+            sentiment_part = sentiment.split("Sentiment:")[1].split(",")[0].strip()
+            try:
+                sentiment_val = SentimentType(sentiment_part.upper())
+            except ValueError:
+                logger.error(f"Unknown sentiment value: {sentiment_part}")
+                sentiment_val = SentimentType.NEUTRAL
+        
+        # Extract confidence
+        if "Confidence:" in sentiment:
+            confidence_part = sentiment.split("Confidence:")[1].split(",")[0].strip()
+            try:
+                confidence = float(confidence_part)
+                # Ensure confidence is between 0 and 1
+                confidence = max(0.0, min(1.0, confidence))
+            except (ValueError, TypeError):
+                logger.error(f"Invalid confidence value: {confidence_part}")
+                confidence = 0.0
+        
+        # Extract explanation
+        if "Explanation:" in sentiment:
+            explanation_part = sentiment.split("Explanation:")[1].strip()
+            explanation = explanation_part
+        
+        return SentimentResult(sentiment=sentiment_val, confidence=confidence, explanation=explanation)
+    except Exception as e:
+        logger.error(f"Error parsing sentiment: {e}")
+        return SentimentResult(sentiment=SentimentType.NEUTRAL, confidence=0.0, explanation="")
