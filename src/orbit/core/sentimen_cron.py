@@ -2,7 +2,9 @@ import os
 import sys
 import time
 import redis
-from orbit.ai.lang_inference import inference
+from orbit.ai.lang_inference_workflow import inference
+from orbit.ai.sentimental_workflow import SentimentWorkflow
+from orbit.ai.utils.utils import initialize_llm
 from orbit.core.exception_manager import ExceptionManager
 from orbit.utils.utils import get_indian_time
 
@@ -20,6 +22,8 @@ class Croner(ExceptionManager):
         self.redis_client = redis.StrictRedis(
             host="localhost", port=6379, db=0, decode_responses=True
         )
+        llm = initialize_llm()
+        self.sentimental_workflow = SentimentWorkflow(llm=llm)
 
     def sentiment_croner(self):
         """
@@ -48,12 +52,20 @@ class Croner(ExceptionManager):
                     if self.isTesting:
                         return True
                     self.redis_client.setex("market_sentiments", 3600, sentiment)
+
+                    # Sentimental Workflow 
+                    result = self.sentimental_workflow.run_analysis()
+                    self.send_market_sentiment(
+                        data=f"Sentimental Workflow Result",
+                        description=None,
+                        fields=result,
+                    )
                     time.sleep(90)
                 time.sleep(30)
             except Exception as e:
                 self.handle_exception(e, context_description='Exception in Sentiment Croner')
                 if self.isTesting:
                     break 
-                time.sleep(30)
+                time.sleep(90)
         
         return False

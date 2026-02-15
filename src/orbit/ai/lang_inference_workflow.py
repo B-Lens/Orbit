@@ -1,6 +1,5 @@
 # pylint: skip-file
 import os
-import sys
 import logging
 import praw
 import pickle
@@ -8,15 +7,9 @@ import time
 import re
 import json
 import traceback  # Add this import at the top of your file
-import requests
 import yfinance as yf
 import pandas as pd
-#from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
-# from langgraph.prebuilt import ToolNode
-from langchain_groq import ChatGroq
-# from langchain_core.runnables import RunnableSequence
-# import snscrape.modules.twitter as sntwitter
 from langgraph.graph import StateGraph
 from langchain_core.messages.ai import AIMessage
 from langchain_core.tools import tool
@@ -27,10 +20,10 @@ from langsmith import Client
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import lru_cache
-from enum import Enum
 from dotenv import load_dotenv
 from orbit.utils.utils import require_env
+from orbit.ai.clients.news_client import fetch_news_articles
+from orbit.ai.utils.utils import MarketIndicators, initialize_llm, fetch_market_indicators, parse_sentiment, SentimentResult, SentimentType
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -47,9 +40,7 @@ os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
 os.environ["OPENAI_API_KEY"] = require_env("OPENAI_API_KEY")
 os.environ["GROQ_API_KEY"] = require_env("GROQ_API_KEY")
-NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 
-GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"  # Use a more reliable model
 # Initialize LangSmith client for observability
 langsmith_client = Client()
 
@@ -68,40 +59,6 @@ REDDIT_SUBREDDITS = [
 SENTIMENT_HISTORY_FILE = 'sentiment_history.pkl'
 SENTIMENT_HISTORY_HOURS = 12
 
-# Pydantic Models for better type safety and validation
-
-class SentimentType(str, Enum):
-    """Enumeration for sentiment types."""
-    BULLISH = "BULLISH"
-    BEARISH = "BEARISH"
-    NEUTRAL = "NEUTRAL"
-
-class SentimentResult(BaseModel):
-    """Model for parsed sentiment results."""
-    sentiment: SentimentType = Field(..., description="The sentiment classification")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score between 0 and 1")
-    explanation: str = Field(default="", description="Explanation for the sentiment")
-    
-    @field_validator('confidence')
-    @classmethod
-    def validate_confidence(cls, v: float) -> float:
-        """Ensure confidence is between 0 and 1."""
-        return max(0.0, min(1.0, v))
-
-class MarketIndicators(BaseModel):
-    """Model for market indicators."""
-    vix: Optional[float] = Field(default=None, description="VIX volatility index value")
-    fear_greed_index: Optional[int] = Field(default=None, ge=0, le=100, description="Crypto Fear & Greed Index (0-100)")
-    put_call_ratio: Optional[float] = Field(default=None, description="Put/Call ratio (placeholder)")
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "vix": 18.5,
-                "fear_greed_index": 65,
-                "put_call_ratio": 0.85
-            }
-        }
 
 class SentimentHistoryEntry(BaseModel):
     """Model for sentiment history entries."""
@@ -148,133 +105,6 @@ class SentimentState(BaseModel):
             }
         }
 
-@tool
-def fetch_news_sentiment(query: str) -> str:
-    """Fetch recent news articles and extract sentiment."""
-    if not NEWSDATA_API_KEY:
-        logger.error("NEWSDATA_API_KEY not configured")
-        return "No valid news content found."
-    
-    # Use a more focused query to stay within API limits
-    query = "bitcoin OR crypto OR stock market"
-    url = f'https://newsdata.io/api/1/news?apikey={NEWSDATA_API_KEY}&q={query}&language=en'
-    
-    # Log URL length for debugging
-    logger.info(f"NewsData API URL length: {len(url)} characters")
-    logger.info(f"Query: {query}")
-    
-    try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch news: {e}")
-        return "No valid news content found."
-    
-    try:
-        news_data = response.json()
-    except ValueError as e:
-        logger.error(f"Failed to parse News JSON: {e}")
-        return "No valid news content found."
-
-    if 'error' in news_data:
-        logger.error(f"Error in News API response: {news_data['error']}")
-        return "No valid news content found."
-    
-    articles = []
-    for article in news_data.get('results', []):
-        title = article.get('title') or ''
-        description = article.get('description') or ''
-        full_text = f"{title.strip()}. {description.strip()}"
-        if full_text.strip():  # avoid empty entries
-            articles.append(full_text)
-
-    # Join the articles into a single chunk of text
-    articles_text = "\n\n".join(articles)
-    if not articles_text.strip():
-        logger.warning("No valid news content found.")
-        return "No valid news content found."
-    
-    logger.info(f"Successfully fetched {len(articles)} news articles")
-    return articles_text
-
-@lru_cache(maxsize=10)
-def fetch_vix_index(time_bucket: int) -> Optional[float]:
-    """Fetch and cache the VIX index."""
-    try:
-        vix_data = yf.Ticker("^VIX").history(period="1d")
-        if isinstance(vix_data, pd.DataFrame) and not vix_data.empty:
-            vix = vix_data['Close'].iloc[-1]
-            if isinstance(vix, (int, float)):  # Ensure the value is numeric
-                vix = round(float(vix), 2)
-                logger.info(f"VIX fetched: {vix}")
-                return vix
-    except Exception as e:
-        logger.error(f"Error fetching VIX: {e}")
-    return None
-
-@lru_cache(maxsize=10)
-def fetch_crypto_fear_greed(time_bucket: int) -> Optional[int]:
-    """Fetch and cache the Crypto Fear & Greed Index."""
-    try:
-        response = requests.get("https://api.alternative.me/fng/", timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        index_value = int(data['data'][0]['value'])
-        logger.info(f"Fear & Greed Index fetched: {index_value}")
-        return index_value
-    except Exception as e:
-        logger.error(f"Error fetching Crypto Fear & Greed: {e}")
-        return None
-    
-
-def fetch_market_indicators() -> MarketIndicators:
-    """Fetch real market indicators like VIX and Fear & Greed Index with caching."""
-    indicators = MarketIndicators()
-
-    current_hour = time.localtime().tm_hour
-    
-    try:
-        # Fetch VIX index
-        indicators.vix = fetch_vix_index(current_hour)
-    except Exception as e:
-        logger.error(f"Error fetching VIX: {e}")
-
-    try:
-        # Fetch Fear & Greed Index
-        indicators.fear_greed_index = fetch_crypto_fear_greed(current_hour)
-    except Exception as e:
-        logger.error(f"Error fetching Fear & Greed Index: {e}")
-
-    return indicators
-
-# Initialize LLM with fallback
-def initialize_llm()-> Optional[BaseChatModel]:
-    """Initialize LLM with fallback options."""
-    try:
-        llm = ChatGroq(model=GROQ_MODEL, temperature=0, timeout=30)
-        # Test the model
-        test_response = llm.invoke("Test")
-        print(f"test_response: {test_response}")
-        logger.info("Groq model initialized successfully")
-        return llm
-    except Exception as e:
-        logger.error(f"Failed to initialize Groq model: {e}")
-        # Try alternative models
-        alternative_models = ["llama-3.1-8b-instant", "gemma2-9b-it"]
-        for alt_model in alternative_models:
-            try:
-                logger.info(f"Trying alternative model: {alt_model}")
-                llm = ChatGroq(model=alt_model, temperature=0, timeout=30)
-                test_response = llm.invoke("Test")
-                logger.info(f"Alternative model {alt_model} initialized successfully")
-                return llm
-            except Exception as alt_e:
-                logger.error(f"Failed to initialize {alt_model}: {alt_e}")
-                continue
-        
-        # If all Groq models fail, return None
-        logger.error("All Groq models failed to initialize")
-        return None
 
 # Now `llm` will be typed correctly
 llm: Optional[BaseChatModel] = initialize_llm()
@@ -389,7 +219,7 @@ def summarize_history_node(state: SentimentState) -> SentimentState:
 def news_node(state: SentimentState) -> SentimentState:
     """Analyze sentiment of news articles."""
     try:
-        news_texts = fetch_news_sentiment.invoke("stock market sentiment")
+        news_texts = fetch_news_articles.invoke("stock market sentiment")
         reference = news_texts if isinstance(news_texts, str) else "\n".join(str(item) for item in news_texts) if isinstance(news_texts, list) else str(news_texts)
         text = "Analyze the following news articles for stock market sentiment."
         history_summary = state.history_summary or "No recent sentiment history."
@@ -619,48 +449,6 @@ def indicators_node(state: SentimentState) -> SentimentState:
         state.messages.append(Message(role="assistant", content=f"Error fetching indicators: {str(e)}"))
     return state
 
-def parse_sentiment(sentiment: str) -> SentimentResult:
-    """Parse sentiment string and extract sentiment, confidence, and explanation."""
-    logger.debug(f"Parsing sentiment: {sentiment}")
-    
-    if not isinstance(sentiment, str) or "Sentiment:" not in sentiment:
-        return SentimentResult(sentiment=SentimentType.NEUTRAL, confidence=0.0, explanation="")
-    
-    try:
-        # More robust parsing that handles different formats
-        sentiment_val = SentimentType.NEUTRAL
-        confidence = 0.0
-        explanation = ""
-        
-        # Extract sentiment
-        if "Sentiment:" in sentiment:
-            sentiment_part = sentiment.split("Sentiment:")[1].split(",")[0].strip()
-            try:
-                sentiment_val = SentimentType(sentiment_part.upper())
-            except ValueError:
-                logger.error(f"Unknown sentiment value: {sentiment_part}")
-                sentiment_val = SentimentType.NEUTRAL
-        
-        # Extract confidence
-        if "Confidence:" in sentiment:
-            confidence_part = sentiment.split("Confidence:")[1].split(",")[0].strip()
-            try:
-                confidence = float(confidence_part)
-                # Ensure confidence is between 0 and 1
-                confidence = max(0.0, min(1.0, confidence))
-            except (ValueError, TypeError):
-                logger.error(f"Invalid confidence value: {confidence_part}")
-                confidence = 0.0
-        
-        # Extract explanation
-        if "Explanation:" in sentiment:
-            explanation_part = sentiment.split("Explanation:")[1].strip()
-            explanation = explanation_part
-        
-        return SentimentResult(sentiment=sentiment_val, confidence=confidence, explanation=explanation)
-    except Exception as e:
-        logger.error(f"Error parsing sentiment: {e}")
-        return SentimentResult(sentiment=SentimentType.NEUTRAL, confidence=0.0, explanation="")
 
 def combine_sentiment_node(state: SentimentState) -> SentimentState:
     """Combine sentiments and indicators to produce final sentiment, using memory state."""
