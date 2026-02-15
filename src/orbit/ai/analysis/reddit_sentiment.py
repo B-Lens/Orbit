@@ -7,7 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 from orbit.ai.config.reddit_config import CATEGORY_SENTIMENT_IMPACT
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Orbit")
 
 class RedditSentimentEntry(BaseModel):
     """Model for individual Reddit post sentiment"""

@@ -9,7 +9,7 @@ load_dotenv()  # Load environment variables from .env file
 
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Orbit")
 
 @tool
 def fetch_news_articles(query: str) -> str:

@@ -19,7 +19,7 @@ os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Orbit")
 
 class SentimentWorkflow:
     def __init__(self, llm):
@@ -35,10 +35,10 @@ class SentimentWorkflow:
         }
 
     @traceable(name="fetch_reddit_posts")
-    def fetch_reddit(self):
+    def fetch_reddit(self, hours_back=6, posts_per_subreddit=15):
         return self.reddit_client.fetch_weighted_posts(
-            hours_back=6,
-            posts_per_subreddit=15
+            hours_back=hours_back,
+            posts_per_subreddit=posts_per_subreddit
         )
 
     @traceable(name="calculate_dynamic_weights")
@@ -52,8 +52,8 @@ class SentimentWorkflow:
         return self.reddit_analyzer.aggregate_weighted_sentiment(sentiments)
 
     @traceable(name="fetch_news")
-    def fetch_news(self):
-        return self.legacy_functions["fetch_news"].invoke("crypto market")
+    def fetch_news(self, topic="crypto market"):
+        return self.legacy_functions["fetch_news"].invoke(topic)
 
     @traceable(name="fetch_indicators")
     def fetch_indicators(self):
@@ -71,14 +71,14 @@ class SentimentWorkflow:
         try:
             # Step 1: Fetch weighted Reddit posts
             logger.info("Fetching weighted Reddit posts...")
-            reddit_posts_data = self.reddit_client.fetch_weighted_posts(
+            reddit_posts_data: Dict[str, Dict[str, Any]] = self.fetch_reddit(
                 hours_back=6,
                 posts_per_subreddit=15
             )
             
             # Step 2: Calculate dynamic weights
             logger.info("Calculating dynamic weights...")
-            dynamic_weights = self.reddit_client.calculate_dynamic_weights(reddit_posts_data)
+            dynamic_weights = self.calculate_weights(reddit_posts_data)
             
             # Step 3: Analyze each post with weights
             logger.info("Analyzing Reddit posts...")
@@ -95,7 +95,7 @@ class SentimentWorkflow:
             
             # Step 4: Aggregate weighted sentiments
             logger.info("Aggregating weighted sentiments...")
-            reddit_result = self.reddit_analyzer.aggregate_weighted_sentiment(all_sentiments)
+            reddit_result = self.aggregate_sentiment(all_sentiments)
             print(f"Aggregated Reddit Sentiment: {reddit_result}")
             
             # Step 5: Get top influential posts
@@ -105,8 +105,8 @@ class SentimentWorkflow:
             
             # Step 6: Run legacy analyses (news, indicators)
             logger.info("Running legacy analyses...")
-            news_text = self.legacy_functions['fetch_news'].invoke("crypto market")
-            indicators = self.legacy_functions['fetch_indicators']()
+            news_text = self.fetch_news(topic="crypto market")
+            indicators = self.fetch_indicators()
             
             # Step 7: Combine all results
             combined_result = self._combine_results(
@@ -115,7 +115,7 @@ class SentimentWorkflow:
             
             # Step 8: Save to MongoDB
             logger.info("Saving to MongoDB...")
-            record_id = self._save_to_database(
+            record_id = self.save_db(
                 reddit_result=reddit_result,
                 top_posts=top_posts,
                 news_text=news_text,

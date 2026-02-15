@@ -2,7 +2,7 @@
 import os
 import praw
 import asyncio
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Orbit")
 
 class RedditClient:
     def __init__(self):
@@ -26,7 +26,7 @@ class RedditClient:
         self, 
         hours_back: int = 6,
         posts_per_subreddit: int = 20
-    ) -> Dict[str, List[Dict]]:
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch posts from all weighted subreddits with metadata for weight calculation
         """
