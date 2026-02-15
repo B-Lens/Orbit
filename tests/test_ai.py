@@ -18,7 +18,7 @@ class TestAI(unittest.TestCase):
 
     @timeout(20)
     @patch("orbit.ai.clients.news_client.fetch_news_articles")
-    @patch("orbit.ai.lang_inference.fetch_reddit_posts")
+    @patch("orbit.ai.lang_inference_workflow.fetch_reddit_posts")
     @patch("orbit.ai.utils.utils.fetch_market_indicators")
     @patch("orbit.ai.utils.utils.initialize_llm")
     def test_langchain_inference(
