@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import requests
 from scipy.signal import argrelextrema
 import datetime
 import pytz
@@ -23,6 +24,17 @@ def get_indian_time():
         india_timezone
     )
     return india_time
+
+def get_symbol_price(symbol: str):
+    url = "https://api.binance.com/api/v3/ticker/price"
+    params = {"symbol": symbol}
+
+    response = requests.get(url, params=params, timeout=5)
+    response.raise_for_status()
+
+    data = response.json()
+    return float(data["price"])
+
 
 def generate_chart(df, support=None, resistance=None):
     """
