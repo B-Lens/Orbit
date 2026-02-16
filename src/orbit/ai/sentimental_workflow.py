@@ -179,6 +179,8 @@ class SentimentWorkflow:
                 combined_result["label"],
             )
 
+            logger.info("Final result: %s", final_result)
+
             return final_result
 
         except Exception as e:
