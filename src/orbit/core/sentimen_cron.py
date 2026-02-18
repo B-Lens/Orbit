@@ -3,9 +3,9 @@ import sys
 import time
 import redis
 import asyncio
-from orbit.ai.lang_inference_workflow import inference
-from orbit.ai.sentimental_workflow import SentimentWorkflow
-from orbit.ai.utils.utils import initialize_llm
+from orbit.market_intelligence.lang_inference_workflow import inference
+from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
+from orbit.market_intelligence.utils.utils import initialize_llm
 from orbit.core.exception_manager import ExceptionManager
 from orbit.utils.utils import get_indian_time
 
