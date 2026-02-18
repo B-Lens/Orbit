@@ -50,7 +50,7 @@ jobs:
 
       - name: Analysing the code with mypy
         run: |
-          poetry run mypy src/orbit/ai/*.py
+          poetry run mypy src/orbit/market_intelligence/*.py
 
 
     
