@@ -1,3 +1,4 @@
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
@@ -5,7 +6,8 @@ from datetime import datetime
 from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
 from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry
 
-
+os.environ["GROQ_API_KEY"] = "test_key"
+    
 @pytest.mark.asyncio
 async def test_run_analysis_success(monkeypatch):
 
