@@ -2,8 +2,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 
-from orbit.ai.sentimental_workflow import SentimentWorkflow
-from orbit.ai.analysis.reddit_sentiment import RedditSentimentEntry
+from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
+from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry
 
 
 @pytest.mark.asyncio

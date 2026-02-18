@@ -6,7 +6,7 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from orbit.ai.config.reddit_config import WEIGHTED_SUBREDDITS, WeightedSubreddit, SubredditCategory
+from orbit.market_intelligence.config.reddit_config import WEIGHTED_SUBREDDITS, WeightedSubreddit, SubredditCategory
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file

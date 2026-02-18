@@ -11,7 +11,7 @@ os.environ["GROQ_API_KEY"] = "test"
 os.environ["LANGSMITH_API_KEY"] = "test"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
-from orbit.ai.lang_inference_workflow import inference
+from orbit.market_intelligence.lang_inference_workflow import inference
 
 
 class TestAI(unittest.TestCase):

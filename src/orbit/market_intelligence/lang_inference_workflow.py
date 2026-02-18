@@ -22,8 +22,8 @@ from pydantic import BaseModel, Field, field_validator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from orbit.utils.utils import require_env
-from orbit.ai.clients.news_client import fetch_news_articles
-from orbit.ai.utils.utils import MarketIndicators, initialize_llm, fetch_market_indicators, parse_sentiment, SentimentResult, SentimentType
+from orbit.market_intelligence.clients.news_client import fetch_news_articles
+from orbit.market_intelligence.utils.utils import MarketIndicators, initialize_llm, fetch_market_indicators, parse_sentiment, SentimentResult, SentimentType
 
 load_dotenv()  # Load environment variables from .env file
 

@@ -2,17 +2,45 @@
 
 ## 🚀 Overview
 
-Orbit is an AI-first trading framework designed to bridge research experimentation and production trading. The system focuses on combining classical strategies, machine learning models, and reinforcement learning experiments into a modular and automation-friendly architecture.
+Orbit is an AI-based trading framework designed to bridge research experimentation and production trading. The system focuses on combining classical strategies, machine learning models, and reinforcement learning experiments into a modular and automation-friendly architecture.
 
 The project emphasizes:
 
-Research → Production workflow
+Market Intelligence
 
-Strategy experimentation
+Strategy Research experimentation → Production
 
-AI-assisted decision pipelines
+Automated Trade execution and monitoring 
 
-Automated monitoring and execution
+
+## System Architecture
+
+### High-Level Runtime Flow
+
+```mermaid
+flowchart LR
+
+    subgraph AI["Market Intelligence Engine (Threaded)"]
+        A1[Reddit / News Clients]
+        A2[Sentiment Analysis]
+        A3[Sentiment Workflow]
+        A4[(MongoDB)]
+        A1 --> A2 --> A3 --> A4
+    end
+
+    subgraph CORE["Core Engine (Threaded)"]
+        C1[Strategy Signal Generation]
+        C2[Order Manager]
+        C3[Active Trade Monitoring]
+        C4[SL / TP Management]
+        C1 --> C2
+        C2 --> C3
+        C3 --> C4
+    end
+
+    A4 --> C1
+```
+
 
 ## 🛠️ Getting Started
 Prerequisites
