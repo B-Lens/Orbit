@@ -20,25 +20,32 @@ Automated Trade execution and monitoring
 ```mermaid
 flowchart LR
 
-    subgraph AI["Market Intelligence Engine (Threaded)"]
+    subgraph AI["Market Intelligence Engine"]
         A1[Reddit / News Clients]
         A2[Sentiment Analysis]
         A3[Sentiment Workflow]
-        A4[(MongoDB)]
-        A1 --> A2 --> A3 --> A4
+        A4[Sentiment]
+        A5[Sentiment Market Impact data]
+        A6[(MongoDB)]
+        A7[(Redis)]
+        A1 --> A2 --> A3 --> A4 --> A7
+        A3 --> A5 --> A6
     end
 
     subgraph CORE["Core Engine (Threaded)"]
         C1[Strategy Signal Generation]
         C2[Order Manager]
-        C3[Active Trade Monitoring]
-        C4[SL / TP Management]
+        C3[Trade SL/TP Monitoring]
+        C4[(MongoDB OHLCV)]
+        C5[(Redis)]
         C1 --> C2
         C2 --> C3
-        C3 --> C4
+        C3 <--> C5
+        C2 <--> C5
+        C1 <--> C4
+
     end
 
-    A4 --> C1
 ```
 
 
