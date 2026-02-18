@@ -1,6 +1,6 @@
 [project]
 name = "orbit"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI / Trading research and execution framework"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -9,7 +9,7 @@ dynamic = ["dependencies"]
 
 [tool.poetry]
 name = "orbit"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI / Trading research and execution framework"
 authors = ["Pankaj Kumar"]
 packages = [{ include = "orbit", from = "src" }]
