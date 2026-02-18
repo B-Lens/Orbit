@@ -38,7 +38,6 @@ logger = logging.getLogger("Orbit")
 # Set up environment variables
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
-os.environ["OPENAI_API_KEY"] = require_env("OPENAI_API_KEY")
 os.environ["GROQ_API_KEY"] = require_env("GROQ_API_KEY")
 
 # Initialize LangSmith client for observability
