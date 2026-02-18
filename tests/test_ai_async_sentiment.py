@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 os.environ["GROQ_API_KEY"] = "test_key"
 os.environ["LANGCHAIN_API_KEY"] = "test_key"
+os.environ["LANGSMITH_API_KEY"] = "test_key"
 
 
 from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
