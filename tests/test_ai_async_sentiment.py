@@ -47,7 +47,7 @@ async def test_run_analysis_success(monkeypatch):
         post_id="1"
     )
 
-    workflow.reddit_analyzer.analyze_post_sentiment = AsyncMock(
+    workflow.reddit_analyzer.analyze_batch_sentiment = AsyncMock(
         return_value=fake_sentiment
     )
 

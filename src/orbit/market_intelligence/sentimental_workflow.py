@@ -118,13 +118,15 @@ class SentimentWorkflow:
 
                 posts = data["posts"]
 
+                batch_id = 1
                 for i in range(0, len(posts), BATCH_SIZE):
                     batch = posts[i:i + BATCH_SIZE]
 
                     sentiments = await self.reddit_analyzer.analyze_batch_sentiment(
-                        batch, weight
+                        batch_id, batch, weight
                     )
                     all_sentiments.extend(sentiments)
+                    batch_id += 1
 
             logger.info("Aggregating weighted sentiments...")
             reddit_result = self.aggregate_sentiment(all_sentiments)
