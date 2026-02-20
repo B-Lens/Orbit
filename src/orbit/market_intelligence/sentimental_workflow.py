@@ -125,7 +125,7 @@ class SentimentWorkflow:
                     sentiments = await self.reddit_analyzer.analyze_batch_sentiment(
                         batch_id, batch, weight
                     )
-                    all_sentiments.extend(sentiments)
+                    all_sentiments.append(sentiments)
                     batch_id += 1
 
             logger.info("Aggregating weighted sentiments...")
