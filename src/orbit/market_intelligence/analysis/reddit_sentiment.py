@@ -53,17 +53,29 @@ class WeightedRedditAnalyzer:
         
     async def analyze_post_sentiment(
         self, 
-        post: Dict, 
+        post_batch: Dict, 
         dynamic_weight: float
     ) -> RedditSentimentEntry:
         """Analyze individual Reddit post with weighting"""
         
         # Prepare content for analysis
         content = f"Title: {post['title']}\n\nContent: {post['text'][:500]}"
+
+        merged = []
+
+        for post in post_batch:
+            body = (post.get("body") or "")[:800]
+
+            merged.append(f"""
+                Title: {post['title']}
+                Body: {body}
+                """)
+
+        content = "\n---\n".join(merged)
         
         # Use LLM for sentiment analysis
         prompt = f"""
-        Analyze the sentiment of this Reddit post about cryptocurrency/markets:
+        Analyze the sentiment of this Reddit post about cryptocurrency/Financial markets:
         
         {content}
         
@@ -80,9 +92,9 @@ class WeightedRedditAnalyzer:
         
         try:
             result = await self.llm.ainvoke(prompt)
-            print(f"LLM Result for post {post['id']}: {result.content}")
+            logger.info(f"LLM Result for batch : {result.content}")
             sentiment_data = extract_json(result.content)
-            print(f"Extracted Sentiment Data for post {post['id']}: {sentiment_data}")
+            logger.info(f"Extracted Sentiment Data for batch: {sentiment_data}")
         except Exception as e:
             logger.exception(f"LLM analysis failed: {e}, using fallback")
             sentiment_data = {
