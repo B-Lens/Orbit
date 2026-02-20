@@ -25,6 +25,7 @@ from orbit.utils.utils import require_env
 # ---- LangSmith env ----
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
+BATCH_SIZE = 10
 
 logger = logging.getLogger("Orbit")
 
@@ -115,11 +116,17 @@ class SentimentWorkflow:
             for subreddit_name, data in tqdm(reddit_posts_data.items()):
                 weight = dynamic_weights.get(subreddit_name, 0.5)
 
-                for post in tqdm(data["posts"]):
-                    sentiment = await self.reddit_analyzer.analyze_post_sentiment(
-                        post, weight
+                posts = data["posts"]
+
+                batch_id = 1
+                for i in range(0, len(posts), BATCH_SIZE):
+                    batch = posts[i:i + BATCH_SIZE]
+
+                    sentiments = await self.reddit_analyzer.analyze_batch_sentiment(
+                        batch_id, batch, weight
                     )
-                    all_sentiments.append(sentiment)
+                    all_sentiments.append(sentiments)
+                    batch_id += 1
 
             logger.info("Aggregating weighted sentiments...")
             reddit_result = self.aggregate_sentiment(all_sentiments)

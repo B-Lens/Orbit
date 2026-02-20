@@ -51,19 +51,33 @@ class WeightedRedditAnalyzer:
     def __init__(self, llm) -> None:
         self.llm = llm
         
-    async def analyze_post_sentiment(
+    async def analyze_batch_sentiment(
         self, 
-        post: Dict, 
+        batch_id: int,
+        post_batch: Dict, 
         dynamic_weight: float
     ) -> RedditSentimentEntry:
         """Analyze individual Reddit post with weighting"""
+
+        if not isinstance(post_batch, (list, tuple)):  # Adjust type accordingly
+            raise ValueError("post_batch must be a list or tuple of posts")
         
-        # Prepare content for analysis
-        content = f"Title: {post['title']}\n\nContent: {post['text'][:500]}"
+        merged = []
+
+        for post in post_batch:
+            title = post.get("title", "")[:200]
+            body = (post.get("body") or "")[:800]
+
+            merged.append(f"""
+                Title: {title}
+                Body: {body}
+                """)
+
+        content = "\n---\n".join(merged)
         
         # Use LLM for sentiment analysis
         prompt = f"""
-        Analyze the sentiment of this Reddit post about cryptocurrency/markets:
+        Analyze the sentiment for Batch of these Reddit posts about cryptocurrency/Financial markets:
         
         {content}
         
@@ -80,9 +94,9 @@ class WeightedRedditAnalyzer:
         
         try:
             result = await self.llm.ainvoke(prompt)
-            print(f"LLM Result for post {post['id']}: {result.content}")
+            logger.info(f"LLM Result for batch {batch_id}: {result.content}")
             sentiment_data = extract_json(result.content)
-            print(f"Extracted Sentiment Data for post {post['id']}: {sentiment_data}")
+            logger.info(f"Extracted Sentiment Data for batch {batch_id}: {sentiment_data}")
         except Exception as e:
             logger.exception(f"LLM analysis failed: {e}, using fallback")
             sentiment_data = {
