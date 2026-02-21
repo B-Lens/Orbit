@@ -57,6 +57,11 @@ class DiscordManager:
     Manages sending notifications to Discord webhooks.
     """
     EMBED_COLOR = 16711680  # Red color constant
+    MAX_CONTENT = 2000
+    MAX_DESCRIPTION = 4096
+    MAX_FIELD_VALUE = 1024
+    MAX_FIELDS = 25
+    MAX_TITLE = 256
 
     def __init__(self):
         pass
@@ -84,58 +89,89 @@ class DiscordManager:
         """
         time = get_indian_time()
         return time.now().strftime("%d-%m-%y %H:%M")
+    
+    @staticmethod
+    def _truncate(text: str, limit: int):
+        if not text:
+            return text, False
+        if len(text) > limit:
+            return text[:limit], True
+        return text, False
 
-    def send_to_webhook(self, key: str, data: str, description: str, fields: dict = None, **kwargs) -> None:
-        """
-        Send a message to the specified Discord webhook.
-
-        Args:
-            key (str): The webhook key.
-            data (str): The content of the message.
-            description (str): The description for the embed.
-            fields (dict, optional): Additional fields for the embed. Defaults to None.
-        """
+    def send_to_webhook(self, key: str, data: str, description: str, fields: dict = None, **kwargs):
         try:
             url = URLS.get_url(key)
+
+            truncated = False
+
+            # 🔹 Truncate content
+            data, was_cut = self._truncate(data, self.MAX_CONTENT)
+            truncated = truncated or was_cut
+
+            # 🔹 Truncate description
+            description, was_cut = self._truncate(description, self.MAX_DESCRIPTION)
+            truncated = truncated or was_cut
+
+            processed_fields = []
+
             if fields:
-                fields = self.process_fields(fields)
+                for k, v in fields.items():
+                    name, cut_name = self._truncate(str(k), self.MAX_TITLE)
+                    value, cut_val = self._truncate(str(v), self.MAX_FIELD_VALUE)
+
+                    if cut_name or cut_val:
+                        truncated = True
+
+                    processed_fields.append({
+                        "name": name,
+                        "value": value,
+                        "inline": True
+                    })
+
+            # 🔹 Respect max 25 fields
+            if len(processed_fields) > self.MAX_FIELDS:
+                processed_fields = processed_fields[:self.MAX_FIELDS]
+                truncated = True
+
+            # 🔹 If anything was truncated, add warning field
+            if truncated:
+                processed_fields.append({
+                    "name": "⚠ Warning",
+                    "value": "Message was truncated due to Discord size limits.",
+                    "inline": False
+                })
 
             payload = {
                 "content": data,
                 "embeds": [
                     {
-                        "title": self.get_current_time(),
+                        "title": self.get_current_time()[:self.MAX_TITLE],
                         "description": description,
                         "color": self.EMBED_COLOR,
-                        "fields": fields,
+                        "fields": processed_fields,
                     }
                 ],
             }
 
             file_path = kwargs.get("file_path")
+
             if file_path:
                 with open(file_path, 'rb') as f:
-                    files = {
-                        'file': (os.path.basename(file_path), f)
-                    }
-                    # multipart/form-data requires payload_json as string
-                    multipart_data = {
-                        'payload_json': json.dumps(payload)
-                    }
+                    files = {'file': (os.path.basename(file_path), f)}
+                    multipart_data = {'payload_json': json.dumps(payload)}
                     response = requests.post(url, data=multipart_data, files=files)
             else:
-                response = requests.post(
-                    url,
-                    data=json.dumps(payload),
-                    headers={"Content-Type": "application/json"},
+                response = requests.post(url, json=payload)
+
+            if response.status_code != 204:
+                logger.error(
+                    f"Failed webhook | Status: {response.status_code} | Response: {response.text}"
                 )
-                status_code = response.status_code
-                if status_code != 204:
-                    logger.error(f"Failed to send to webhook  Status Code: {status_code},  Response Text: {response.text}")  
-                    
-            return status_code
+
+            return response.status_code
+
         except Exception as e:
-            logger.error("An error occurred while sending to webhook '%s': %s", key, str(e))
+            logger.exception("Error sending webhook '%s': %s", key, str(e))
 
     # Webhook calls
     def send_websocket_logs(self, data: str, description: str, fields: dict = None):
