@@ -98,7 +98,7 @@ def fetch_vix_index(time_bucket: int) -> Optional[float]:
                 logger.info(f"VIX fetched: {vix}")
                 return vix
     except Exception as e:
-        logger.error(f"Error fetching VIX: {e}")
+        logger.exception(f"Error fetching VIX: {e}")
     return None
 
 @lru_cache(maxsize=10)
@@ -112,7 +112,7 @@ def fetch_crypto_fear_greed(time_bucket: int) -> Optional[int]:
         logger.info(f"Fear & Greed Index fetched: {index_value}")
         return index_value
     except Exception as e:
-        logger.error(f"Error fetching Crypto Fear & Greed: {e}")
+        logger.exception(f"Error fetching Crypto Fear & Greed: {e}")
         return None
     
 

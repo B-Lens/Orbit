@@ -215,8 +215,16 @@ class SentimentWorkflow:
 
         news_sentiment = parse_sentiment(news_text)
 
-        reddit_weight = 0.6
         news_weight = 0.4
+        reddit_weight = 0.3
+        historical_weight = 0.2  # Placeholder for future use of historical data
+        vix_weight = 0.05
+        fear_greed_weight = 0.05
+
+        historical_sentiment = self.mongodb.get_recent_sentiments(hours=24)
+        historical_score = (
+            sum(s.overall_score for s in historical_sentiment) / len(historical_sentiment) if historical_sentiment else 0
+        )
 
         combined_score = (
             reddit_result["overall_score"] * reddit_weight
@@ -229,7 +237,12 @@ class SentimentWorkflow:
                 if news_sentiment.sentiment == SentimentType.BEARISH
                 else 0
             )
+            + historical_score * historical_weight
+            + (indicators.vix or 0) * vix_weight * -1  # Higher VIX = more bearish
+            + (indicators.fear_greed_index or 0) * fear_greed_weight * (1 if indicators.fear_greed_index < 50 else -1)  # Greed index < 50 = more bullish, > 50 = more bearish
         )
+
+
 
         if combined_score > 0.2:
             label = "BULLISH"
