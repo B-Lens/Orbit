@@ -221,10 +221,16 @@ class SentimentWorkflow:
         vix_weight = 0.05
         fear_greed_weight = 0.05
 
-        historical_sentiment = self.mongodb.get_recent_sentiments(hours=24)
+        historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
         historical_score = (
-            sum(s.overall_score for s in historical_sentiment) / len(historical_sentiment) if historical_sentiment else 0
+            sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment) if historical_sentiment else 0
         )
+
+        fear_greed = indicators.fear_greed_index
+
+        if fear_greed is not None:
+            direction = 1 if fear_greed < 50 else -1
+            score += fear_greed * fear_greed_weight * direction
 
         combined_score = (
             reddit_result["overall_score"] * reddit_weight
@@ -239,8 +245,7 @@ class SentimentWorkflow:
             )
             + historical_score * historical_weight
             + (indicators.vix or 0) * vix_weight * -1  # Higher VIX = more bearish
-            + (indicators.fear_greed_index or 0) * fear_greed_weight * (1 if indicators.fear_greed_index < 50 else -1)  # Greed index < 50 = more bullish, > 50 = more bearish
-        )
+            + fear_greed * fear_greed_weight * (1 if fear_greed < 50 else -1)  if fear_greed is not None else 0)
 
 
 
