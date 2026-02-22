@@ -227,7 +227,7 @@ class SentimentWorkflow:
         )
 
         fear_greed = indicators.fear_greed_index
-        fear_greed_score = 0
+        fear_greed_score:float = 0
 
         if fear_greed is not None:
             direction = 1 if fear_greed < 50 else -1
