@@ -227,10 +227,11 @@ class SentimentWorkflow:
         )
 
         fear_greed = indicators.fear_greed_index
+        fear_greed_score = 0
 
         if fear_greed is not None:
             direction = 1 if fear_greed < 50 else -1
-            score += fear_greed * fear_greed_weight * direction
+            fear_greed_score = fear_greed * fear_greed_weight * direction
 
         combined_score = (
             reddit_result["overall_score"] * reddit_weight
@@ -245,7 +246,7 @@ class SentimentWorkflow:
             )
             + historical_score * historical_weight
             + (indicators.vix or 0) * vix_weight * -1  # Higher VIX = more bearish
-            + fear_greed * fear_greed_weight * (1 if fear_greed < 50 else -1)  if fear_greed is not None else 0)
+            + fear_greed_score)
 
 
 
