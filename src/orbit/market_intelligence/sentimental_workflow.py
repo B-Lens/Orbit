@@ -2,16 +2,18 @@
 import os
 import time
 import logging
+from unittest import result
+from pydantic import BaseModel, Field
 from tqdm import tqdm
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Literal
 
 from langsmith import traceable
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from orbit.market_intelligence.clients.reddit_client import RedditClient
 from orbit.market_intelligence.clients.news_client import fetch_news_articles
-from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry, WeightedRedditAnalyzer
+from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry, WeightedRedditAnalyzer, extract_json
 from orbit.market_intelligence.models.mongodb_models import MongoDBManager, SentimentRecord
 from orbit.market_intelligence.utils.utils import (
     fetch_market_indicators,
@@ -25,9 +27,15 @@ from orbit.utils.utils import require_env
 # ---- LangSmith env ----
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
-BATCH_SIZE = 10
+BATCH_SIZE = 50
 
 logger = logging.getLogger("Orbit")
+
+
+class NewsSentiment(BaseModel):
+    sentiment: Literal["BULLISH", "BEARISH", "NEUTRAL"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    explanation: str
 
 
 class SentimentWorkflow:
@@ -100,6 +108,72 @@ class SentimentWorkflow:
     # MAIN WORKFLOW
     # ------------------------------------------------------------------
 
+    async def get_market_sentiments(self, news_text:str) -> NewsSentiment:
+
+        prompt = f"""Analyze the overall sentiment of the following news articles about cryptocurrency/Financial markets: 
+        {news_text} 
+        Focus on the overall market/crypto sentiment, neither individual stocks nor specific assets.
+        Respond in JSON format:
+        {{
+            "sentiment": "BULLISH|BEARISH|NEUTRAL",
+            "confidence": 0.0-1.0,
+            "explanation": "brief explanation"
+        }}
+        """
+
+        try:
+            result = await self.llm.ainvoke(prompt)
+            raw_content = result.content
+            if not isinstance(raw_content, str):
+                raw_content = str(raw_content)
+            data = extract_json(raw_content)
+
+            sentiment_data = NewsSentiment(**data)
+            logger.info(f"Extracted Sentiment Data for News: {sentiment_data}")
+        except Exception as e:
+            logger.exception(f"LLM analysis failed: {e}, using fallback")
+            sentiment_data = NewsSentiment(
+                sentiment="NEUTRAL",
+                confidence=0.3,
+                explanation="Analysis failed"
+            )
+
+        return sentiment_data
+    
+    def get_reasoning(self, posts: List[Dict[str, Any]], news_sentiment: NewsSentiment) -> str:
+
+        posts_summary = "\n".join(p["explanation"] for p in posts)
+
+        prompt = f"""Given the following analysis results, provide a brief reasoning for the overall market sentiment:
+        Reddit Post Analysis: {posts_summary}
+        News Sentiment: {news_sentiment.explanation}
+
+        Focus on the overall market/crypto sentiment, neither individual stocks nor specific assets.
+        """
+
+        try:
+            result = self.llm.invoke(prompt)
+            content = result.content
+
+            if isinstance(content, str):
+                reasoning = content.strip()
+
+            elif isinstance(content, list):
+                reasoning = " ".join(
+                    item.strip() if isinstance(item, str)
+                    else str(item)
+                    for item in content
+                ).strip()
+
+            else:
+                reasoning = str(content).strip()
+            logger.info(f"LLM Reasoning Result: {reasoning}")
+        except Exception as e:
+            logger.exception(f"LLM reasoning failed: {e}, using fallback")
+            reasoning = "Market momentum Analysis failed"
+
+        return reasoning
+
     async def run_analysis(self) -> Dict[str, Any]:
         start_time = time.time()
 
@@ -139,10 +213,20 @@ class SentimentWorkflow:
             news_text = self.fetch_news()
             indicators = self.fetch_indicators()
 
+            news_sentiment: NewsSentiment = await self.get_market_sentiments(news_text)
+
+            historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
+            historical_score: float = (
+                sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment) if historical_sentiment else 0
+            )
+
+            reasoning: str = self.get_reasoning(top_posts, news_sentiment)
+
             combined_result = self._combine_results(
                 reddit_result,
-                news_text,
+                news_sentiment,
                 indicators,
+                historical_score=historical_score
             )
 
             logger.info("Saving to MongoDB...")
@@ -162,7 +246,8 @@ class SentimentWorkflow:
                 "success": True,
                 "timestamp": datetime.now().isoformat(),
                 "database_id": record_id,
-                "sentiment": combined_result,
+                **combined_result,
+                "reasoning": reasoning,
                 "reddit_analysis": {
                     "weighted_score": reddit_result["overall_score"],
                     "label": reddit_result["sentiment_label"],
@@ -183,7 +268,7 @@ class SentimentWorkflow:
 
             logger.info(
                 "Analysis complete. Final sentiment: %s",
-                combined_result["label"],
+                combined_result["sentiment"],
             )
 
             logger.info("Final result: %s", final_result)
@@ -191,7 +276,7 @@ class SentimentWorkflow:
             return final_result
 
         except Exception as e:
-            logger.error("Enhanced workflow failed: %s", e)
+            logger.exception("Enhanced workflow failed: %s", e)
             import traceback
 
             logger.error(traceback.format_exc())
@@ -209,11 +294,10 @@ class SentimentWorkflow:
     def _combine_results(
         self,
         reddit_result: Dict[str, Any],
-        news_text: str,
+        news_sentiment: NewsSentiment,
         indicators: MarketIndicators,
+        historical_score: float = 0.0,  # Placeholder for future use of historical data
     ) -> Dict[str, Any]:
-
-        news_sentiment = parse_sentiment(news_text)
 
         news_weight = 0.4
         reddit_weight = 0.3
@@ -221,10 +305,6 @@ class SentimentWorkflow:
         vix_weight = 0.05
         fear_greed_weight = 0.05
 
-        historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
-        historical_score = (
-            sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment) if historical_sentiment else 0
-        )
 
         fear_greed = indicators.fear_greed_index
         fear_greed_score:float = 0
@@ -259,7 +339,7 @@ class SentimentWorkflow:
 
         return {
             "score": round(combined_score, 3),
-            "label": label,
+            "sentiment": label,
             "confidence": round(
                 (
                     reddit_result["confidence"] * reddit_weight

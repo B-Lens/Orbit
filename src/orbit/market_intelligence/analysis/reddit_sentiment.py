@@ -77,11 +77,11 @@ class WeightedRedditAnalyzer:
         
         # Use LLM for sentiment analysis
         prompt = f"""
-        Analyze the sentiment for Batch of these Reddit posts about cryptocurrency/Financial markets:
+        Analyze the Batch of Reddit Posts for cryptocurrency/Financial markets Sentiment. Each post is separated by ---.:
         
         {content}
         
-        Focus on the overall market/crypto sentiment, not individual stocks.
+        Focus on the overall market/crypto sentiment, neither individual stocks nor specific assets.
         
         Respond in JSON format:
         {{
