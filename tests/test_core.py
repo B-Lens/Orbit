@@ -27,7 +27,7 @@ class TestCore(unittest.TestCase):
         result = asyncio.run(croner.run_once())
         self.assertEqual(result["sentiment"], "BULLISH")
         self.assertEqual(result["confidence"], 0.9)
-        self.assertEqual(result["reasoning"], "Market momentum strong")
+        self.assertEqual(result["reasoning"], "Strong buying pressure")
         mock_redis.setex.assert_called_once_with("market_sentiments", 3600, "BULLISH")
 
         assert result["sentiment"] == "BULLISH"
