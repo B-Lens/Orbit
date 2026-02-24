@@ -17,9 +17,9 @@ logger = logging.getLogger("Orbit")
 
 class Croner(ExceptionManager):
 
-    def __init__(self, logger=None, isTesting=False):
+    def __init__(self, logger=None, redis_client=None):
         super().__init__(logger)
-        self.redis_client = redis.StrictRedis(
+        self.redis_client = redis_client or redis.StrictRedis(
             host="localhost", port=6379, db=0, decode_responses=True
         )
         llm = initialize_llm()
@@ -38,6 +38,7 @@ class Croner(ExceptionManager):
                 f"Market Sentiment = {sentiment}, Confidence : {sentiment_confidence}, "
                 f"Reasoning : {sentiment_reasoning}"
             ),
+            description=None,
             fields=None,
         )
 
