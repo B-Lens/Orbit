@@ -2,6 +2,7 @@
 import os
 import time
 import logging
+from unittest import result
 from tqdm import tqdm
 from datetime import datetime
 from typing import Dict, Any, List
@@ -11,7 +12,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from orbit.market_intelligence.clients.reddit_client import RedditClient
 from orbit.market_intelligence.clients.news_client import fetch_news_articles
-from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry, WeightedRedditAnalyzer
+from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry, WeightedRedditAnalyzer, extract_json
 from orbit.market_intelligence.models.mongodb_models import MongoDBManager, SentimentRecord
 from orbit.market_intelligence.utils.utils import (
     fetch_market_indicators,
@@ -25,7 +26,7 @@ from orbit.utils.utils import require_env
 # ---- LangSmith env ----
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
-BATCH_SIZE = 10
+BATCH_SIZE = 50
 
 logger = logging.getLogger("Orbit")
 
@@ -100,6 +101,32 @@ class SentimentWorkflow:
     # MAIN WORKFLOW
     # ------------------------------------------------------------------
 
+    async def get_market_sentiments(self, news_text:str):
+
+        prompt = f"""Analyze the overall sentiment of the following news articles about cryptocurrency/Financial markets: 
+        {news_text} 
+        Focus on the overall market/crypto sentiment, neither individual stocks nor specific assets.
+        Respond in JSON format:
+        {{
+            "sentiment": "BULLISH|BEARISH|NEUTRAL",
+            "confidence": 0.0-1.0,
+            "explanation": "brief explanation"
+        }}
+        """
+
+        try:
+            result = await self.llm.ainvoke(prompt)
+            sentiment_data = extract_json(result.content)
+            logger.info(f"Extracted Sentiment Data for News: {sentiment_data}")
+        except Exception as e:
+            logger.exception(f"LLM analysis failed: {e}, using fallback")
+            sentiment_data = {
+                "sentiment": "NEUTRAL",
+                "confidence": 0.3,
+                "relevance": 0.5,
+                "explanation": "Analysis failed"
+            }
+
     async def run_analysis(self) -> Dict[str, Any]:
         start_time = time.time()
 
@@ -139,9 +166,11 @@ class SentimentWorkflow:
             news_text = self.fetch_news()
             indicators = self.fetch_indicators()
 
+            news_sentiment = self.get_market_sentiments(news_text)
+
             combined_result = self._combine_results(
                 reddit_result,
-                news_text,
+                news_sentiment,
                 indicators,
             )
 
@@ -162,7 +191,7 @@ class SentimentWorkflow:
                 "success": True,
                 "timestamp": datetime.now().isoformat(),
                 "database_id": record_id,
-                "sentiment": combined_result,
+                **combined_result,
                 "reddit_analysis": {
                     "weighted_score": reddit_result["overall_score"],
                     "label": reddit_result["sentiment_label"],
@@ -183,7 +212,7 @@ class SentimentWorkflow:
 
             logger.info(
                 "Analysis complete. Final sentiment: %s",
-                combined_result["label"],
+                combined_result["sentiment"],
             )
 
             logger.info("Final result: %s", final_result)
@@ -191,7 +220,7 @@ class SentimentWorkflow:
             return final_result
 
         except Exception as e:
-            logger.error("Enhanced workflow failed: %s", e)
+            logger.exception("Enhanced workflow failed: %s", e)
             import traceback
 
             logger.error(traceback.format_exc())
@@ -209,11 +238,11 @@ class SentimentWorkflow:
     def _combine_results(
         self,
         reddit_result: Dict[str, Any],
-        news_text: str,
+        news_sentiment: str,
         indicators: MarketIndicators,
     ) -> Dict[str, Any]:
 
-        news_sentiment = parse_sentiment(news_text)
+        news_sentiment = parse_sentiment(news_sentiment)
 
         news_weight = 0.4
         reddit_weight = 0.3
@@ -259,7 +288,7 @@ class SentimentWorkflow:
 
         return {
             "score": round(combined_score, 3),
-            "label": label,
+            "sentiment": label,
             "confidence": round(
                 (
                     reddit_result["confidence"] * reddit_weight
