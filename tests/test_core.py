@@ -1,6 +1,6 @@
 import unittest
 from timeout_decorator import timeout
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import asyncio
 from orbit.core.sentimen_cron import Croner
@@ -12,11 +12,11 @@ class TestCore(unittest.TestCase):
     @patch("orbit.core.sentimen_cron.SentimentWorkflow")
     def test_sentiment(self, MockWorkflow):
         mock_workflow_instance = MagicMock()
-        mock_workflow_instance.run_analysis.return_value = {
+        mock_workflow_instance.run_analysis = AsyncMock(return_value={
             "sentiment": "BULLISH",
             "confidence": 0.9,
-            "reasoning": "Market momentum strong"
-        }
+            "reasoning": "Strong buying pressure"
+        })
         MockWorkflow.return_value = mock_workflow_instance
 
         # Mock Redis
