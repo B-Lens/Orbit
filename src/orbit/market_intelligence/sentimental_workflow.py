@@ -27,7 +27,7 @@ from orbit.utils.utils import require_env
 # ---- LangSmith env ----
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
-BATCH_SIZE = 50
+BATCH_SIZE = 100
 
 logger = logging.getLogger("Orbit")
 
