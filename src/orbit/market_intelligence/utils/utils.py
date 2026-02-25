@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file
 
 os.environ["GROQ_API_KEY"] = require_env("GROQ_API_KEY")
-GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"  # Use a more reliable model
+GROQ_MODEL = "openai/gpt-oss-120b"
 
 logger = logging.getLogger("Orbit")
 
