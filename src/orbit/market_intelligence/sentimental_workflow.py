@@ -361,7 +361,7 @@ class SentimentWorkflow:
 
         record = SentimentRecord(
             overall_score=combined["score"],
-            sentiment_label=combined["label"],
+            sentiment_label=combined["sentiment"],
             confidence=combined["confidence"],
             reddit_weighted_score=reddit_result["overall_score"],
             reddit_category_breakdown=reddit_result["category_breakdown"],
