@@ -145,7 +145,7 @@ class DiscordManager:
                 "content": data,
                 "embeds": [
                     {
-                        "title": self.get_current_time()[:self.MAX_TITLE],
+                        "title": self.get_current_time()[:self.MAX_TITLE] if description or processed_fields else None,
                         "description": description,
                         "color": self.EMBED_COLOR,
                         "fields": processed_fields,
