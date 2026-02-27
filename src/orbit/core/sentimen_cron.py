@@ -39,7 +39,7 @@ class Croner(ExceptionManager):
                 f"Reasoning : {sentiment_reasoning}"
             ),
             description=None,
-            fields=None,
+            fields=result,
         )
 
         self.redis_client.setex("market_sentiments", 3600, sentiment)
