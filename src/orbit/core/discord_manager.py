@@ -141,17 +141,20 @@ class DiscordManager:
                     "inline": False
                 })
 
+            embed = {
+                "description": description,
+                "color": self.EMBED_COLOR,
+                "fields": processed_fields,
+            }
+
+            if description or processed_fields:
+                embed["title"] = self.get_current_time()[:self.MAX_TITLE]
+
             payload = {
                 "content": data,
-                "embeds": [
-                    {
-                        "title": self.get_current_time()[:self.MAX_TITLE] if description or processed_fields else None,
-                        "description": description,
-                        "color": self.EMBED_COLOR,
-                        "fields": processed_fields,
-                    }
-                ],
+                "embeds": [embed],
             }
+
 
             file_path = kwargs.get("file_path")
 
