@@ -1,0 +1,48 @@
+name: Modula
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout Orbit (current repo)
+      - name: Checkout Orbit Repo
+        uses: actions/checkout@v4
+
+      # 2️⃣ Checkout Modula (public repo)
+      - name: Checkout Modula Repo
+        uses: actions/checkout@v4
+        with:
+          repository: ipankaj18/modula   # ← change this
+          path: modula
+
+      # 3️⃣ Setup Node
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # 4️⃣ Install + Build Modula
+      - name: Install Modula Dependencies
+        working-directory: modula
+        run: npm install
+
+      - name: Build Modula
+        working-directory: modula
+        run: npm run build
+
+      # 5️⃣ Install Modula globally
+      - name: Install Modula Globally
+        working-directory: modula
+        run: npm install -g .
+
+      # 6️⃣ Run Analyze
+      - name: Run Modula Analyze
+        run: modula analyze
