@@ -789,7 +789,7 @@ class OrderManager(Authenticator):
 
         return None
 
-    def get_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
+    def get_open_orders(self, symbol: str, orderId:str= None) -> List[Dict[str, Any]]:
         """
         Get all open orders for a given symbol.
 
@@ -797,7 +797,7 @@ class OrderManager(Authenticator):
             symbol: e.g. "BTCUSDT"
         """
         try:
-            orders = self.future_client.get_all_orders(symbol=symbol)
+            orders = self.future_client.get_all_orders(symbol=symbol, orderId=orderId)
             logger.info(f"Open orders: {orders} for symbol {symbol}")
             return orders
 
