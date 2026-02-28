@@ -107,7 +107,7 @@ class BinanceAutomation(ExceptionManager):
 
         while time.time() - start_time < timeout_seconds:
             try:
-                orders = self.order_manager.future_client.get_orders(symbol=symbol, orderId=order_id)
+                orders = self.order_manager.get_open_orders(symbol=symbol, orderId=order_id)
 
                 # Orders can come as list or dict depending on library
                 order_list = orders if isinstance(orders, list) else [orders]
