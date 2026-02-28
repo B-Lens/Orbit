@@ -107,10 +107,10 @@ class SignalAnalyzer(Authenticator):
         try:
             sentiment = self.redis_client.get("market_sentiments")
             if sentiment:
-                if sentiment == 'BULLISH' and signal[0] == "SELL":
+                if sentiment == 'BULLISH' and signal == "SELL":
                     self.send_alerts(data=f"{symbol}", description=f"Positive sentiment, but Sell signal", fields=None)
                     return True
-                elif sentiment == 'BEARISH' and signal[0] == "BUY":
+                elif sentiment == 'BEARISH' and signal == "BUY":
                     self.send_alerts(data=f"{symbol}", description=f"Negative sentiment, but Buy signal", fields=None)
                     return True
         except Exception as e:
