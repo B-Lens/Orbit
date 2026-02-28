@@ -28,3 +28,10 @@ jobs:
       # 4️⃣ Run Analyze
       - name: Run Modula Analyze
         run: npx modula analyze
+
+      # 5️⃣ Upload .gitnexus artifact
+      - name: Upload GitNexus Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitnexus-output
+          path: .gitnexus
