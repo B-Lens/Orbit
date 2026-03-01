@@ -20,6 +20,7 @@ logger = logging.getLogger("Orbit")
 
 
 OHLCV_COLLECTION_NAME = "OHLCVData"
+contrarian_collection = "contrarian_signals"
 
 def _epoch_to_seconds(ts) -> int:
     """Normalize epoch to seconds (handles ns/µs/ms/s)."""
@@ -53,6 +54,30 @@ class MongoHandler(ExceptionManager):
         except Exception as exc:
             logger.error(f"Error initializing MongoDB: {exc}")
             self.collection = None
+
+    def log_contradiction(self, symbol, signal, sentiment, entry_price, 
+                      price_1h, price_4h):
+        
+        collection = self.db[contrarian_collection]
+
+        return_1h = (price_1h - entry_price) / entry_price
+        return_4h = (price_4h - entry_price) / entry_price
+
+        if signal == "SELL":
+            return_1h *= -1
+            return_4h *= -1
+
+        document = {
+            "symbol": symbol,
+            "timestamp": datetime.utcnow(),
+            "signal": signal,
+            "sentiment_score": sentiment,
+            "entry_price": entry_price,
+            "return_1h": return_1h,
+            "return_4h": return_4h,
+        }
+
+        collection.insert_one(document)
 
     def clear_ohlcv_collection(self) -> None:
         """Delete all OHLCV data from MongoDB."""
