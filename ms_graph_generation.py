@@ -56,6 +56,8 @@ def build_networkx_graph():
     # Add nodes
     # -----------------------------
     for label in node_tables:
+        if label not in ["Class", "Function", "Process"]:
+            continue
         print(f"Processing node table: {label}")
 
         cols = get_columns(label)
@@ -95,7 +97,17 @@ def build_networkx_graph():
     # -----------------------------
     # Add edges
     # -----------------------------
+    FLOW_RELATIONS = [
+        "CALLS",
+        "USES",
+        "ENTRY_POINT",
+        "TERMINAL",
+        "DEPENDS_ON",
+        "CodeRelation"
+    ]
     for rel in rel_tables:
+        # if rel not in FLOW_RELATIONS:
+        #     continue
         print(f"Processing relationship table: {rel}")
 
         cols = get_columns(rel)
