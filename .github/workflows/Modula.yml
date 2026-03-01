@@ -35,6 +35,7 @@ jobs:
       - name: Run Modula Analyze
         run: |
           npx modula analyze src/orbit/market_intelligence
+          ls -alh
 
       # 6️⃣ Upload .gitnexus artifact
       - name: Upload GitNexus Artifact
