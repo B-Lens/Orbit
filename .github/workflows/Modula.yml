@@ -1,37 +1,49 @@
-name: Modula
+name: Modula-MS
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+  issues:
+    types: [labeled]
 
 jobs:
   analyze:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'modula-task'
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout Orbit repo
-      - name: Checkout Orbit Repo
+      - name: Checkout Repo
         uses: actions/checkout@v4
 
-      # 2️⃣ Setup Node
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # 3️⃣ Install Modula from npm
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install Modula
         run: npm install @pankajlabs/modula
 
-      # 4️⃣ Run Analyze
       - name: Run Modula Analyze
-        run: npx modula analyze
+        run: |
+          npx modula analyze src/orbit/market_intelligence
 
-      # 5️⃣ Upload .gitnexus artifact
-      - name: Upload GitNexus Artifact
+      - name: Upload GitNexus DB Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitnexus-DB
+          include-hidden-files: true
+          path: src/orbit/market_intelligence/.gitnexus
+
+      - name: Upload GitNexus Skill Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gitnexus-output
-          path: .gitnexus
+          path: |
+            src/orbit/market_intelligence/.claude
+            src/orbit/market_intelligence/*.md
+            
+          
