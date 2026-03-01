@@ -11,35 +11,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout Repo
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      # 2️⃣ Setup Node (for Modula)
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # 3️⃣ Setup Python (because Poetry project)
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 4️⃣ Install Modula
       - name: Install Modula
         run: npm install @pankajlabs/modula
 
-      # 5️⃣ Run Modula Analyze (Restricted Directory)
       - name: Run Modula Analyze
         run: |
           npx modula analyze src/orbit/market_intelligence
           ls -alh
 
-      # 6️⃣ Upload .gitnexus artifact
-      - name: Upload GitNexus Artifact
+      - name: Upload GitNexus DB Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gitnexus-output
-          path: .gitnexus
+          path: src/orbit/market_intelligence/.gitnexus
+
+      - name: Upload GitNexus Skill Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitnexus-output
+          path: |
+            src/orbit/market_intelligence/.claude
+            src/orbit/market_intelligence/*.md
+            
+          
