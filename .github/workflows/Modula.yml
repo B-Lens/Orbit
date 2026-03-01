@@ -30,7 +30,7 @@ jobs:
       - name: Run Modula Analyze
         run: |
           npx modula analyze src/orbit/market_intelligence
-          ls -alh
+          ls -alh src/orbit/market_intelligence/
 
       - name: Upload GitNexus DB Artifact
         uses: actions/upload-artifact@v4
