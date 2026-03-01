@@ -35,8 +35,8 @@ jobs:
       - name: Upload GitNexus DB Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gitnexus-output
-          path: src/orbit/market_intelligence/.gitnexus
+          name: gitnexus-DB
+          path: src/orbit/market_intelligence/.gitnexus/*
 
       - name: Upload GitNexus Skill Artifact
         uses: actions/upload-artifact@v4
