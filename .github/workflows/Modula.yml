@@ -30,12 +30,12 @@ jobs:
       - name: Run Modula Analyze
         run: |
           npx modula analyze src/orbit/market_intelligence
-          ls -la src/orbit/market_intelligence/.gitnexus
 
       - name: Upload GitNexus DB Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gitnexus-DB
+          include-hidden-files: true
           path: src/orbit/market_intelligence/.gitnexus
 
       - name: Upload GitNexus Skill Artifact
