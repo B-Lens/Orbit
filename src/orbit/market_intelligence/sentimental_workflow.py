@@ -195,7 +195,7 @@ class SentimentWorkflow:
                 for i in range(0, len(posts), BATCH_SIZE):
                     batch = posts[i:i + BATCH_SIZE]
 
-                    sentiments = await self.reddit_analyzer.analyze_batch_sentiment(
+                    sentiments = self.reddit_analyzer.analyze_batch_sentiment(
                         batch_id, batch, weight
                     )
                     all_sentiments.append(sentiments)
