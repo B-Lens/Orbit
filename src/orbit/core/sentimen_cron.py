@@ -3,7 +3,6 @@ import sys
 import time
 import redis
 import asyncio
-from orbit.market_intelligence.lang_inference_workflow import inference
 from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
 from orbit.market_intelligence.llm.llm_endpoint import LLM
 from orbit.core.exception_manager import ExceptionManager

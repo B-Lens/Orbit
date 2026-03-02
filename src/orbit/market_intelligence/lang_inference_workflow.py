@@ -23,8 +23,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from orbit.utils.utils import require_env
 from orbit.market_intelligence.clients.news_client import fetch_news_articles
-from orbit.market_intelligence.utils.utils import MarketIndicators, initialize_llm, fetch_market_indicators, parse_sentiment, SentimentResult, SentimentType
-
+from orbit.market_intelligence.utils.utils import MarketIndicators, fetch_market_indicators, parse_sentiment, SentimentResult, SentimentType
+from orbit.market_intelligence.llm.llm_endpoint import LLM
 load_dotenv()  # Load environment variables from .env file
 
 from config.config import load_config
@@ -106,7 +106,7 @@ class SentimentState(BaseModel):
 
 
 # Now `llm` will be typed correctly
-llm: Optional[BaseChatModel] = initialize_llm()
+llm: Optional[BaseChatModel] = LLM().llm
 
 # Define prompt for sentiment analysis
 sentiment_prompt = PromptTemplate(

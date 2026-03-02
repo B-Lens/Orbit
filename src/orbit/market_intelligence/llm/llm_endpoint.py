@@ -20,6 +20,7 @@ logger = logging.getLogger("Orbit")
 
 class LLM:
     def __init__(self) -> Optional[BaseChatModel]:
+        llm = None
         """Initialize LLM with fallback options."""
         try:
             llm = ChatGroq(model=GROQ_MODEL, temperature=0, timeout=30)
@@ -35,17 +36,15 @@ class LLM:
             for alt_model in alternative_models:
                 try:
                     logger.info(f"Trying alternative model: {alt_model}")
-                    llm = ChatGroq(model=alt_model, temperature=0, timeout=30)
-                    test_response = llm.invoke("Test")
+                    self.llm = ChatGroq(model=alt_model, temperature=0, timeout=30)
+                    test_response = self.llm.invoke("Test")
                     logger.info(f"Alternative model {alt_model} initialized successfully")
-                    return llm
                 except Exception as alt_e:
                     logger.error(f"Failed to initialize {alt_model}: {alt_e}")
                     continue
             
             # If all Groq models fail, return None
             logger.error("All Groq models failed to initialize")
-            return None
         
     def invoke(self, prompt: str) -> Optional[str]:
         """Invoke the LLM with a prompt."""
