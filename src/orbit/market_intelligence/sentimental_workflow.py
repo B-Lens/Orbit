@@ -108,7 +108,7 @@ class SentimentWorkflow:
     # MAIN WORKFLOW
     # ------------------------------------------------------------------
 
-    async def get_market_sentiments(self, news_text:str) -> NewsSentiment:
+    def get_market_sentiments(self, news_text:str) -> NewsSentiment:
 
         prompt = f"""Analyze the overall sentiment of the following news articles about cryptocurrency/Financial markets: 
         {news_text} 
@@ -122,8 +122,7 @@ class SentimentWorkflow:
         """
 
         try:
-            result = await self.llm.ainvoke(prompt)
-            raw_content = result.content
+            raw_content = self.llm.invoke(prompt)
             if not isinstance(raw_content, str):
                 raw_content = str(raw_content)
             data = extract_json(raw_content)
@@ -152,8 +151,7 @@ class SentimentWorkflow:
         """
 
         try:
-            result = self.llm.invoke(prompt)
-            content = result.content
+            content = self.llm.invoke(prompt)
 
             if isinstance(content, str):
                 reasoning = content.strip()
@@ -213,7 +211,7 @@ class SentimentWorkflow:
             news_text = self.fetch_news()
             indicators = self.fetch_indicators()
 
-            news_sentiment: NewsSentiment = await self.get_market_sentiments(news_text)
+            news_sentiment: NewsSentiment = self.get_market_sentiments(news_text)
 
             historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
             historical_score: float = (

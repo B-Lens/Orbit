@@ -1,5 +1,7 @@
 # clients/reddit_client.py
 import os
+
+from httpx import post
 import praw
 import asyncio
 from typing import List, Dict, Optional, Any
@@ -48,6 +50,8 @@ class RedditClient:
                     post_time = datetime.utcfromtimestamp(post.created_utc)
                     if post_time < cutoff_time:
                         continue
+
+                    age_hours = (datetime.utcnow() - post_time).total_seconds() / 3600
                     
                     # Extract post data with metadata
                     post_data = {
@@ -64,12 +68,24 @@ class RedditClient:
                         'url': post.url,
                         'is_self': post.is_self,
                         # Calculate engagement score
-                        'engagement_score': (post.score * 0.5 + post.num_comments * 2) / 100
+                        'engagement_score': (post.score * 0.4 + post.num_comments * 1.5) / max(age_hours, 1)  # Avoid division by zero
                     }
+
+                    # Raw engagement (minimum attention filter)
+                    engagement_raw = post.score + 2 * post.num_comments
+                    if engagement_raw < 25:
+                        continue
+
+                    if post_data['engagement_score'] < 5:
+                        continue
                     
                     # Only include posts with substantial content
-                    if len(post_data['title'] + post_data['text']) > 50:
-                        posts.append(post_data)
+                    content = post_data['title'] + post_data['text']
+
+                    if len(content) < 100:
+                        continue
+
+                    posts.append(post_data)
                         
             except Exception as e:
                 logger.error(f"Error fetching from r/{subreddit_name}: {e}")

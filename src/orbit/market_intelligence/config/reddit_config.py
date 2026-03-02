@@ -26,8 +26,11 @@ class WeightedSubreddit(BaseModel):
         
         # Engagement factor (highly upvoted content = more influence)
         engagement_factor = min(1.3, 1.0 + (avg_score / 500))
+
+        calculated_weight = self.base_weight * activity_factor * engagement_factor * self.credibility_score 
+        calculated_weight = self.base_weight * self.credibility_score # Simplified for Avoiding random dynamic scaling
         
-        return self.base_weight * activity_factor * engagement_factor * self.credibility_score
+        return calculated_weight
 
 # Configuration for weighted subreddits
 WEIGHTED_SUBREDDITS = {
