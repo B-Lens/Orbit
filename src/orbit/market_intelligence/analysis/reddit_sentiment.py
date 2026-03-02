@@ -94,8 +94,8 @@ class WeightedRedditAnalyzer:
         
         try:
             result = await self.llm.ainvoke(prompt)
-            logger.info(f"LLM Result for batch {batch_id}: {result.content}")
-            sentiment_data = extract_json(result.content)
+            logger.info(f"LLM Result for batch {batch_id}: {result}")
+            sentiment_data = extract_json(result)
             logger.info(f"Extracted Sentiment Data for batch {batch_id}: {sentiment_data}")
         except Exception as e:
             logger.exception(f"LLM analysis failed: {e}, using fallback")

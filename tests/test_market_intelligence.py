@@ -20,7 +20,7 @@ class TestMarketIntelligence(unittest.TestCase):
     @patch("orbit.market_intelligence.clients.news_client.fetch_news_articles")
     @patch("orbit.market_intelligence.lang_inference_workflow.fetch_reddit_posts")
     @patch("orbit.market_intelligence.utils.utils.fetch_market_indicators")
-    @patch("orbit.market_intelligence.utils.utils.initialize_llm")
+    @patch("orbit.market_intelligence.llm.llm_endpoint.LLM.invoke")
     def test_langchain_inference(
         self,
         mock_llm,

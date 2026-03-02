@@ -3,9 +3,8 @@ import sys
 import time
 import redis
 import asyncio
-from orbit.market_intelligence.lang_inference_workflow import inference
 from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
-from orbit.market_intelligence.utils.utils import initialize_llm
+from orbit.market_intelligence.llm.llm_endpoint import LLM
 from orbit.core.exception_manager import ExceptionManager
 from orbit.utils.utils import get_indian_time
 
@@ -22,7 +21,7 @@ class Croner(ExceptionManager):
         self.redis_client = redis_client or redis.StrictRedis(
             host="localhost", port=6379, db=0, decode_responses=True
         )
-        llm = initialize_llm()
+        llm = LLM()
         self.sentimental_workflow = SentimentWorkflow(llm=llm)
 
     async def run_once(self):

@@ -15,6 +15,7 @@ from orbit.market_intelligence.clients.reddit_client import RedditClient
 from orbit.market_intelligence.clients.news_client import fetch_news_articles
 from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry, WeightedRedditAnalyzer, extract_json
 from orbit.market_intelligence.models.mongodb_models import MongoDBManager, SentimentRecord
+from orbit.market_intelligence.llm.llm_endpoint import LLM
 from orbit.market_intelligence.utils.utils import (
     fetch_market_indicators,
     parse_sentiment,
@@ -39,8 +40,8 @@ class NewsSentiment(BaseModel):
 
 
 class SentimentWorkflow:
-    def __init__(self, llm: BaseChatModel) -> None:
-        self.llm: BaseChatModel = llm
+    def __init__(self, llm: LLM) -> None:
+        self.llm: LLM = llm
         self.reddit_client: RedditClient = RedditClient()
         self.reddit_analyzer: WeightedRedditAnalyzer = WeightedRedditAnalyzer(llm)
         self.mongodb: MongoDBManager = MongoDBManager()
@@ -108,7 +109,7 @@ class SentimentWorkflow:
     # MAIN WORKFLOW
     # ------------------------------------------------------------------
 
-    async def get_market_sentiments(self, news_text:str) -> NewsSentiment:
+    def get_market_sentiments(self, news_text:str) -> NewsSentiment:
 
         prompt = f"""Analyze the overall sentiment of the following news articles about cryptocurrency/Financial markets: 
         {news_text} 
@@ -122,8 +123,7 @@ class SentimentWorkflow:
         """
 
         try:
-            result = await self.llm.ainvoke(prompt)
-            raw_content = result.content
+            raw_content = self.llm.invoke(prompt)
             if not isinstance(raw_content, str):
                 raw_content = str(raw_content)
             data = extract_json(raw_content)
@@ -152,8 +152,7 @@ class SentimentWorkflow:
         """
 
         try:
-            result = self.llm.invoke(prompt)
-            content = result.content
+            content = self.llm.invoke(prompt)
 
             if isinstance(content, str):
                 reasoning = content.strip()
@@ -213,7 +212,7 @@ class SentimentWorkflow:
             news_text = self.fetch_news()
             indicators = self.fetch_indicators()
 
-            news_sentiment: NewsSentiment = await self.get_market_sentiments(news_text)
+            news_sentiment: NewsSentiment = self.get_market_sentiments(news_text)
 
             historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
             historical_score: float = (
