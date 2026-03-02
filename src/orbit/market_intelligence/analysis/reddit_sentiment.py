@@ -93,7 +93,7 @@ class WeightedRedditAnalyzer:
         """
         
         try:
-            result = await self.llm.ainvoke(prompt)
+            result = await self.llm.invoke(prompt)
             logger.info(f"LLM Result for batch {batch_id}: {result}")
             sentiment_data = extract_json(result)
             logger.info(f"Extracted Sentiment Data for batch {batch_id}: {sentiment_data}")
