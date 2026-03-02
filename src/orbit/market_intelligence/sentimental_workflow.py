@@ -15,7 +15,7 @@ from orbit.market_intelligence.clients.reddit_client import RedditClient
 from orbit.market_intelligence.clients.news_client import fetch_news_articles
 from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry, WeightedRedditAnalyzer, extract_json
 from orbit.market_intelligence.models.mongodb_models import MongoDBManager, SentimentRecord
-from orbot.market_intelligence.llm.llm_endpoint import LLM
+from orbit.market_intelligence.llm.llm_endpoint import LLM
 from orbit.market_intelligence.utils.utils import (
     fetch_market_indicators,
     parse_sentiment,
