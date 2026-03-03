@@ -320,11 +320,17 @@ class SentimentWorkflow:
                 int((time.time() - start_time) * 1000),
             )
 
+            trend = self.mongodb.calculate_trends(hours=24)
+            signal = self.mongodb.get_trading_signals()
+
             return {
                 "success": True,
                 "timestamp": datetime.now().isoformat(),
                 "database_id": record_id,
                 **combined_result,
+                "reasoning": reasoning,
+                "trends": trend.dict() if trend else None,
+                "trading_signal": signal,
                 "processing_time_ms": int(
                     (time.time() - start_time) * 1000
                 ),
