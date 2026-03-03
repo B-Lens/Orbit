@@ -346,6 +346,7 @@ class SentimentWorkflow:
         reddit_result: Dict[str, Any],
         news_sentiment: NewsSentiment,
         indicators: MarketIndicators,
+        historical_score: float = 0.0, # Placeholder for historical data
     ) -> Dict[str, Any]:
         """
         Combine Reddit, News, and Indicator signals into a final sentiment score.
