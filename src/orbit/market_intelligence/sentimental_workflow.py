@@ -392,7 +392,7 @@ class SentimentWorkflow:
         return {
             "score": round(combined_score, 3),
             "sentiment": label,
-            "confidence": round(reddit_result["confidence"] * reddit_weight + news_sentiment.confidence * news_weight), 2),
+            "confidence": round(reddit_result["confidence"] * reddit_weight + news_sentiment.confidence * news_weight, 2),
         }
 
     def _save_to_database(
