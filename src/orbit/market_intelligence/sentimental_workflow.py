@@ -296,10 +296,18 @@ class SentimentWorkflow:
             indicators = self.fetch_indicators()
             news_sentiment = self.get_market_sentiments(news_text)
 
+            historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
+            historical_score: float = (
+                sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment) if historical_sentiment else 0
+            )
+
+            reasoning: str = self.get_reasoning(top_posts, news_sentiment)
+
             combined_result = self._combine_results(
                 reddit_result,
                 news_sentiment,
-                indicators
+                indicators,
+                historical_score=historical_score
             )
 
             record_id = self._save_to_database(
