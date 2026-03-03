@@ -356,20 +356,31 @@ class SentimentWorkflow:
         """
         news_weight = 0.4
         reddit_weight = 0.3
+        historical_weight = 0.2
         vix_weight = 0.05
         fear_greed_weight = 0.05
 
-        fear_greed_score = (
-            indicators.fear_greed_index * fear_greed_weight
-            if indicators.fear_greed_index else 0
-        )
+        fear_greed = indicators.fear_greed_index
+        fear_greed_score:float = 0
+
+        if fear_greed is not None:
+            direction = 1 if fear_greed < 50 else -1
+            fear_greed_score = fear_greed * fear_greed_weight * direction
 
         combined_score = (
             reddit_result["overall_score"] * reddit_weight
-            + news_sentiment.confidence * news_weight
-            - (indicators.vix or 0) * vix_weight
-            + fear_greed_score
-        )
+            + news_sentiment.confidence
+            * news_weight
+            * (
+                1
+                if news_sentiment.sentiment == SentimentType.BULLISH
+                else -1
+                if news_sentiment.sentiment == SentimentType.BEARISH
+                else 0
+            )
+            + historical_score * historical_weight
+            + (indicators.vix or 0) * vix_weight * -1  # Higher VIX = more bearish
+            + fear_greed_score)
 
         if combined_score > 0.2:
             label = "BULLISH"
@@ -381,11 +392,7 @@ class SentimentWorkflow:
         return {
             "score": round(combined_score, 3),
             "sentiment": label,
-            "confidence": round(
-                reddit_result["confidence"] * reddit_weight
-                + news_sentiment.confidence * news_weight,
-                2,
-            ),
+            "confidence": round(reddit_result["confidence"] * reddit_weight + news_sentiment.confidence * news_weight), 2),
         }
 
     def _save_to_database(
