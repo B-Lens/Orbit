@@ -161,7 +161,8 @@ class SentimentWorkflow:
         Returns:
             Combined news text.
         """
-        return fetch_news_articles.invoke(topic)
+        news_article:str = fetch_news_articles.invoke(topic)
+        return news_article
 
     @traceable(name="fetch_indicators")
     def fetch_indicators(self) -> MarketIndicators:
