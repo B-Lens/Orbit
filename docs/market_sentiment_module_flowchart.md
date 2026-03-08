@@ -3,9 +3,11 @@
 ```mermaid
 flowchart TD
     A[Start] --> B[Fetch Reddit Posts]
-    B --> C[Analyze Reddit Sentiment]
+    B --> B1[Preprocess Reddit Data]
+    B1 --> C[Analyze Reddit Sentiment]
     C --> D[Fetch News Articles]
-    D --> E[Analyze News Sentiment using LLM]
+    D --> D1[Preprocess News Data]
+    D1 --> E[Analyze News Sentiment using LLM]
     E --> F[Aggregate Sentiment Data]
     F --> G[Retrieve Market Indicators]
     G --> H[Calculate Unified Sentiment Score]
