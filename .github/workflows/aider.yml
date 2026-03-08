@@ -1,0 +1,50 @@
+name: AI Autonomous
+
+on:
+issues:
+types: [opened]
+
+jobs:
+aider-autonomous:
+runs-on: ubuntu-latest
+
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+steps:
+  - name: Checkout repo
+    uses: actions/checkout@v4
+
+  - name: Setup Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.11"
+
+  - name: Install dependencies
+    run: |
+      pip install aider-chat
+      sudo apt-get install -y gh
+
+  - name: Authenticate GitHub CLI
+    run: |
+      echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+  - name: Fetch issue content
+    id: issue
+    run: |
+      echo "${{ github.event.issue.title }}" > issue.txt
+      echo "" >> issue.txt
+      echo "${{ github.event.issue.body }}" >> issue.txt
+
+  - name: Run Aider
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    run: |
+      paste -sd ';' issue.txt | aider \
+        --model o3-mini \
+        --api-key $OPENAI_API_KEY \
+        --yes-always \
+        --auto-commits \
