@@ -1,4 +1,4 @@
-name: AI Autonomous Contributor
+name: AI Autonomous
 
 on:
 issues:
@@ -43,7 +43,8 @@ steps:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     run: |
-      cat issue.txt | aider \
+      paste -sd ';' issue.txt | aider \
         --model o3-mini \
+        --api-key $OPENAI_API_KEY \
         --yes-always \
         --auto-commits \
