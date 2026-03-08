@@ -60,6 +60,6 @@ jobs:
         run: |
           paste -sd ';' issue.txt | aider \
             --model o3-mini \
-            --api-key $OPENAI_API_KEY \
+            --api-key openai=$OPENAI_API_KEY \
             --yes-always \
             --auto-commits \
