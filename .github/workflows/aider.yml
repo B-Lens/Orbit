@@ -41,13 +41,18 @@ jobs:
           echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
 
       - name: Prepare prompt
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          WORKFLOW_INPUT_PROMPT: ${{ inputs.prompt }}
         run: |
-          if [ "${{ github.event_name }}" = "issues" ]; then
-            echo "${{ github.event.issue.title }}" > issue.txt
+          if [ "$EVENT_NAME" = "issues" ]; then
+            echo "$ISSUE_TITLE" > issue.txt
             echo "" >> issue.txt
-            echo "${{ github.event.issue.body }}" >> issue.txt
+            echo "$ISSUE_BODY" >> issue.txt
           else
-            echo "${{ inputs.prompt }}" > issue.txt
+            echo "$WORKFLOW_INPUT_PROMPT" > issue.txt
           fi
             
       - name: Run Aider
