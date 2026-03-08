@@ -18,7 +18,7 @@ flowchart TD
     N[Persist Analysis Results to MongoDB]
     O[Generate Trading Signals]
     P[Send Notifications via Discord]
-    Q[Process Outputs: Metrics & Alerts]
+    Q[Outputs: Metrics & Alerts]
     R[Handle Exceptions & Logging]
     S[End]
 
@@ -28,9 +28,10 @@ flowchart TD
     D --> E
     E --> F
     F --> G
-    G --> H
+    D --> H
     H --> I
     I --> J
+    G --> K
     J --> K
     K --> L
     L --> M
