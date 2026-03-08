@@ -1,68 +1,101 @@
 import os
-import unittest
-from unittest.mock import patch, MagicMock
-from timeout_decorator import timeout
-
-# ---------------------------------------------------
-# Set fake env variables BEFORE importing inference
-# ---------------------------------------------------
-os.environ["OPENAI_API_KEY"] = "test"
-os.environ["GROQ_API_KEY"] = "test"
-os.environ["LANGSMITH_API_KEY"] = "test"
-os.environ["LANGCHAIN_TRACING_V2"] = "false"
-
-from orbit.market_intelligence.lang_inference_workflow import inference
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime
+os.environ["GROQ_API_KEY"] = "test_key"
+os.environ["LANGCHAIN_API_KEY"] = "test_key"
+os.environ["LANGSMITH_API_KEY"] = "test_key"
 
 
-class TestMarketIntelligence(unittest.TestCase):
+from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
+from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry
 
-    @timeout(20)
-    @patch("orbit.market_intelligence.clients.news_client.fetch_news_articles")
-    @patch("orbit.market_intelligence.lang_inference_workflow.fetch_reddit_posts")
-    @patch("orbit.market_intelligence.utils.utils.fetch_market_indicators")
-    @patch("orbit.market_intelligence.llm.llm_endpoint.LLM.invoke")
-    def test_langchain_inference(
-        self,
-        mock_llm,
-        mock_market,
-        mock_reddit,
-        mock_news
-    ):
-        # -----------------------------
-        # Mock LLM response
-        # -----------------------------
-        fake_response = (
-            "Sentiment: bullish, Confidence: 0.8, "
-            "Explanation: Test sentiment response"
-        )
+    
+@pytest.mark.asyncio
+async def test_run_analysis_success(monkeypatch):
 
-        mock_llm.invoke.return_value = fake_response
+    # ----------------------------
+    # Mock LLM
+    # ----------------------------
+    mock_llm = MagicMock()
 
-        # -----------------------------
-        # Mock external data sources
-        # -----------------------------
-        mock_news.return_value = "Positive economic news"
-        mock_reddit.return_value = ["Market looks strong"]
-        mock_market.return_value = None
+    workflow = SentimentWorkflow(llm=mock_llm)
 
-        # -----------------------------
-        # Run inference
-        # -----------------------------
-        result = inference()
+    # ----------------------------
+    # Mock reddit client
+    # ----------------------------
+    mock_reddit_data = {
+        "bitcoin": {
+            "posts": [
+                {"id": "1", "title": "BTC falling"},
+                {"id": "2", "title": "Market bearish"},
+            ]
+        }
+    }
 
-        # -----------------------------
-        # Assertions
-        # -----------------------------
-        self.assertIsInstance(result, dict)
+    workflow.fetch_reddit = MagicMock(return_value=mock_reddit_data)
+    workflow.calculate_weights = MagicMock(return_value={"bitcoin": 0.8})
 
-        required_keys = ["sentiment", "confidence", "explanation"]
-        for key in required_keys:
-            self.assertIn(key, result)
+    # ----------------------------
+    # Mock sentiment analyzer
+    # ----------------------------
+    fake_sentiment = RedditSentimentEntry(
+        sentiment="BEARISH",
+        confidence=0.7,
+        weight=0.8,
+        relevance=0.9,
+        post_id="1"
+    )
 
-        self.assertIsInstance(result["sentiment"], str)
-        self.assertIsInstance(result["confidence"], (int, float))
-        self.assertIsInstance(result["explanation"], str)
+    workflow.reddit_analyzer.analyze_batch_sentiment = AsyncMock(
+        return_value=fake_sentiment
+    )
 
+    workflow.reddit_analyzer.aggregate_weighted_sentiment = MagicMock(
+        return_value={
+            "overall_score": -0.4,
+            "sentiment_label": "BEARISH",
+            "confidence": 0.75,
+            "total_posts_analyzed": 2,
+            "category_breakdown": {},
+        }
+    )
 
-if __name__ == "__main__":
-    unittest.main(exit=True)
+    workflow.reddit_analyzer.get_top_influential_posts = MagicMock(
+        return_value=[]
+    )
+
+    # ----------------------------
+    # Mock news + indicators
+    # ----------------------------
+    workflow.fetch_news = MagicMock(return_value="Market looks weak")
+
+    mock_indicators = MagicMock()
+    mock_indicators.vix = 20
+    mock_indicators.fear_greed_index = 30
+
+    workflow.fetch_indicators = MagicMock(return_value=mock_indicators)
+
+    # ----------------------------
+    # Mock DB
+    # ----------------------------
+    workflow.mongodb.save_sentiment = MagicMock(return_value="mock_id")
+    workflow.mongodb.calculate_trends = MagicMock(return_value=None)
+    workflow.mongodb.get_trading_signals = MagicMock(
+        return_value={"signal": "SELL"}
+    )
+
+    # ----------------------------
+    # Run workflow
+    # ----------------------------
+    result = await workflow.run_analysis()
+
+    # ----------------------------
+    # Assertions
+    # ----------------------------
+    assert result["success"] is True
+    assert result["database_id"] == "mock_id"
+    assert "sentiment" in result
+    assert result["sentiment"]["label"] in ["BEARISH", "NEUTRAL", "BULLISH"]
+
+    workflow.mongodb.save_sentiment.assert_called_once()
