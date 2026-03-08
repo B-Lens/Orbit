@@ -37,8 +37,7 @@ jobs:
           aider-install
 
       - name: Authenticate GitHub CLI
-        run: |
-          echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
+        run: echo "${{ github.token }}" | gh auth login --with-token
 
       - name: Prepare prompt
         env:
