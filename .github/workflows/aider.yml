@@ -1,50 +1,66 @@
 name: AI Autonomous
 
 on:
-issues:
-types: [opened]
+  issues:
+    types: [opened]
+
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Test prompt for aider"
+        required: false
+        default: "Create or update docs/market_sentiment_module_flowchart.md and open a PR labeled ai-autonomous."
 
 jobs:
-aider-autonomous:
-runs-on: ubuntu-latest
+  aider-autonomous:
+    runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
 
-permissions:
-  contents: write
-  pull-requests: write
-  issues: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-steps:
-  - name: Checkout repo
-    uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-  - name: Setup Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install aider-install
+          sudo apt-get update
+          sudo apt-get install -y gh
+          aider-install
 
-  - name: Install dependencies
-    run: |
-      pip install aider-chat
-      sudo apt-get install -y gh
+      - name: Authenticate GitHub CLI
+        run: |
+          echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
 
-  - name: Authenticate GitHub CLI
-    run: |
-      echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
-
-  - name: Fetch issue content
-    id: issue
-    run: |
-      echo "${{ github.event.issue.title }}" > issue.txt
-      echo "" >> issue.txt
-      echo "${{ github.event.issue.body }}" >> issue.txt
-
-  - name: Run Aider
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-    run: |
-      paste -sd ';' issue.txt | aider \
-        --model o3-mini \
-        --api-key $OPENAI_API_KEY \
-        --yes-always \
-        --auto-commits \
+      - name: Prepare prompt
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          WORKFLOW_INPUT_PROMPT: ${{ inputs.prompt }}
+        run: |
+          if [ "$EVENT_NAME" = "issues" ]; then
+            echo "$ISSUE_TITLE" > issue.txt
+            echo "" >> issue.txt
+            echo "$ISSUE_BODY" >> issue.txt
+          else
+            echo "$WORKFLOW_INPUT_PROMPT" > issue.txt
+          fi
+            
+      - name: Run Aider
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          paste -sd ';' issue.txt | aider \
+            --model o3-mini \
+            --api-key $OPENAI_API_KEY \
+            --yes-always \
+            --auto-commits \
