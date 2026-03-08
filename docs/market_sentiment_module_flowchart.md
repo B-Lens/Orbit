@@ -1,4 +1,4 @@
-# Market Sentiment Module Flow Chart
+# Market Sentiment Module Execution Flow Chart (GitHub Compatible)
 
 ```mermaid
 flowchart TD
