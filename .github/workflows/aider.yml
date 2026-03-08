@@ -14,6 +14,8 @@ on:
 jobs:
   aider-autonomous:
     runs-on: ubuntu-latest
+    environment:
+      name: SECURITY_APPROVAL
 
     permissions:
       contents: write
@@ -37,8 +39,7 @@ jobs:
           aider-install
 
       - name: Authenticate GitHub CLI
-        run: |
-          echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
+        run: echo "${{ github.token }}" | gh auth login --with-token
 
       - name: Prepare prompt
         env:
@@ -61,6 +62,6 @@ jobs:
         run: |
           paste -sd ';' issue.txt | aider \
             --model o3-mini \
-            --api-key $OPENAI_API_KEY \
+            --api-key openai=$OPENAI_API_KEY \
             --yes-always \
             --auto-commits \
