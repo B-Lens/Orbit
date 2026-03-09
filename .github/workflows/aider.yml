@@ -30,6 +30,11 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Configure Git user
+        run: |
+          git config --global user.name "ai-autonomous-bot"
+          git config --global user.email "ai-bot@users.noreply.github.com"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
