@@ -90,11 +90,13 @@ jobs:
         shell: bash
         run: |
           ISSUE_DATA=$(cat issue.txt)
-          rm issue.txt # Remove issue.txt to skip in PR
           echo "Running aider in directory: $TARGET_DIR"
           cd "$TARGET_DIR"
-          echo $ISSUE_DATA | paste -sd ';' | aider \
+          aider \
+            --message-file issue.txt \
             --model o3-mini \
             --api-key openai=$OPENAI_API_KEY \
             --yes-always \
             --auto-commits \
+            --no-pretty \
+            --no-stream
