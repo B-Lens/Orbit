@@ -82,11 +82,11 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TARGET_DIR: ${{ inputs.directory }}
         run: |
-          ISSUE_FILE=$(cat issue.txt)
+          ISSUE_DATA=$(cat issue.txt)
           rm issue.txt # Remove issue.txt to skip in PR
           echo "Running aider in directory: $TARGET_DIR"
           cd "$TARGET_DIR"
-          paste -sd ';' issue.txt | aider \
+          echo $ISSUE_DATA | paste -sd ';' | aider \
             --model o3-mini \
             --api-key openai=$OPENAI_API_KEY \
             --yes-always \
