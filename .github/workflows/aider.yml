@@ -55,6 +55,23 @@ jobs:
           else
             echo "$WORKFLOW_INPUT_PROMPT" > issue.txt
           fi
+
+          echo "Raw Issue is fetched successfully"
+
+          cat <<EOF >> issue.txt
+          Workflow:
+          - create branch
+          - implement changes
+          - commit
+          - push
+          - create PR using gh
+          - add label ai-autonomous
+          - do not commit directly to main
+          
+          EOF
+
+          echo "Issue formed: "
+          cat issue.txt
             
       - name: Run Aider
         env:
