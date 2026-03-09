@@ -10,6 +10,10 @@ on:
         description: "Test prompt for aider"
         required: false
         default: "Create or update docs/market_sentiment_module_flowchart.md and open a PR labeled ai-autonomous."
+      directory:
+        description: "Directory where aider should run"
+        required: false
+        default: "."
 
 jobs:
   aider-autonomous:
@@ -76,7 +80,12 @@ jobs:
       - name: Run Aider
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TARGET_DIR: ${{ inputs.directory }}
         run: |
+          ISSUE_FILE=issue.txt
+          rm issue.txt # Remove issue.txt to skip in PR
+          echo "Running aider in directory: $TARGET_DIR"
+          cd "$TARGET_DIR"
           paste -sd ';' issue.txt | aider \
             --model o3-mini \
             --api-key openai=$OPENAI_API_KEY \
