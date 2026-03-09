@@ -82,7 +82,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TARGET_DIR: ${{ inputs.directory }}
         run: |
-          ISSUE_FILE=issue.txt
+          ISSUE_FILE=$(cat issue.txt)
           rm issue.txt # Remove issue.txt to skip in PR
           echo "Running aider in directory: $TARGET_DIR"
           cd "$TARGET_DIR"
