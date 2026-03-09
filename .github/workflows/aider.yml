@@ -89,9 +89,6 @@ jobs:
           TARGET_DIR: ${{ inputs.directory }}
         shell: bash
         run: |
-          ISSUE_DATA=$(cat issue.txt)
-          echo "Running aider in directory: $TARGET_DIR"
-          cd "$TARGET_DIR"
           aider \
             --message-file issue.txt \
             --model o3-mini \
