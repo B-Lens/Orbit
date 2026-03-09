@@ -17,7 +17,7 @@ on:
 
 jobs:
   aider-autonomous:
-    if: github.event.label.name == 'ai-autonomous'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ai-autonomous'
     runs-on: ubuntu-latest
     environment:
       name: SECURITY_APPROVAL
