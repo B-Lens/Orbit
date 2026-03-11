@@ -311,21 +311,7 @@ class BinanceAutomation(ExceptionManager):
                 e, context_description="Exception in trade checker thread"
             )
 
-    def handle_crons(self):
-        """Run scheduled sentiment cron in background thread."""
-        croner = Croner()
 
-        def cron_runner():
-            try:
-                croner.sentiment_croner()
-            except Exception as e:
-                self.handle_exception(
-                    e, context_description="Exception in cron thread"
-                )
-
-        cron_thread = threading.Thread(target=cron_runner, daemon=True, name="CronThread")
-        cron_thread.start()
-        self.workers_to_monitor.append(cron_thread)
 
     # ----------------------------------------------------------------------
     # OPTIONAL WORKER MONITOR
