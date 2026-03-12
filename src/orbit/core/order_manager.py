@@ -7,7 +7,7 @@ from typing import Optional, Tuple, Dict, Any, List
 
 from binance.error import ClientError
 
-from orbit.core.authentication_manager import Authenticator
+from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
@@ -155,7 +155,7 @@ class OrderManager(Authenticator):
             coin_qty may be 0 if balance is insufficient.
         """
         usdt_balance = self.get_usdt_balance()
-        amount_to_spend = self.config_json["FIXED_TRADE_AMOUNT"].get(symbol, self.FIXED_SPEND_USDT)
+        amount_to_spend = self.config["FIXED_TRADE_AMOUNT"].get(symbol, self.FIXED_SPEND_USDT)
 
         if usdt_balance <= 0 or usdt_balance < amount_to_spend:
             msg = (
@@ -263,7 +263,7 @@ class OrderManager(Authenticator):
     ) -> Optional[Dict[str, Any]]:
         """Place STOP_MARKET SL using new Algo Order API"""
         try:
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
             quantity = self.adjust_quantity_step(symbol, quantity)
 
