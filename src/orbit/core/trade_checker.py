@@ -74,7 +74,7 @@ def is_take_profit_order(order: Dict[str, Any]) -> bool:
 # -----------------------------
 # TradeChecker class
 # -----------------------------
-class TradeChecker(Authenticator):
+class TradeChecker(AuthenticationManager):
     """Monitors active positions and ensures SL/TP orders exist and are maintained.
 
     Key:

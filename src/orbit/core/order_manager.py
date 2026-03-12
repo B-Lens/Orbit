@@ -16,7 +16,7 @@ from orbit.core.plugins import get_swing_sl
 logger = logging.getLogger("Orbit")
 
 
-class OrderManager(Authenticator):
+class OrderManager(AuthenticationManager):
     """
     Handles all order-related operations against Binance Futures:
     - Market / Limit orders
