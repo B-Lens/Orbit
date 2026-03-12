@@ -3,7 +3,7 @@ import redis
 import logging
 from typing import List, Dict, Iterator
 
-from orbit.core.authentication_manager import Authenticator
+from orbit.core.authentication_manager import AuthenticationManager
 from orbit.utils.utils import get_indian_time
 
 from orbit.core.mongo_handler import MongoHandler
@@ -13,7 +13,7 @@ from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 logger = logging.getLogger("Orbit")
 
 
-class SignalAnalyzer(Authenticator):
+class SignalAnalyzer(AuthenticationManager):
     def __init__(self):
         super().__init__()
         self.redis_client = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True)
