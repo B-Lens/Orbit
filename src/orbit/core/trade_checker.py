@@ -107,7 +107,7 @@ class TradeChecker(AuthenticationManager):
         return False
 
     def set_cooldown(self, symbol: str):
-        cooldown_hours = int(self.config_json.get("cooldown_hours", {}).get(symbol, 0))
+        cooldown_hours = int(self.config.get("cooldown_hours", {}).get(symbol, 0))
         minutes = 0
         if cooldown_hours == 0:
             minutes = 5
