@@ -32,7 +32,7 @@ def main():
 
     ai = GitHubModelClient()
 
-    uuser_prompt = f"""
+    user_prompt = f"""
                     You are summarizing a git diff for a GitHub pull request.
                     
                     Analyze the diff and produce a concise PR title and a PR body that follows the structure below.
