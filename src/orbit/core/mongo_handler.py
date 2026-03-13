@@ -14,6 +14,7 @@ import os
 import sys
 import logging
 from orbit.core.exception_manager import ExceptionManager
+from orbit.utils.utils import get_indian_time
 from typing import List, Optional, Dict, Iterator
 
 logger = logging.getLogger("Orbit")
@@ -50,6 +51,8 @@ class MongoHandler(ExceptionManager):
                 [("symbol", ASCENDING), ("interval", ASCENDING), ("timestamp", ASCENDING)],
                 unique=True,
             )
+            self.contradict_collection = self.db["contradict_trades"]
+            self.contradict_collection.create_index("symbol")
         except Exception as exc:
             logger.error(f"Error initializing MongoDB: {exc}")
             self.collection = None
@@ -236,3 +239,21 @@ class MongoHandler(ExceptionManager):
                 logger.info(f"Stored {len(records)} records for {symbol} ({interval}) in MongoDB.")
         except Exception as exc:
             self.handle_exception(exc, f"Error storing data for {symbol}")
+    def store_contradict_trade(self, symbol: str, entry_price: float, stop_loss: float, target: float, sentiment: str) -> None:
+        """Store contradict trade info in MongoDB for further analysis."""
+        if not hasattr(self, "contradict_collection") or self.contradict_collection is None:
+            logger.warning("Mongo contradict collection not available.")
+            return
+        try:
+            record = {
+                "symbol": symbol,
+                "entry_price": entry_price,
+                "stop_loss": stop_loss,
+                "target": target,
+                "sentiment": sentiment,
+                "timestamp": get_indian_time()
+            }
+            self.contradict_collection.insert_one(record)
+            logger.info(f"Stored contradict trade for {symbol} in MongoDB.")
+        except Exception as exc:
+            self.handle_exception(exc, f"Error storing contradict trade for {symbol}")
