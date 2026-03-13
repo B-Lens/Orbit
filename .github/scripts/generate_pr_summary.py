@@ -1,6 +1,7 @@
 import os
 import subprocess
-from ai_client import AIClient
+# pylint: disable=import-error  
+from ai_client import AIClient 
 
 
 def get_git_diff():

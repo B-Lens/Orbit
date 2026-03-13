@@ -317,7 +317,7 @@ class OrderManager(AuthenticationManager):
     ) -> Optional[Dict[str, Any]]:
         """Place TAKE_PROFIT_MARKET order using Algo API"""
         try:
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
             quantity = self.adjust_quantity_step(symbol, quantity)
 
@@ -394,7 +394,7 @@ class OrderManager(AuthenticationManager):
         # -----------------------------
         # 1. Fetch equity
         # -----------------------------
-        equity = self.config_json['FIXED_TRADE_AMOUNT'].get(symbol, self.FIXED_SPEND_USDT)
+        equity = self.config['FIXED_TRADE_AMOUNT'].get(symbol, self.FIXED_SPEND_USDT)
         risk_value = equity * risk_perc   # USDT to risk
 
         # -----------------------------
@@ -505,7 +505,7 @@ class OrderManager(AuthenticationManager):
                 )
                 return None, None, None
 
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity), precision)
 
             if quantity <= 0:
@@ -684,7 +684,7 @@ class OrderManager(AuthenticationManager):
                     return None
                 quantity = qty_alloc
 
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity) * leverage, precision)
 
             # Adjust quantity according to step-size
@@ -1045,7 +1045,7 @@ class OrderManager(AuthenticationManager):
             order_type: optional descriptor (e.g., "SL", "TP") used in notifications
         """
         try:
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity), precision)
 
             # Adjust price and quantity based on filters
