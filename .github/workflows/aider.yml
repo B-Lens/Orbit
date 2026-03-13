@@ -4,16 +4,9 @@ on:
   issues:
     types: [labeled]
 
-  workflow_dispatch:
-    inputs:
-      prompt:
-        description: "Prompt for aider"
-        required: false
-        default: "Create or update docs/market_sentiment_module_flowchart.md"
-
 jobs:
   aider-autonomous:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ai-autonomous'
+    if: github.event_name == 'issues' && github.event.label.name == 'ai-autonomous'
     runs-on: ubuntu-latest
 
     environment:
@@ -43,7 +36,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install aider-install
+          pip install aider-install openai
           sudo apt-get update -qq
           sudo apt-get install -y -qq gh jq
           aider-install
@@ -53,38 +46,26 @@ jobs:
 
       - name: Create working branch
         run: |
-          if [ "${{ github.event_name }}" = "issues" ]; then
-            BRANCH="ai/issue-${{ github.event.issue.number }}"
-          else
-            BRANCH="ai/manual-${{ github.run_id }}"
-          fi
-
+          BRANCH="ai/issue-${{ github.event.issue.number }}"
           echo "BRANCH_NAME=$BRANCH" >> $GITHUB_ENV
           git checkout -b "$BRANCH"
 
       - name: Prepare AI prompt
         env:
-          EVENT_NAME: ${{ github.event_name }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
-          WORKFLOW_PROMPT: ${{ inputs.prompt }}
         run: |
-          if [ "$EVENT_NAME" = "issues" ]; then
-            echo "$ISSUE_TITLE" > issue.txt
-            echo "" >> issue.txt
-            echo "$ISSUE_BODY" >> issue.txt
-          else
-            echo "$WORKFLOW_PROMPT" > issue.txt
-          fi
-
+          echo "$ISSUE_TITLE" > issue.txt
+          echo "\n" >> issue.txt
+          echo "$ISSUE_BODY" >> issue.txt
           cat <<EOF >> issue.txt
 
-Instructions:
-- Implement the requested change.
-- Modify or create files if required.
-- Commit the changes.
-- Do not explain or propose a plan. Directly make the necessary file changes.
-EOF
+          Instructions:
+          - Implement the requested change.
+          - Modify or create files if required.
+          - Commit the changes.
+          - Do not explain or propose a plan. Directly make the necessary file changes.
+          EOF
 
       - name: Run Aider
         env:
@@ -99,14 +80,6 @@ EOF
             --no-pretty \
             --no-stream \
             | tee aider.log
-
-      - name: Upload AI artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-autonomous-debug
-          path: |
-            issue.txt
-            aider.log
 
       - name: Check for repository changes
         run: |
@@ -123,43 +96,7 @@ EOF
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          git diff origin/main > diff.txt
-
-          SUMMARY=$(curl https://api.openai.com/v1/chat/completions \
-            -s \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "model": "o3-mini",
-              "messages": [
-                {
-                  "role": "system",
-                  "content": "Summarize git diffs into a concise PR title and description."
-                },
-                {
-                  "role": "user",
-                  "content": "Summarize this diff. Return:\nTITLE: <title>\nBODY: <description>\n\n'"$(sed 's/"/\\"/g' diff.txt)"'"
-                }
-              ]
-            }' | jq -r '.choices[0].message.content')
-
-          TITLE=$(echo "$SUMMARY" | sed -n 's/^TITLE: //p')
-          BODY=$(echo "$SUMMARY" | sed -n 's/^BODY: //p')
-
-          if [ -z "$TITLE" ]; then
-            TITLE="AI Autonomous Changes"
-          fi
-
-          if [ -n "$ISSUE_NUMBER" ]; then
-            BODY="$BODY
-
-Fixes #$ISSUE_NUMBER"
-          fi
-
-          echo "PR_TITLE=$TITLE" >> $GITHUB_ENV
-          echo "PR_BODY<<EOF" >> $GITHUB_ENV
-          echo "$BODY" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          python .github/scripts/generate_pr_summary.py
 
       - name: Push branch
         if: env.NO_CHANGES == 'false'
@@ -182,3 +119,12 @@ Fixes #$ISSUE_NUMBER"
       - name: Skip PR if no changes
         if: env.NO_CHANGES == 'true'
         run: echo "No changes detected. Skipping PR creation."
+
+      - name: Upload AI artifacts
+        if: !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-autonomous-debug
+          path: |
+            issue.txt
+            aider.log
