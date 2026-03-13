@@ -62,6 +62,9 @@ def main():
 
     title, body = parse_summary(summary)
 
+    print(f"Title : {title}")
+    print(f"Body : {body}")
+
     issue_number = os.environ.get("ISSUE_NUMBER")
 
     if issue_number:
