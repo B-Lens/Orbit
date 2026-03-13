@@ -22,16 +22,16 @@ logger = logging.getLogger("Orbit")
 
 OHLCV_COLLECTION_NAME = "OHLCVData"
 
-def _epoch_to_seconds(ts) -> int:
+def epoch_to_seconds(ts: int) -> int:
     """Normalize epoch to seconds (handles ns/µs/ms/s)."""
     ts = int(ts)
-    if ts > 1_000_000_000_000_000_000:  # ns
+    if ts > 1_000_000_000_000_000_000:
         return ts // 1_000_000_000
-    if ts > 1_000_000_000_000_000:      # µs
+    if ts > 1_000_000_000_000_000:
         return ts // 1_000_000
-    if ts > 1_000_000_000_000:          # ms
+    if ts > 1_000_000_000_000:
         return ts // 1_000
-    return ts    
+    return ts
 
 class MongoHandler(ExceptionManager):
     """Handle storage and retrieval of OHLCV data in MongoDB."""
@@ -219,7 +219,7 @@ class MongoHandler(ExceptionManager):
             records = []
             for _, row in df.iterrows():
                 # expire_at = datetime.utcfromtimestamp(int(row["timestamp"])) + timedelta(days=60)
-                ts_sec = _epoch_to_seconds(row["timestamp"])
+                ts_sec = epoch_to_seconds(row["timestamp"])
                 expire_at = datetime.fromtimestamp(ts_sec, tz=timezone.utc) + timedelta(days=60)
                 records.append(
                     {

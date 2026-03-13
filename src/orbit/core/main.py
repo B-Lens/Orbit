@@ -35,7 +35,7 @@ from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
 from orbit.core.trade_checker import TradeChecker
 from orbit.core.order_manager import OrderManager
-from orbit.core.authentication_manager import load_config
+from config.config import load_config
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
 from orbit.utils.utils import *
@@ -43,8 +43,7 @@ from orbit.utils.utils import *
 # Constants
 SIGNAL_ANALYSIS_SLEEP = 900  # 15 minutes in seconds
 
-# Load JSON configuration
-config_json = load_config()
+# Removed global config load
 logger = logging.getLogger("Orbit")
 
 
@@ -76,8 +75,9 @@ class BinanceAutomation(ExceptionManager):
         self.order_manager = OrderManager()
 
         # Configuration
-        self.trading_pairs: List[str] = config_json["trading_pairs"]
-        self.trade_checker_pair: str = config_json["trade_checker_pair"]
+        self.config = load_config()
+        self.trading_pairs: List[str] = self.config["trading_pairs"]
+        self.trade_checker_pair: str = self.config["trade_checker_pair"]
         self.risk_management: Dict[str, Any] = config_json["risk_management"]
         self.future_leverage: int = config_json["FUTURE_LEVERAGE"]
 

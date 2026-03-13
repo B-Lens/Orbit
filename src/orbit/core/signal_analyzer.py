@@ -23,7 +23,7 @@ class SignalAnalyzer(AuthenticationManager):
         except Exception as e:
             self.handle_exception(e, "Exception while Creating MongoHandler")
 
-    def analyze_market(self, cooldown_symbols: List[str]) -> Iterator[Dict]:
+    def analyze_market(self, cooldown_symbols: List[str]) -> Iterator[Dict[str, Any]]:
         """
         Analyze the market for each trading pair, generate signals, and handle cooldowns and sentiment checks.
         Returns a list of signal dictionaries.
