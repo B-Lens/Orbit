@@ -101,6 +101,8 @@ class DiscordManager:
     def send_to_webhook(self, key: str, data: str, description: str, fields: dict = None, **kwargs):
         try:
             url = URLS.get_url(key)
+            if data is None:
+                data = ""
 
             truncated = False
 
