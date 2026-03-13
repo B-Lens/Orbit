@@ -85,7 +85,7 @@ jobs:
         run: |
           aider \
             --message-file issue.txt \
-            --model o3-mini \
+            --model gpt-4.1 \
             --api-key openai=$OPENAI_API_KEY \
             --yes-always \
             --auto-commits \
