@@ -146,7 +146,7 @@ class OrderManager(AuthenticationManager):
         balance = float(account_info["totalWalletBalance"])
         return balance
 
-    def get_fixed_allocation(self, symbol: str, price: float) -> Tuple[float, float]:
+    def fixed_asset_allocated(self, symbol:str, price: float) -> Tuple[float, float]:
         """
         Decide quantity based on a fixed USDT amount.
 
@@ -492,7 +492,7 @@ class OrderManager(AuthenticationManager):
                 qty_from_alloc, req_margin = self.calculate_risk_position_size(symbol=symbol, entry_price=price, stop_price=sl, risk_perc=risk_management[symbol], leverage=leverage)
                 self.send_logs(data=None, description=f"Requird margin for {symbol} is {req_margin}", fields=None)
             else:
-                qty_from_alloc = self.get_fixed_allocation(symbol=symbol, price=price)
+                qty_from_alloc = self.fixed_asset_allocated(symbol=symbol,price=price)
             
             if quantity is None:
                 quantity = qty_from_alloc

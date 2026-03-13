@@ -44,15 +44,14 @@ class Croner(ExceptionManager):
         self.redis_client.setex("market_sentiments", 3600, sentiment)
         return result
 
-    def run_sentiment_cron(self):
+    def sentiment_croner(self):
         while True:
             try:
                 current_time = get_indian_time()
                 if current_time.minute == 0:
                     asyncio.run(self.run_once())
                     time.sleep(90)
-                else:
-                    time.sleep(30)
+                time.sleep(30)
             except Exception as e:
-                self.handle_exception(e, context_description="Exception in Sentiment Croner")
+                self.handle_exception(e, context_description='Exception in Sentiment Croner')
                 time.sleep(90)
