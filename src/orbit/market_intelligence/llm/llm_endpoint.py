@@ -63,13 +63,15 @@ class LLM:
             # Update cumulative API token count in redis
             today_str = datetime.now().strftime("%Y%m%d")
             redis_key = f"llm:api_token_count:{today_str}"
+            if not self.redis_client.exists(redis_key):
+                self.redis_client.set(redis_key, 0, ex=86400)  # Set default value & expiration
             self.redis_client.incrby(redis_key, prompt_token_length)
             if self.redis_client.ttl(redis_key) == -1:
                 self.redis_client.expire(redis_key, 86400)
             cumulative = int(self.redis_client.get(redis_key) or 0)
             logger.info(f"Cumulative token count in 24 hrs: {cumulative}")
         except Exception as e:
-            logger.error(f"Failed to update API token count in redis: {e}")
+            logger.exception(f"Failed to update API token count in redis: {e}")
         
         try:
             response = self.llm.invoke(prompt)
