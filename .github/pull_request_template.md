@@ -12,8 +12,3 @@ Brief description of the changes introduced in this PR.
 
 ## Related Issue
 Fixes #
-
----
-
-## Notes
-Additional context or implementation details.
