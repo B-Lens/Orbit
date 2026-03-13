@@ -32,14 +32,29 @@ def main():
 
     ai = GitHubModelClient()
 
-    user_prompt = f"""Summarize this git diff.
-
+    uuser_prompt = f"""
+                    You are summarizing a git diff for a GitHub pull request.
+                    
+                    Analyze the diff and produce a concise PR title and a PR body that follows the structure below.
+                    
                     Return format exactly:
-
+                    
                     TITLE: <title>
-                    BODY: <description>
-
-                    {diff}"""
+                    
+                    BODY:
+                    ## Summary
+                    Short explanation of what this PR does.
+                    
+                    ## Changes
+                    - bullet point describing key change
+                    - bullet point describing key change
+                    
+                    ## Related Issue
+                    Fixes #<issue_number>
+                    
+                    Git diff:
+                    {diff}
+                    """
 
     summary = ai.chat(
         system_prompt="Summarize git diffs into a concise PR title and description.",
