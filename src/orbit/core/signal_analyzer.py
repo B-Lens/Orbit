@@ -71,7 +71,7 @@ class SignalAnalyzer(AuthenticationManager):
                     continue
 
                 # Sentiment check
-                if self._should_skip_due_to_sentiment(signal, symbol):
+                if self._should_skip_due_to_sentiment(signal, symbol, signal_dict):
                     continue
 
                 try:
@@ -99,7 +99,7 @@ class SignalAnalyzer(AuthenticationManager):
         except Exception as e:
             self.handle_exception(e, "Exception in analyze_market")
 
-    def _should_skip_due_to_sentiment(self, signal, symbol) -> bool:
+    def _should_skip_due_to_sentiment(self, signal, symbol, trade_info) -> bool:
         """
         Checks Redis for market sentiment and determines if the signal should be skipped.
         Returns True if the signal should be skipped, False otherwise.
@@ -109,9 +109,23 @@ class SignalAnalyzer(AuthenticationManager):
             if sentiment:
                 if sentiment == 'BULLISH' and signal == "SELL":
                     self.send_alerts(data=f"{symbol}", description=f"Positive sentiment, but Sell signal", fields=None)
+                    self.mongo_handler.store_contradict_trade(
+                        symbol,
+                        trade_info.get("entry_price"),
+                        trade_info.get("stop_loss"),
+                        trade_info.get("take_profit"),
+                        sentiment
+                    )
                     return True
                 elif sentiment == 'BEARISH' and signal == "BUY":
                     self.send_alerts(data=f"{symbol}", description=f"Negative sentiment, but Buy signal", fields=None)
+                    self.mongo_handler.store_contradict_trade(
+                        symbol,
+                        trade_info.get("entry_price"),
+                        trade_info.get("stop_loss"),
+                        trade_info.get("take_profit"),
+                        sentiment
+                    )
                     return True
         except Exception as e:
             self.handle_exception(e, f"Sentiment check failed for {symbol}")
