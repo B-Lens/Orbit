@@ -11,14 +11,14 @@ from orbit.core.exception_manager import ExceptionManager
 logger = logging.getLogger("Orbit")
 
 
+@dataclass
 class AuthenticationManager(ExceptionManager):
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__()
         self.config = load_config()
         lang, encoding = locale.getdefaultlocale()
 
-        # Corrected environment variable name
-        BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+        BINANCE_API_KEY = os.getenv("BINANE_API_KEY")
         SECRET_KEY = os.getenv("SECRET_KEY")
 
         if lang == "en_US":
@@ -27,10 +27,17 @@ class AuthenticationManager(ExceptionManager):
                 SECRET_KEY,
                 base_url="https://api.binance.us",
             )
-            logger.info("Authenticated with https://api.binance.us")
+            logger.info(f"https://api.binance.us :Authenticated")
+            
         else:
-            self.client = Spot(BINANCE_API_KEY, SECRET_KEY)
-        self.future_client = UMFutures(BINANCE_API_KEY, secret=SECRET_KEY)
+            self.client = Spot(
+                BINANCE_API_KEY,
+                SECRET_KEY,
+            )
+        self.future_client = UMFutures(
+            BINANCE_API_KEY,
+            secret=SECRET_KEY,
+        )
 
         self.trading_pairs = self.config["trading_pairs"]
         self.trade_checker_pair = self.config["trade_checker_pair"]

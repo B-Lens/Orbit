@@ -6,9 +6,10 @@ from orbit.core.discord_manager import DiscordManager
 logger = logging.getLogger("Orbit")
 
 class ExceptionManager(DiscordManager):
-    def __init__(self, logger: logging.Logger = logger) -> None:
+    def __init__(self, logger=None):
         """
-        Initialize the ExceptionManager.
+        Initialize the exception handler.
+        :param logger: Optional logger instance for logging exceptions.
         """
         super().__init__()
         self.logger = logger
