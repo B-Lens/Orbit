@@ -44,8 +44,8 @@ def find_last_swing(df, point=None, n=3):
         'last_swing_low': last_swing_low
     }
 
-def get_swing_sl(df:pd.DataFrame, n = 3, **kwargs):
-
+def get_swing_sl(df: pd.DataFrame, n: int = 3, **kwargs) -> Optional[float]:
+    
     """Get the swing stop loss based on the last swing high or low.
     Args:
         df (pd.DataFrame): DataFrame containing 'high' and 'low' columns.
@@ -54,7 +54,7 @@ def get_swing_sl(df:pd.DataFrame, n = 3, **kwargs):
             - buy_price (float): Price at which to buy.
             - sell_price (float): Price at which to sell.
     Returns:
-        float: The calculated stop loss price.
+        Optional[float]: The calculated stop loss price.
     Raises:
         ValueError: If neither buy_price nor sell_price is provided, or if both are provided.
     """
