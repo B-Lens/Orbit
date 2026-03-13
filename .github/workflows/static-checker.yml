@@ -44,9 +44,7 @@ jobs:
 
       - name: Analysing the code with pylint
         run: |
-          poetry run pylint \
-            --disable=W,R,C,I \
-            $(git ls-files '*.py')
+          poetry run pylint --disable=W,R,C,I .
 
       - name: Analysing the code with mypy
         run: |
