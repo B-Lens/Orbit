@@ -146,7 +146,7 @@ class OrderManager(AuthenticationManager):
         balance = float(account_info["totalWalletBalance"])
         return balance
 
-    def fixed_asset_allocated(self, symbol:str, price: float) -> Tuple[float, float]:
+    def get_fixed_allocation(self, symbol: str, price: float) -> Tuple[float, float]:
         """
         Decide quantity based on a fixed USDT amount.
 
