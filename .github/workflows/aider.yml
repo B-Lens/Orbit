@@ -45,8 +45,20 @@ jobs:
         run: echo "${{ github.token }}" | gh auth login --with-token
 
       - name: Create working branch
-        run: |
-          BRANCH="ai/issue-${{ github.event.issue.number }}"
+        run: |  
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+
+          # Convert issue title to URL-safe slug
+          SLUG=$(echo "$ISSUE_TITLE" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's/[^a-z0-9]/-/g' \
+            | sed 's/-\+/-/g' \
+            | sed 's/^-//' \
+            | sed 's/-$//' \
+            | cut -c1-40)
+
+          BRANCH="issue-${ISSUE_NUMBER}/${SLUG}"
           echo "BRANCH_NAME=$BRANCH" >> $GITHUB_ENV
           git checkout -b "$BRANCH"
 
