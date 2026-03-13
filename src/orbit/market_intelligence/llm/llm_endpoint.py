@@ -10,6 +10,8 @@ import os
 import logging
 from orbit.utils.utils import require_env
 from dotenv import load_dotenv
+import redis
+from datetime import datetime
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -20,6 +22,7 @@ logger = logging.getLogger("Orbit")
 
 class LLM:
     def __init__(self) -> Optional[BaseChatModel]:
+        self.redis_client = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True)
         llm = None
         """Initialize LLM with fallback options."""
         try:
@@ -55,6 +58,20 @@ class LLM:
         # Save Prompt token length for monitoring
         prompt_token_length = len(prompt.split())
         logger.info(f"Invoking LLM with prompt token length: {prompt_token_length}")
+        
+        try:
+            # Update cumulative API token count in redis
+            today_str = datetime.now().strftime("%Y%m%d")
+            redis_key = f"llm:api_token_count:{today_str}"
+            if not self.redis_client.exists(redis_key):
+                self.redis_client.set(redis_key, 0, ex=86400)  # Set default value & expiration
+            self.redis_client.incrby(redis_key, prompt_token_length)
+            if self.redis_client.ttl(redis_key) == -1:
+                self.redis_client.expire(redis_key, 86400)
+            cumulative = int(self.redis_client.get(redis_key) or 0)
+            logger.info(f"Cumulative token count in 24 hrs: {cumulative}")
+        except Exception as e:
+            logger.exception(f"Failed to update API token count in redis: {e}")
         
         try:
             response = self.llm.invoke(prompt)

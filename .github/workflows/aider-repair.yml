@@ -29,12 +29,24 @@ jobs:
           pip install aider-install
           aider-install
 
+      - name: Fetch inline review comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          gh api \
+            repos/${{ github.repository }}/pulls/$PR/comments \
+            --jq '.[] | .body' > inline_comments.txt
+
       - name: Prepare AI prompt from review
         env:
           REVIEW_COMMENT: ${{ github.event.review.body }}
         run: |
           echo "Reviewer requested the following changes:" > review.txt
           echo "$REVIEW_COMMENT" >> review.txt
+          echo "" >> review.txt
+          echo "Inline review comments:" >> review.txt
+          cat inline_comments.txt >> review.txt
           cat <<EOF >> review.txt
 
           Instructions:
