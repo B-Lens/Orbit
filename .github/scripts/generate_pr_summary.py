@@ -1,7 +1,7 @@
 import os
 import subprocess
 # pylint: disable=import-error  
-from ai_client import AIClient 
+from ai_client import GitHubModelClient 
 
 
 def get_git_diff():
@@ -30,7 +30,7 @@ def parse_summary(summary: str):
 def main():
     diff = get_git_diff()
 
-    ai = AIClient()
+    ai = GitHubModelClient()
 
     user_prompt = f"""Summarize this git diff.
 
