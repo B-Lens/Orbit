@@ -1,0 +1,72 @@
+name: Aider-repair
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  ai-repair:
+    if: github.event.review.state == 'changes_requested'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install aider-install
+          aider-install
+
+      - name: Prepare AI prompt from review
+        env:
+          REVIEW_COMMENT: ${{ github.event.review.body }}
+        run: |
+          echo "Reviewer requested the following changes:" > review.txt
+          echo "$REVIEW_COMMENT" >> review.txt
+          cat <<EOF >> review.txt
+
+          Instructions:
+          - Implement the requested review changes.
+          - Modify the existing code accordingly.
+          - Commit the fixes directly.
+          - Do not propose a plan.
+          EOF
+
+      - name: Run Aider to fix code
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          aider \
+            --message-file review.txt \
+            --model gpt-4.1 \
+            --api-key openai=$OPENAI_API_KEY \
+            --yes-always \
+            --auto-commits \
+            --no-pretty \
+            --no-stream \
+            | tee aider.log
+
+      - name: Push fixes
+        run: |
+          git push
+
+      - name: Upload AI artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aidr-debug
+          path: |
+            review.txt
+            aider.log
