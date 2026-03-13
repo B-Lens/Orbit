@@ -14,6 +14,7 @@ import os
 import sys
 import logging
 from orbit.core.exception_manager import ExceptionManager
+from orbit.utils.utils import get_indian_time
 from typing import List, Optional, Dict, Iterator
 
 logger = logging.getLogger("Orbit")
@@ -250,7 +251,7 @@ class MongoHandler(ExceptionManager):
                 "stop_loss": stop_loss,
                 "target": target,
                 "sentiment": sentiment,
-                "timestamp": datetime.now(timezone.utc)
+                "timestamp": get_indian_time()
             }
             self.contradict_collection.insert_one(record)
             logger.info(f"Stored contradict trade for {symbol} in MongoDB.")
