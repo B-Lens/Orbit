@@ -3,7 +3,7 @@ import redis
 import logging
 from typing import List, Dict, Iterator
 
-from orbit.core.authentication_manager import Authenticator
+from orbit.core.authentication_manager import AuthenticationManager
 from orbit.utils.utils import get_indian_time
 
 from orbit.core.mongo_handler import MongoHandler
@@ -13,7 +13,7 @@ from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 logger = logging.getLogger("Orbit")
 
 
-class SignalAnalyzer(Authenticator):
+class SignalAnalyzer(AuthenticationManager):
     def __init__(self):
         super().__init__()
         self.redis_client = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True)
@@ -71,7 +71,7 @@ class SignalAnalyzer(Authenticator):
                     continue
 
                 # Sentiment check
-                if self._should_skip_due_to_sentiment(signal, symbol):
+                if self._should_skip_due_to_sentiment(signal, symbol, signal_dict):
                     continue
 
                 try:
@@ -99,7 +99,7 @@ class SignalAnalyzer(Authenticator):
         except Exception as e:
             self.handle_exception(e, "Exception in analyze_market")
 
-    def _should_skip_due_to_sentiment(self, signal, symbol) -> bool:
+    def _should_skip_due_to_sentiment(self, signal, symbol, trade_info) -> bool:
         """
         Checks Redis for market sentiment and determines if the signal should be skipped.
         Returns True if the signal should be skipped, False otherwise.
@@ -109,9 +109,23 @@ class SignalAnalyzer(Authenticator):
             if sentiment:
                 if sentiment == 'BULLISH' and signal == "SELL":
                     self.send_alerts(data=f"{symbol}", description=f"Positive sentiment, but Sell signal", fields=None)
+                    self.mongo_handler.store_contradict_trade(
+                        symbol,
+                        trade_info.get("entry_price"),
+                        trade_info.get("stop_loss"),
+                        trade_info.get("take_profit"),
+                        sentiment
+                    )
                     return True
                 elif sentiment == 'BEARISH' and signal == "BUY":
                     self.send_alerts(data=f"{symbol}", description=f"Negative sentiment, but Buy signal", fields=None)
+                    self.mongo_handler.store_contradict_trade(
+                        symbol,
+                        trade_info.get("entry_price"),
+                        trade_info.get("stop_loss"),
+                        trade_info.get("take_profit"),
+                        sentiment
+                    )
                     return True
         except Exception as e:
             self.handle_exception(e, f"Sentiment check failed for {symbol}")

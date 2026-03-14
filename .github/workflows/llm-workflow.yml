@@ -1,7 +1,8 @@
 name: Code Logical Issue Analysis
 
 on:
-  pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
     branches:
       - main
 
@@ -153,7 +154,7 @@ jobs:
       - name: Post Comment on PR
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PAT_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const output = process.env.LLM_OUTPUT;
 

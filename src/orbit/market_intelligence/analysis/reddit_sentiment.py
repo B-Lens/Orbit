@@ -51,7 +51,7 @@ class WeightedRedditAnalyzer:
     def __init__(self, llm) -> None:
         self.llm = llm
         
-    async def analyze_batch_sentiment(
+    def analyze_batch_sentiment(
         self, 
         batch_id: int,
         post_batch: Dict, 
@@ -93,7 +93,7 @@ class WeightedRedditAnalyzer:
         """
         
         try:
-            result = await self.llm.ainvoke(prompt)
+            result = self.llm.invoke(prompt)
             logger.info(f"LLM Result for batch {batch_id}: {result}")
             sentiment_data = extract_json(result)
             logger.info(f"Extracted Sentiment Data for batch {batch_id}: {sentiment_data}")

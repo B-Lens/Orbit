@@ -12,9 +12,10 @@ logger = logging.getLogger("Orbit")
 
 
 @dataclass
-class Authenticator(ExceptionManager):
+class AuthenticationManager(ExceptionManager):
     def __init__(self):
-        self.config_json = load_config()
+        super().__init__()
+        self.config = load_config()
         lang, encoding = locale.getdefaultlocale()
 
         BINANCE_API_KEY = os.getenv("BINANE_API_KEY")
@@ -38,8 +39,8 @@ class Authenticator(ExceptionManager):
             secret=SECRET_KEY,
         )
 
-        self.trading_pairs = self.config_json["trading_pairs"]
-        self.trade_checker_pair = self.config_json["trade_checker_pair"]
+        self.trading_pairs = self.config["trading_pairs"]
+        self.trade_checker_pair = self.config["trade_checker_pair"]
 
     def message_handler(self, _, message) -> None:
         logger.info(message)

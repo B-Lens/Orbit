@@ -1,6 +1,11 @@
+import os
 import unittest
 from timeout_decorator import timeout
 from unittest.mock import AsyncMock, patch, MagicMock
+
+os.environ["GROQ_API_KEY"] = "test_key"
+os.environ["LANGCHAIN_API_KEY"] = "test_key"
+os.environ["LANGSMITH_API_KEY"] = "test_key"
 
 import asyncio
 from orbit.core.sentimen_cron import Croner

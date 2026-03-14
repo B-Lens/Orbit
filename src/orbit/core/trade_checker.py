@@ -20,7 +20,7 @@ from typing import Optional, Tuple, Dict, Any, List
 from binance.error import ClientError
 from config import COIN_TRADE_TYPE, TradeType, TRAILING_STOPLOSS
 from orbit.utils.utils import get_indian_time
-from orbit.core.authentication_manager import Authenticator
+from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.order_manager import OrderManager
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 from orbit.core.mongo_handler import MongoHandler
@@ -74,7 +74,7 @@ def is_take_profit_order(order: Dict[str, Any]) -> bool:
 # -----------------------------
 # TradeChecker class
 # -----------------------------
-class TradeChecker(Authenticator):
+class TradeChecker(AuthenticationManager):
     """Monitors active positions and ensures SL/TP orders exist and are maintained.
 
     Key:
@@ -107,7 +107,7 @@ class TradeChecker(Authenticator):
         return False
 
     def set_cooldown(self, symbol: str):
-        cooldown_hours = int(self.config_json.get("cooldown_hours", {}).get(symbol, 0))
+        cooldown_hours = int(self.config.get("cooldown_hours", {}).get(symbol, 0))
         minutes = 0
         if cooldown_hours == 0:
             minutes = 5

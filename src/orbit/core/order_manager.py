@@ -7,7 +7,7 @@ from typing import Optional, Tuple, Dict, Any, List
 
 from binance.error import ClientError
 
-from orbit.core.authentication_manager import Authenticator
+from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
@@ -16,7 +16,7 @@ from orbit.core.plugins import get_swing_sl
 logger = logging.getLogger("Orbit")
 
 
-class OrderManager(Authenticator):
+class OrderManager(AuthenticationManager):
     """
     Handles all order-related operations against Binance Futures:
     - Market / Limit orders
@@ -155,7 +155,7 @@ class OrderManager(Authenticator):
             coin_qty may be 0 if balance is insufficient.
         """
         usdt_balance = self.get_usdt_balance()
-        amount_to_spend = self.config_json["FIXED_TRADE_AMOUNT"].get(symbol, self.FIXED_SPEND_USDT)
+        amount_to_spend = self.config["FIXED_TRADE_AMOUNT"].get(symbol, self.FIXED_SPEND_USDT)
 
         if usdt_balance <= 0 or usdt_balance < amount_to_spend:
             msg = (
@@ -263,7 +263,7 @@ class OrderManager(Authenticator):
     ) -> Optional[Dict[str, Any]]:
         """Place STOP_MARKET SL using new Algo Order API"""
         try:
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
             quantity = self.adjust_quantity_step(symbol, quantity)
 
@@ -317,7 +317,7 @@ class OrderManager(Authenticator):
     ) -> Optional[Dict[str, Any]]:
         """Place TAKE_PROFIT_MARKET order using Algo API"""
         try:
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
             quantity = self.adjust_quantity_step(symbol, quantity)
 
@@ -394,7 +394,7 @@ class OrderManager(Authenticator):
         # -----------------------------
         # 1. Fetch equity
         # -----------------------------
-        equity = self.config_json['FIXED_TRADE_AMOUNT'].get(symbol, self.FIXED_SPEND_USDT)
+        equity = self.config['FIXED_TRADE_AMOUNT'].get(symbol, self.FIXED_SPEND_USDT)
         risk_value = equity * risk_perc   # USDT to risk
 
         # -----------------------------
@@ -505,7 +505,7 @@ class OrderManager(Authenticator):
                 )
                 return None, None, None
 
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity), precision)
 
             if quantity <= 0:
@@ -684,7 +684,7 @@ class OrderManager(Authenticator):
                     return None
                 quantity = qty_alloc
 
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity) * leverage, precision)
 
             # Adjust quantity according to step-size
@@ -1045,7 +1045,7 @@ class OrderManager(Authenticator):
             order_type: optional descriptor (e.g., "SL", "TP") used in notifications
         """
         try:
-            precision = self.config_json["trading_pairs_precision"][symbol]
+            precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity), precision)
 
             # Adjust price and quantity based on filters

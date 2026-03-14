@@ -1,17 +1,61 @@
-# **Orbit 🪐**  
+# Orbit 🪐
 
-## 🚀 Overview
+## Overview
 
-Orbit is an AI-based trading framework designed to bridge research experimentation and production trading. The system focuses on combining classical strategies, machine learning models, and reinforcement learning experiments into a modular and automation-friendly architecture.
+Orbit is an AI-based trading framework that bridges research experimentation and production trading. It integrates classical strategies, machine learning models, and reinforcement learning experiments into a modular, automation-friendly architecture for both market intelligence and trading operations.
 
-The project emphasizes:
+### Key Features
+- **Market Intelligence:** Harness social media and news data for insights.
+- **Automated Trading:** Execute and monitor trades with precision.
+- **Modular Design:** Easily integrate custom strategies and tools.
+- **Research to Production:** Smooth transition from trading ideas to live trading.
 
-Market Intelligence
+## Setup and Installation
 
-Strategy Research experimentation → Production
+### Prerequisites
+- Python 3.10+
+- Linux environment (recommended)
+- Redis and MongoDB (optional based on configuration)
 
-Automated Trade execution and monitoring 
+### Installation Steps
+1. Clone the repository:
+   ```
+   git clone https://github.com/ipankaj/Orbit.git
+   ```
+2. Navigate into the project directory:
+   ```
+   cd Orbit
+   ```
+3. Install dependencies using Poetry:
+   ```
+   poetry install
+   ```
 
+## Usage
+
+### Running the Project
+Start the application with:
+```
+poetry run orbit
+```
+This command launches the main trading automation controller. Refer to the source code for customization and further configurations.
+
+## Contributing
+
+We welcome contributions that improve:
+
+- **Stability**
+- **Observability**
+- **Performance**
+- **Innovation in Research Methods**
+- **Documentation**
+
+**How to Contribute:**
+- Create a new branch for your feature or bug fix.
+- Make your changes and ensure tests pass.
+- Submit a pull request with a clear description of your changes.
+
+For any questions or to discuss ideas, please create an issue.
 
 ## System Architecture
 
@@ -19,19 +63,17 @@ Automated Trade execution and monitoring
 
 ```mermaid
 flowchart LR
-
     subgraph AI["Market Intelligence Engine"]
         A1[Reddit / News Clients]
         A2[Sentiment Analysis]
         A3[Sentiment Workflow]
-        A4[Sentiment]
-        A5[Sentiment Market Impact data]
+        A4[Sentiment Data]
+        A5[Sentiment Market Impact]
         A6[(MongoDB)]
         A7[(Redis)]
         A1 --> A2 --> A3 --> A4 --> A7
         A3 --> A5 --> A6
     end
-
     subgraph CORE["Core Engine (Threaded)"]
         C1[Strategy Signal Generation]
         C2[Order Manager]
@@ -43,53 +85,11 @@ flowchart LR
         C3 <--> C5
         C2 <--> C5
         C1 <--> C4
-
     end
-
 ```
 
+## Acknowledgements
 
-## 🛠️ Getting Started
-Prerequisites
+Orbit is in its early development phase and evolves with ongoing research, experimentation, and iteration. We appreciate everyone's ideas, feedback, and technical insights that help shape the system.
 
-Python 3.10+
-
-Linux environment recommended
-
-Redis / MongoDB (optional depending on configuration)
-
-Installation
-git clone https://github.com/ipankaj/Orbit.git
-cd Orbit
-poetry install
-
-Running the Project
-poetry run orbit
-
-
-## 🤝 Contributing
-
-Contributions are welcome. Orbit is a research-driven system, and improvements that enhance:
-
-Stability
-
-Observability
-
-Performance
-
-Research capabilities
-
-Documentation
-
-are highly encouraged.
-
-Please open an issue or submit a pull request with a clear description of changes.
-
-
-## 🙏 Acknowledgements & Copyright
-
-Orbit is currently in its early development phase. The project is evolving through ongoing research, experimentation, and iteration. Appreciation goes to everyone who shares ideas, feedback, and technical insights that help shape the direction of the system.
-
-This project reflects a continuous learning process and aims to grow into a stable and research-driven trading framework over time.
-
-Copyright © 2026 Pankaj Kumar. All rights reserved
+© 2026 Pankaj Kumar. All rights reserved.
