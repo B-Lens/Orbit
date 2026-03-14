@@ -24,7 +24,7 @@ class AIClient:
 
 
 class GitHubModelClient:
-    def __init__(self, model="openai/gpt-4o"):
+    def __init__(self, model="openai/gpt-5"):
         api_key = os.environ.get("MODEL_TOKEN")
         if not api_key:
             raise RuntimeError("GITHUB MODEL_TOKEN not set")
