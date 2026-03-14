@@ -173,7 +173,7 @@ class MongoDBManager:
                 if not past_price:
                     continue
 
-                ret = (current_price - past_price) / past_price
+                ret = (current_price - past_price) / past_price * 100
 
                 updates[f"returns.{symbol}.{window_name}"] = ret
 
