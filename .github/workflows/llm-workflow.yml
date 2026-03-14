@@ -1,157 +1,39 @@
-name: Code Logical Issue Analysis
+name: AI Code Review
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
-    branches:
-      - main
 
 jobs:
-  analyze_code:
-    timeout-minutes: 10
+  analyze:
     runs-on: ubuntu-22.04
 
     permissions:
       pull-requests: write
-      issues: write
-      models: read        # REQUIRED for GitHub Models
+      models: read
       contents: read
 
     steps:
-      # -------------------------
-      # Checkout repository
-      # -------------------------
-      - name: Checkout PR code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # -------------------------
-      # Install dependencies
-      # -------------------------
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      # -------------------------
-      # Get changed Python files
-      # -------------------------
-      - name: Extract Changed Python Files
-        id: changed-files
-        run: |
-          FILES=$(git diff --name-only \
-            ${{ github.event.pull_request.base.sha }} \
-            ${{ github.event.pull_request.head.sha }} \
-            | grep '\.py$' || true)
+      - name: Install deps
+        run: pip install openai
 
-          FILES=$(echo "$FILES" | tr '\n' ' ')
-          echo "FILES=$FILES" >> $GITHUB_ENV
-          echo "Changed Python files: $FILES"
-
-      # -------------------------
-      # Analyze code using GitHub Models
-      # -------------------------
-      - name: Analyze Code with GitHub Models
-        timeout-minutes: 5
-        id: analyze
-        shell: bash
+      - name: Run AI analysis
+        run: python .github/scripts/pr-bug-review.py
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          FILES: ${{ env.FILES }}
-          MODEL_TOKEN: ${{ secrets.MODEL_TOKEN }}
-        run: |
-          FILES_TO_ANALYZE="$FILES"
 
-          if [ -z "$FILES_TO_ANALYZE" ]; then
-            echo "No Python files changed. Skipping analysis."
-            echo "LLM_OUTPUT=No Python files modified." >> $GITHUB_ENV
-            exit 0
-          fi
-
-          OUTPUT=""
-
-          for file in $FILES_TO_ANALYZE; do
-            echo "Processing file: $file"
-
-            if [ ! -f "$file" ]; then
-              echo "Skipping deleted file: $file"
-              continue
-            fi
-
-            DIFF_CONTENT=$(git diff "$BASE_SHA" "$HEAD_SHA" -- "$file")
-
-            if [ -z "$DIFF_CONTENT" ]; then
-              continue
-            fi
-
-            MAX_CHARS=12000
-            OFFSET=0
-            CHUNK_INDEX=1
-
-            while [ $OFFSET -lt ${#DIFF_CONTENT} ]; do
-              CHUNK=${DIFF_CONTENT:$OFFSET:$MAX_CHARS}
-
-              USER_MESSAGE=$(
-                printf "Review the following code diff for %s (chunk %s).\n\n" "$file" "$CHUNK_INDEX"
-                printf "Focus ONLY on critical logical, correctness, or safety issues.\n"
-                printf "Ignore formatting, style, naming, or minor improvements.\n\n"
-                printf "If no critical issues exist, explicitly say so.\n\n"
-                printf "DIFF:\n%s\n" "$CHUNK"
-              )
-
-              JSON_PAYLOAD=$(jq -n \
-                --arg model "gpt-4o" \
-                --arg system_message "You are a senior software engineer performing a strict code review." \
-                --arg user_message "$USER_MESSAGE" \
-                '{
-                  messages: [
-                    { "role": "system", "content": $system_message },
-                    { "role": "user", "content": $user_message }
-                  ],
-                  "model": $model,
-                  "temperature": 1.0,
-                  "max_tokens": 1000,
-                  "top_p": 1.0
-                }')
-
-              echo "JSON Payload: $JSON_PAYLOAD"
-
-              RESPONSE=$(curl -X POST https://models.inference.ai.azure.com/chat/completions \
-                -H "Content-Type: application/json" \
-                -H "Authorization: Bearer $MODEL_TOKEN" \
-                -d "$JSON_PAYLOAD")
-
-              echo "$RESPONSE"
-
-              if echo "$RESPONSE" | jq -e '.error' >/dev/null; then
-                echo "Model API error:"
-                echo "$RESPONSE"
-                sleep 10
-                continue
-              fi
-
-              FILE_OUTPUT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-
-              OUTPUT="$OUTPUT
-
-              ### 📄 $file (chunk $CHUNK_INDEX)
-              $FILE_OUTPUT
-              "
-
-            OFFSET=$((OFFSET + MAX_CHARS))
-            CHUNK_INDEX=$((CHUNK_INDEX + 1))
-            sleep 1
-            done
-          done
-
-          echo "LLM_OUTPUT<<EOF" >> $GITHUB_ENV
-          echo "$OUTPUT" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-      # -------------------------
-      # Post PR comment
-      # -------------------------
-      - name: Post Comment on PR
+      - name: Post PR comment
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -159,18 +41,13 @@ jobs:
             const output = process.env.LLM_OUTPUT;
 
             if (!output || output.trim().length === 0) {
-              console.log("No LLM output to post.");
+              console.log("No LLM output");
               return;
             }
-
-            const maxLength = 60000;
-            const body = output.length > maxLength
-              ? output.substring(0, maxLength) + "\n\n⚠️ Output truncated."
-              : output;
 
             await github.rest.issues.createComment({
               issue_number: context.payload.pull_request.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `## 🤖 AI Code Review (GitHub Models – gpt-4o-mini)\n\n${body}`
+              body: `## 🤖 AI Code Review\n\n${output}`
             });
