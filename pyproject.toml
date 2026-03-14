@@ -69,6 +69,7 @@ langchain-groq = "*"
 langgraph = "*"
 langsmith = "*"
 pycryptodome = "^3.23.0"
+python-binance = "^1.0.35"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
