@@ -28,10 +28,11 @@ jobs:
         run: pip install openai
 
       - name: Run AI analysis
-        run: python .github/scripts/pr-bug-review.py
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MODEL_TOKEN: ${{ secrets.MODEL_TOKEN }}
+        run: python .github/scripts/pr-bug-review.py
 
       - name: Post PR comment
         uses: actions/github-script@v7
