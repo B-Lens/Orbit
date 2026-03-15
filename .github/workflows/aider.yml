@@ -16,6 +16,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: read
+      workflows: write
 
     steps:
 
@@ -92,6 +93,14 @@ jobs:
             --no-stream \
             | tee aider.log
 
+      - name: Save git diff
+        run: |
+          git diff > aider_changes.diff || true
+
+      - name: Save patch
+        run: |
+          git format-patch origin/main --stdout > aider_changes.patch || true
+
       - name: Check for repository changes
         run: |
           git fetch origin main
@@ -140,3 +149,5 @@ jobs:
           path: |
             issue.txt
             aider.log
+            aider_changes.diff
+            aider_changes.patch
