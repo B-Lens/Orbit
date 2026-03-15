@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import redis
 
 from orbit.core.authentication_manager import AuthenticationManager
+from orbit.core.contradict_simulator import ContradictSimulator
 from orbit.core.mongo_handler import MongoHandler
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 from orbit.utils.utils import get_indian_time
@@ -61,6 +62,8 @@ class SignalAnalyzer(AuthenticationManager):
                 self.mongo_handler = MongoHandler()
             except Exception as e:
                 self.handle_exception(e, "Exception while Creating MongoHandler")
+
+        self.contradict_simulator = ContradictSimulator(mongo_handler=self.mongo_handler)
 
     def analyze_market(self, cooldown_symbols: List[str]) -> Iterator[Dict[str, Any]]:
         """Iterate over trading pairs and yield actionable signal dicts.
@@ -146,7 +149,8 @@ class SignalAnalyzer(AuthenticationManager):
         """Check Redis for market sentiment and decide whether to skip.
 
         A signal is skipped when it contradicts the prevailing sentiment
-        (e.g. ``SELL`` during ``BULLISH`` sentiment).
+        (e.g. ``SELL`` during ``BULLISH`` sentiment).  When skipped, a
+        background simulation is launched to track what would have happened.
 
         Returns:
             ``True`` if the signal should be discarded.
@@ -154,26 +158,37 @@ class SignalAnalyzer(AuthenticationManager):
         try:
             sentiment = self.redis_client.get("market_sentiments")
             if sentiment:
+                skip = False
+
                 if sentiment == 'BULLISH' and signal == "SELL":
                     self.send_alerts(data=f"{symbol}", description=f"Positive sentiment, but Sell signal", fields=None)
-                    self.mongo_handler.store_contradict_trade(
-                        symbol,
-                        trade_info.get("entry_price"),
-                        trade_info.get("stop_loss"),
-                        trade_info.get("take_profit"),
-                        sentiment
-                    )
-                    return True
+                    skip = True
                 elif sentiment == 'BEARISH' and signal == "BUY":
                     self.send_alerts(data=f"{symbol}", description=f"Negative sentiment, but Buy signal", fields=None)
+                    skip = True
+
+                if skip:
                     self.mongo_handler.store_contradict_trade(
                         symbol,
                         trade_info.get("entry_price"),
                         trade_info.get("stop_loss"),
                         trade_info.get("take_profit"),
-                        sentiment
+                        sentiment,
                     )
+
+                    simulation_payload = {
+                        "symbol": symbol,
+                        "signal": signal,
+                        "entry_price": trade_info.get("entry_price"),
+                        "stop_loss": trade_info.get("stop_loss"),
+                        "take_profit": trade_info.get("take_profit"),
+                        "sentiment": sentiment,
+                        "timestamp": get_indian_time(),
+                    }
+                    self.contradict_simulator.simulate(simulation_payload)
+
                     return True
+
         except Exception as e:
             self.handle_exception(e, f"Sentiment check failed for {symbol}")
         return False
