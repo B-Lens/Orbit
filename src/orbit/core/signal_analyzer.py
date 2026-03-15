@@ -1,32 +1,75 @@
+"""
+signal_analyzer
+===============
+
+Provides :class:`SignalAnalyzer`, which iterates over configured trading
+pairs, runs each symbol's registered strategy, and yields actionable
+trading signals.
+
+Dependencies (:class:`MongoHandler`, Redis) can be **injected** through
+the constructor for easier testing and looser coupling.
+"""
+
 import time
-import redis
 import logging
-from typing import List, Dict, Iterator
+from typing import Any, Dict, Iterator, List, Optional
+
+import redis
 
 from orbit.core.authentication_manager import AuthenticationManager
-from orbit.utils.utils import get_indian_time
-
 from orbit.core.mongo_handler import MongoHandler
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
+from orbit.utils.utils import get_indian_time
 
-# Initialize logging
 logger = logging.getLogger("Orbit")
 
 
 class SignalAnalyzer(AuthenticationManager):
-    def __init__(self):
-        super().__init__()
-        self.redis_client = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True)
+    """Market signal generator.
 
-        try:
-            self.mongo_handler = MongoHandler()
-        except Exception as e:
-            self.handle_exception(e, "Exception while Creating MongoHandler")
+    For every configured trading pair the analyser:
 
-    def analyze_market(self, cooldown_symbols: List[str]) -> Iterator[Dict]:
-        """
-        Analyze the market for each trading pair, generate signals, and handle cooldowns and sentiment checks.
-        Returns a list of signal dictionaries.
+    1. Fetches / updates historical OHLCV data via :class:`MongoHandler`.
+    2. Instantiates the symbol's registered strategy.
+    3. Generates and validates signals (cooldown, sentiment, breakout filter).
+    4. Yields actionable signal dicts to the caller.
+
+    Args:
+        mongo_handler: Pre-built :class:`MongoHandler`.  A new instance is
+            created when ``None``.
+        redis_client: Pre-built ``redis.StrictRedis`` connection.  A default
+            ``localhost:6379/0`` connection is created when ``None``.
+        **auth_kwargs: Forwarded to :class:`AuthenticationManager`.
+    """
+
+    def __init__(
+        self,
+        mongo_handler: Optional[MongoHandler] = None,
+        redis_client: Optional[redis.StrictRedis] = None,
+        **auth_kwargs: Any,
+    ) -> None:
+        super().__init__(**auth_kwargs)
+
+        self.redis_client: redis.StrictRedis = redis_client or redis.StrictRedis(
+            host="localhost", port=6379, db=0, decode_responses=True
+        )
+
+        if mongo_handler is not None:
+            self.mongo_handler: MongoHandler = mongo_handler
+        else:
+            try:
+                self.mongo_handler = MongoHandler()
+            except Exception as e:
+                self.handle_exception(e, "Exception while Creating MongoHandler")
+
+    def analyze_market(self, cooldown_symbols: List[str]) -> Iterator[Dict[str, Any]]:
+        """Iterate over trading pairs and yield actionable signal dicts.
+
+        Args:
+            cooldown_symbols: Symbols currently in cooldown (will be skipped).
+
+        Yields:
+            Signal dictionaries ready for order processing.
         """
         try:
             for symbol in self.trading_pairs:
@@ -70,13 +113,11 @@ class SignalAnalyzer(AuthenticationManager):
                     self.send_alerts(data=f"{symbol}", description=f"Pattern identified as Breakout: {pattern}", fields=None)
                     continue
 
-                # Sentiment check
                 if self._should_skip_due_to_sentiment(signal, symbol, signal_dict):
                     continue
 
                 try:
                     options = {"signal": signal, "pattern": pattern}
-                    optional = {"symbol": symbol}
 
                     if chart_path_raw:
                         self.send_chart_to_webhook(file_path=chart_path_raw, data=None, description=f"{symbol}, signal = {signal}", fields=options)
@@ -99,10 +140,16 @@ class SignalAnalyzer(AuthenticationManager):
         except Exception as e:
             self.handle_exception(e, "Exception in analyze_market")
 
-    def _should_skip_due_to_sentiment(self, signal, symbol, trade_info) -> bool:
-        """
-        Checks Redis for market sentiment and determines if the signal should be skipped.
-        Returns True if the signal should be skipped, False otherwise.
+    def _should_skip_due_to_sentiment(
+        self, signal: str, symbol: str, trade_info: Dict[str, Any]
+    ) -> bool:
+        """Check Redis for market sentiment and decide whether to skip.
+
+        A signal is skipped when it contradicts the prevailing sentiment
+        (e.g. ``SELL`` during ``BULLISH`` sentiment).
+
+        Returns:
+            ``True`` if the signal should be discarded.
         """
         try:
             sentiment = self.redis_client.get("market_sentiments")

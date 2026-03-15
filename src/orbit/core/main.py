@@ -1,9 +1,11 @@
 """
-Binance Cryptocurrency Trading Automation System (Thread-Based Version)
-=======================================================================
+main
+====
+
+Binance Cryptocurrency Trading Automation System (Thread-Based Version).
 
 This module coordinates automated Binance Futures trading using a
-multi-threaded architecture. The system handles:
+multi-threaded architecture.  The system handles:
 
 - Market signal generation
 - Automated order placement
@@ -12,95 +14,115 @@ multi-threaded architecture. The system handles:
 - Discord notifications
 - Exception & error management
 
-Threading is used because:
-- All operations are I/O-bound (network to Binance)
-- Has lower overhead than multiprocessing
-- Binance clients are NOT pickle-safe
-- Much safer & simpler for long-running trading systems
+Threading is used because all operations are I/O-bound (network to
+Binance), it has lower overhead than multiprocessing, Binance clients are
+**not** pickle-safe, and it is much safer and simpler for long-running
+trading systems.
 
 Author: Pankaj Kumar
 """
 
 import time
-import os
-import sys
 import logging
 import threading
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from .env file
+load_dotenv()
 
 from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
 from orbit.core.trade_checker import TradeChecker
 from orbit.core.order_manager import OrderManager
-from orbit.core.authentication_manager import load_config
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
-from orbit.utils.utils import *
+from orbit.utils.utils import get_indian_time
 
 # Constants
-SIGNAL_ANALYSIS_SLEEP = 900  # 15 minutes in seconds
+SIGNAL_ANALYSIS_SLEEP: int = 900  # 15 minutes in seconds
 
-# Load JSON configuration
-config_json = load_config()
 logger = logging.getLogger("Orbit")
 
 
-# =============================================================================
-# MAIN AUTOMATION ENGINE
-# =============================================================================
 class BinanceAutomation(ExceptionManager):
-    """
-    Main trading automation controller.
+    """Top-level trading automation controller.
 
-    Handles:
-        - Running the signal analyzer (thread)
-        - Placing orders based on signals
-        - Monitoring order execution
-        - Triggering trade checker (thread)
-        - Running sentiment cron tasks (thread)
-        - Tracking worker thread health
+    Orchestrates three long-running daemon threads:
+
+    1. **Signal analysis** — generates and processes trading signals.
+    2. **Trade checker** — monitors active positions and manages SL/TP.
+    3. **Sentiment cron** — runs hourly sentiment analysis.
+
+    All major dependencies are accepted via the constructor so that the
+    class can be tested or reconfigured without monkey-patching.
+
+    Args:
+        signal_analyzer: Pre-built :class:`SignalAnalyzer`.
+        trade_checker: Pre-built :class:`TradeChecker`.
+        order_manager: Pre-built :class:`OrderManager`.
+        croner: Pre-built :class:`Croner` (sentiment scheduler).
+        config: Application configuration dict.  Loaded from disk when ``None``.
     """
 
-    # ----------------------------------------------------------------------
-    # Initialization
-    # ----------------------------------------------------------------------
-    def __init__(self):
+    # ------------------------------------------------------------------
+    # Initialisation
+    # ------------------------------------------------------------------
+
+    def __init__(
+        self,
+        signal_analyzer: Optional[SignalAnalyzer] = None,
+        trade_checker: Optional[TradeChecker] = None,
+        order_manager: Optional[OrderManager] = None,
+        croner: Optional[Croner] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> None:
         super().__init__()
 
-        # Core components
-        self.signal_analyzer = SignalAnalyzer()
-        self.trade_checker = TradeChecker()
-        self.order_manager = OrderManager()
+        config_json: Dict[str, Any] = config if config is not None else load_config()
+
+        # Core components — injected or created with defaults
+        self.signal_analyzer: SignalAnalyzer = signal_analyzer or SignalAnalyzer()
+        self.trade_checker: TradeChecker = trade_checker or TradeChecker()
+        self.order_manager: OrderManager = order_manager or OrderManager()
+        self._croner: Optional[Croner] = croner
 
         # Configuration
         self.trading_pairs: List[str] = config_json["trading_pairs"]
-        self.trade_checker_pair: str = config_json["trade_checker_pair"]
+        self.trade_checker_pair: List[str] = config_json["trade_checker_pair"]
         self.risk_management: Dict[str, Any] = config_json["risk_management"]
         self.future_leverage: int = config_json["FUTURE_LEVERAGE"]
 
-        # Active trade map (thread local instance)
+        # Active trade map (thread-local instance)
         self.trades: Dict[str, Any] = {}
 
-        # Track all running worker threads for optional monitoring
+        # Track all running worker threads for health monitoring
         self.workers_to_monitor: List[threading.Thread] = []
 
         logger.info("BinanceAutomation initialized")
 
-    # ----------------------------------------------------------------------
-    # ORDER EXECUTION MONITOR (Thread)
-    # ----------------------------------------------------------------------
-    def monitor_order_execution(self, symbol: str, order_id: int, action: str, quantity: float, price: float):
-        """
-        Monitor order execution for up to 10 minutes. Runs in a dedicated thread.
+    # ------------------------------------------------------------------
+    # Order execution monitor (thread)
+    # ------------------------------------------------------------------
 
-        Handles:
-            - Order status updates
-            - Cancellation on timeout
-            - Updating trade_checker cooldown
-            - Recording executed trades
+    def monitor_order_execution(
+        self,
+        symbol: str,
+        order_id: int,
+        action: str,
+        quantity: float,
+        price: float,
+    ) -> None:
+        """Poll order status for up to 10 minutes; cancel on timeout.
+
+        Designed to run in a dedicated daemon thread.
+
+        Args:
+            symbol: Trading pair.
+            order_id: The ``orderId`` to monitor.
+            action: ``"BUY"`` or ``"SELL"``.
+            quantity: Order quantity.
+            price: Limit price used for the order.
         """
         start_time = time.time()
         timeout_seconds = 600  # 10 minutes
@@ -108,17 +130,14 @@ class BinanceAutomation(ExceptionManager):
         while time.time() - start_time < timeout_seconds:
             try:
                 orders = self.order_manager.get_open_orders(symbol=symbol, orderId=order_id)
-
-                # Orders can come as list or dict depending on library
                 order_list = orders if isinstance(orders, list) else [orders]
 
                 for order in order_list:
                     status = order.get("status")
 
-                    if status in ("NEW"):
+                    if status in ("NEW",):
                         break
 
-                    # Failed states
                     if status in ("CANCELED", "REJECTED", "EXPIRED"):
                         self.send_alerts(
                             data=None,
@@ -127,7 +146,6 @@ class BinanceAutomation(ExceptionManager):
                         )
                         return
 
-                    # Success state
                     if status == "FILLED":
                         self.trade_checker.set_cooldown(symbol)
                         self.trades[symbol] = {
@@ -147,10 +165,7 @@ class BinanceAutomation(ExceptionManager):
                 time.sleep(30)
 
             except Exception as e:
-                self.handle_exception(
-                    e,
-                    context_description=f"Exception monitoring order {order_id} for {symbol}"
-                )
+                self.handle_exception(e, context_description=f"Exception monitoring order {order_id} for {symbol}")
                 time.sleep(30)
 
         # TIMEOUT → Cancel order
@@ -163,21 +178,18 @@ class BinanceAutomation(ExceptionManager):
             )
             assert cancel_result.get("status") == "CANCELED", "Cancellation failed"
         except Exception as e:
-            self.handle_exception(
-                e,
-                context_description=f"Exception cancelling timed-out order {order_id} for {symbol}",
-            )
+            self.handle_exception(e, context_description=f"Exception cancelling timed-out order {order_id} for {symbol}")
 
-    # ----------------------------------------------------------------------
-    # SIGNAL PROCESSOR
-    # ----------------------------------------------------------------------
-    def process_signal(self, signal: Dict[str, Any]):
-        """
-        Process trading signals (BUY/SELL) and execute trades accordingly.
+    # ------------------------------------------------------------------
+    # Signal processor
+    # ------------------------------------------------------------------
 
-        Workflow:
-            • Place order
-            • Start order monitor thread
+    def process_signal(self, signal: Dict[str, Any]) -> None:
+        """Translate a signal dict into a live order and start monitoring.
+
+        Args:
+            signal: Must contain ``symbol``, ``signal``, ``entry_price``,
+                ``stop_loss``, ``take_profit``, and optionally ``Other Info``.
         """
         if not signal:
             return
@@ -189,16 +201,9 @@ class BinanceAutomation(ExceptionManager):
         meta_info = signal.get("Other Info", "")
 
         if meta_info:
-            self.send_logs(
-                data=f"{symbol} - {action}",
-                description=f"Signal Info: {meta_info}",
-                fields=None,
-            )
+            self.send_logs(data=f"{symbol} - {action}", description=f"Signal Info: {meta_info}", fields=None)
 
-        # Current price (if not in signal)
         price_to_use = entry_price or self.order_manager.get_symbol_price(symbol)
-
-        # BTC special leverage
         leverage = 5 if symbol == "BTCUSDT" else self.future_leverage
 
         logger.info(f"Placing {action} order for {symbol}...")
@@ -216,10 +221,7 @@ class BinanceAutomation(ExceptionManager):
         time.sleep(0.5)
 
         if not order_response:
-            self.send_alerts(
-                data=None,
-                description=f"Order failed for {symbol}",
-            )
+            self.send_alerts(data=None, description=f"Order failed for {symbol}")
             return
 
         order_id = order_response.get("orderId")
@@ -237,13 +239,18 @@ class BinanceAutomation(ExceptionManager):
             fields={"orderId": order_id},
         )
 
-    # ----------------------------------------------------------------------
-    # CANDLE ALIGNMENT
-    # ----------------------------------------------------------------------
-    def candlestick_aligner(self, interval_minutes: int = 15):
-        """
-        Aligns execution to candlestick boundaries.
-        Example: For 15-min chart, run exactly at 00, 15, 30, 45.
+    # ------------------------------------------------------------------
+    # Candle alignment
+    # ------------------------------------------------------------------
+
+    def candlestick_aligner(self, interval_minutes: int = 15) -> None:
+        """Sleep until the next candlestick boundary.
+
+        For a 15-minute chart this means execution resumes at ``:00``,
+        ``:15``, ``:30``, or ``:45``.
+
+        Args:
+            interval_minutes: Candle period in minutes.
         """
         now = get_indian_time()
         minutes = now.minute
@@ -260,16 +267,14 @@ class BinanceAutomation(ExceptionManager):
             logger.info(f"Aligning to {interval_minutes}-minute candle. Sleeping {sleep_sec}s")
             time.sleep(sleep_sec + 3)
 
-    # ----------------------------------------------------------------------
-    # THREAD WORKERS
-    # ----------------------------------------------------------------------
-    def start_signal_analysis(self):
-        """
-        Continuously:
-            - Align to candle boundaries
-            - Read cooldowns
-            - Run signal analyzer
-            - Process new signals
+    # ------------------------------------------------------------------
+    # Thread workers
+    # ------------------------------------------------------------------
+
+    def start_signal_analysis(self) -> None:
+        """Infinite loop: align to candle, generate signals, process them.
+
+        This is the **main thread** entry-point called by :meth:`run`.
         """
         self.send_logs(data=None, description="Starting signal analysis thread")
 
@@ -277,27 +282,22 @@ class BinanceAutomation(ExceptionManager):
             try:
                 self.candlestick_aligner(15)
 
-                # Load cooldown info
                 self.trades = self.trade_checker.activePosition_coolMaker()
                 cooldown_list = [
                     s for s in self.trading_pairs if self.trade_checker.is_in_cooldown(s)
                 ]
 
-                # Generate signals
                 for signal in self.signal_analyzer.analyze_market(cooldown_list):
-                    self.process_signal(signal)                    
+                    self.process_signal(signal)
 
-                # Sleep until next quarter
                 time.sleep(SIGNAL_ANALYSIS_SLEEP - (time.time() % SIGNAL_ANALYSIS_SLEEP))
 
             except Exception as e:
-                self.handle_exception(
-                    e, context_description="Exception in signal analysis thread"
-                )
+                self.handle_exception(e, context_description="Exception in signal analysis thread")
                 time.sleep(120)
 
-    def start_trade_checker(self):
-        """Background trade monitor thread."""
+    def start_trade_checker(self) -> None:
+        """Background trade-monitor thread entry-point."""
         self.send_logs(data=None, description="Starting trade checker thread")
         try:
             self.trades = self.trade_checker.activePosition_coolMaker()
@@ -307,62 +307,54 @@ class BinanceAutomation(ExceptionManager):
                 self.risk_management,
             )
         except Exception as e:
-            self.handle_exception(
-                e, context_description="Exception in trade checker thread"
-            )
+            self.handle_exception(e, context_description="Exception in trade checker thread")
 
-    def handle_crons(self):
-        """Run scheduled sentiment cron in background thread."""
-        croner = Croner()
+    def handle_crons(self) -> None:
+        """Start the sentiment cron in a background daemon thread."""
+        croner: Croner = self._croner or Croner()
 
-        def cron_runner():
+        def cron_runner() -> None:
             try:
                 croner.sentiment_croner()
             except Exception as e:
-                self.handle_exception(
-                    e, context_description="Exception in cron thread"
-                )
+                self.handle_exception(e, context_description="Exception in cron thread")
 
         cron_thread = threading.Thread(target=cron_runner, daemon=True, name="CronThread")
         cron_thread.start()
         self.workers_to_monitor.append(cron_thread)
 
-    # ----------------------------------------------------------------------
-    # OPTIONAL WORKER MONITOR
-    # ----------------------------------------------------------------------
-    def monitor_workers(self, check_interval=300):
-        """Check if workers are alive and send alerts if any stop."""
+    # ------------------------------------------------------------------
+    # Worker health monitor
+    # ------------------------------------------------------------------
+
+    def monitor_workers(self, check_interval: int = 300) -> None:
+        """Periodically check worker threads and alert on failure.
+
+        Args:
+            check_interval: Seconds between health checks.
+        """
         while True:
             for worker in self.workers_to_monitor:
                 if not worker.is_alive():
-                    self.send_alerts(
-                        data=None,
-                        description=f"Worker {worker.name} has stopped!",
-                    )
+                    self.send_alerts(data=None, description=f"Worker {worker.name} has stopped!")
                     logger.error(f"Worker {worker.name} has stopped.")
                 logger.info(f"Worker {worker.name} is alive.")
             time.sleep(check_interval)
 
-    # ----------------------------------------------------------------------
-    # MAIN RUNNER
-    # ----------------------------------------------------------------------
-    def run(self):
-        """Start all trading threads."""
+    # ------------------------------------------------------------------
+    # Main runner
+    # ------------------------------------------------------------------
+
+    def run(self) -> None:
+        """Start all trading threads and enter the signal-analysis loop."""
         logger.info("Starting Binance automation (thread-based)")
 
-        # Monitor thread
-        monitor_thread = threading.Thread(
-            target=self.monitor_workers, daemon=True, name="MonitorThread"
-        )
-
+        monitor_thread = threading.Thread(target=self.monitor_workers, daemon=True, name="MonitorThread")
         monitor_thread.start()
-        # Cron thread
+
         self.handle_crons()
 
-        # Trade checker thread
-        trade_thread = threading.Thread(
-            target=self.start_trade_checker, daemon=True, name="TradeCheckerThread"
-        )
+        trade_thread = threading.Thread(target=self.start_trade_checker, daemon=True, name="TradeCheckerThread")
         trade_thread.start()
         self.workers_to_monitor.append(trade_thread)
 
@@ -371,9 +363,11 @@ class BinanceAutomation(ExceptionManager):
 
 
 # =============================================================================
-# ENTRY POINT
+# Entry point
 # =============================================================================
-def main():
+
+def main() -> None:
+    """Create a :class:`BinanceAutomation` instance and run it."""
     automation = BinanceAutomation()
     try:
         automation.run()
