@@ -74,6 +74,17 @@ jobs:
         run: |
           git push
 
+      - name: Request re-review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          REVIEWER=${{ github.event.review.user.login }}
+
+          gh api \
+            repos/${{ github.repository }}/pulls/$PR/requested_reviewers \
+            -f reviewers[]=$REVIEWER
+
       - name: Upload AI artifacts
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
