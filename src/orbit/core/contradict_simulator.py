@@ -21,7 +21,7 @@ import requests
 logger = logging.getLogger("Orbit")
 
 # Maximum time (seconds) to wait for a simulated trade to resolve
-SIMULATION_TIMEOUT_SECONDS = 60 * 60 * 4  # 4 hours
+SIMULATION_TIMEOUT_SECONDS = 60 * 60 * 24  # 2 days
 POLL_INTERVAL_SECONDS = 30
 
 
