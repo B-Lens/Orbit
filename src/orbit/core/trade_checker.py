@@ -1,62 +1,61 @@
 """
-TradeChecker
-- Ensures only one active SL/TP per symbol (prevents Binance -4045 error)
-- ensure_orders, update_trade_data, trailing/adaptive logic
-- Small utilities: cancel_excess_stop_orders, is_stop_order, is_take_profit_order
+trade_checker
+=============
+
+Provides :class:`TradeChecker`, the real-time position monitor that:
+
+* Ensures exactly one active SL (and optionally TP) per symbol, preventing
+  the Binance ``-4045`` duplicate-stop-order error.
+* Trails or adapts stop-losses according to the configured strategy.
+* Maintains a live-price feed via a Binance WebSocket.
+
+Module-level helpers :func:`is_stop_order` and :func:`is_take_profit_order`
+classify algo/conditional orders returned by the Binance API.
+
+Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
+**injected** through the constructor.
 """
 
 import time
-from datetime import timedelta
-import redis
-import threading
-import websocket
 import json
 import logging
-import os
-import sys
-from typing import Optional, Tuple, Dict, Any, List
+import threading
+from datetime import timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
-# Local project imports - adjust paths if required
+import pandas as pd
+import redis
+import websocket
 from binance.error import ClientError
+
 from config import COIN_TRADE_TYPE, TradeType, TRAILING_STOPLOSS
 from orbit.utils.utils import get_indian_time
 from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.order_manager import OrderManager
-from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 from orbit.core.mongo_handler import MongoHandler
-
-import pandas as pd
+from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
 
-# -----------------------------
-# Helper functions
-# -----------------------------
 
-def is_stop_order(order: Dict[str, Any]) -> bool:
-    """Return True if order is a stop-loss conditional/algo order."""
+def is_stop_order(order: Optional[Dict[str, Any]]) -> bool:
+    """Return ``True`` if *order* represents a stop-loss conditional/algo order."""
     if not order:
         return False
     t = str(order.get("algoType", "")).upper()
     ot = str(order.get("orderType", "")).upper()
 
-    # Common algo/conditional indicator
     if t in ("ALGO", "CONDITIONAL") and "STOP" in ot:
         return True
-
-    # Explicit origType values
     if ot in ("STOP", "STOP_MARKET", "STOP_LOSS", "STOP_LOSS_LIMIT"):
         return True
-
-    # Fallback for some responses
     if t in ("STOP", "STOP_MARKET"):
         return True
-
     return False
 
 
-def is_take_profit_order(order: Dict[str, Any]) -> bool:
-    """Return True if order is a take-profit conditional/algo order."""
+def is_take_profit_order(order: Optional[Dict[str, Any]]) -> bool:
+    """Return ``True`` if *order* represents a take-profit conditional/algo order."""
     if not order:
         return False
     t = str(order.get("algoType", "")).upper()
@@ -64,39 +63,57 @@ def is_take_profit_order(order: Dict[str, Any]) -> bool:
 
     if t in ("ALGO", "CONDITIONAL") and "TAKE_PROFIT" in ot:
         return True
-
     if ot in ("TAKE_PROFIT", "TAKE_PROFIT_MARKET"):
         return True
-
     return False
 
 
-# -----------------------------
-# TradeChecker class
-# -----------------------------
 class TradeChecker(AuthenticationManager):
-    """Monitors active positions and ensures SL/TP orders exist and are maintained.
+    """Real-time position monitor and SL/TP lifecycle manager.
 
-    Key:
-    - Correct detection for ALGO/CONDITIONAL orders
-    - Prevent duplicate SLs and hitting Binance max-stop-order limit
-    - Single place to manage SL/TP lifecycle
+    The checker runs in its own thread (see :meth:`monitor_trades`) and
+    periodically:
+
+    1. Discovers active positions via the Binance API.
+    2. Ensures each position has exactly one SL (and optionally one TP).
+    3. Trails or adapts the stop-loss using the symbol's registered strategy.
+    4. Sends Discord notifications for every significant event.
+
+    Args:
+        order_manager: Pre-built :class:`OrderManager`.  A new instance is
+            created when ``None``.
+        mongo_handler: Pre-built :class:`MongoHandler`.  A new instance is
+            created when ``None``.
+        redis_client: Pre-built ``redis.StrictRedis`` connection.  A default
+            ``localhost:6379/0`` connection is created when ``None``.
+        **auth_kwargs: Forwarded to :class:`AuthenticationManager`.
     """
 
-    def __init__(self):
-        super().__init__()
-        self.cooldown_tracker = {}
-        self.trades: Dict[str, Dict[str, Any]] = {}
-        self.om = OrderManager()
-        self.mongo_handler = MongoHandler()
-        self.live_prices: Dict[str, Tuple[float, float]] = {}
-        self.isWebSocketRunning = False
-        self.client = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True)
+    def __init__(
+        self,
+        order_manager: Optional[OrderManager] = None,
+        mongo_handler: Optional[MongoHandler] = None,
+        redis_client: Optional[redis.StrictRedis] = None,
+        **auth_kwargs: Any,
+    ) -> None:
+        super().__init__(**auth_kwargs)
 
-    # -----------------------------
-    # cooldown helpers
-    # -----------------------------
+        self.cooldown_tracker: Dict[str, str] = {}
+        self.trades: Dict[str, Dict[str, Any]] = {}
+        self.om: OrderManager = order_manager or OrderManager()
+        self.mongo_handler: MongoHandler = mongo_handler or MongoHandler()
+        self.live_prices: Dict[str, Tuple[float, float]] = {}
+        self.isWebSocketRunning: bool = False
+        self.client: redis.StrictRedis = redis_client or redis.StrictRedis(
+            host="localhost", port=6379, db=0, decode_responses=True
+        )
+
+    # ------------------------------------------------------------------
+    # Cooldown helpers
+    # ------------------------------------------------------------------
+
     def is_in_cooldown(self, symbol: str) -> bool:
+        """Return ``True`` if *symbol* is still within its cooldown window."""
         cooldown_end = self.client.get(symbol)
         if cooldown_end:
             try:
@@ -106,7 +123,12 @@ class TradeChecker(AuthenticationManager):
                 return False
         return False
 
-    def set_cooldown(self, symbol: str):
+    def set_cooldown(self, symbol: str) -> None:
+        """Set a cooldown window for *symbol* in Redis.
+
+        The duration is read from ``config["cooldown_hours"]``; when the
+        symbol is not configured a 5-minute default is used.
+        """
         cooldown_hours = int(self.config.get("cooldown_hours", {}).get(symbol, 0))
         minutes = 0
         if cooldown_hours == 0:
@@ -115,10 +137,19 @@ class TradeChecker(AuthenticationManager):
         cooldown_end = (ind_time.now() + timedelta(hours=cooldown_hours, minutes=minutes)).isoformat()
         self.client.set(symbol, cooldown_end)
 
-    # -----------------------------
-    # price helpers
-    # -----------------------------
+    # ------------------------------------------------------------------
+    # Price helpers
+    # ------------------------------------------------------------------
+
     def check_price_freshness(self, symbol: str) -> Optional[float]:
+        """Return a fresh price for *symbol*, falling back to the REST API.
+
+        If the cached WebSocket price is older than 2 seconds it is
+        refreshed via :meth:`get_future_symbol_price`.
+
+        Returns:
+            The current price, or ``None`` when no price can be obtained.
+        """
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices.get(symbol)
             if time.time() - last_updated > 2:
@@ -138,13 +169,30 @@ class TradeChecker(AuthenticationManager):
         except Exception:
             return None
 
-    # -----------------------------
-    # ensure_orders (main)
-    # -----------------------------
-    def ensure_orders(self, symbol: str, trade: Dict[str, Any], risk_management: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        """Ensure there is one SL (and optionally TP) algo conditional for the position.
+    # ------------------------------------------------------------------
+    # Ensure SL / TP orders
+    # ------------------------------------------------------------------
 
-        Returns (stop_loss_order, take_profit_order)
+    def ensure_orders(
+        self,
+        symbol: str,
+        trade: Dict[str, Any],
+        risk_management: Dict[str, Any],
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Guarantee that exactly one SL (and optionally one TP) exists.
+
+        Missing orders are placed automatically.  Existing orders are left
+        untouched.
+
+        Args:
+            symbol: Trading pair.
+            trade: Position metadata (must contain ``positionSide``,
+                ``quantity``, ``price``).
+            risk_management: Config dict with ``"stop_loss_percent"`` etc.
+
+        Returns:
+            A ``(stop_loss_order, take_profit_order)`` tuple.  Either element
+            may be ``None`` if placement failed.
         """
         try:
             orders = self.om.get_conditional_open_orders(symbol=symbol)
@@ -158,7 +206,6 @@ class TradeChecker(AuthenticationManager):
                 if is_take_profit_order(order):
                     take_profit_order = take_profit_order or order
 
-            # Place SL if missing
             if stop_loss_order is None:
                 sl_price = self.calculate_sl_price(trade, risk_management)
                 stop_loss_order = self.om.place_sl_order(
@@ -170,10 +217,8 @@ class TradeChecker(AuthenticationManager):
                 time.sleep(0.5)
                 logger.info(f"Placed missing SL for {symbol} at {sl_price}")
 
-            # Place TP for bracket trades if missing
             if take_profit_order is None and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE:
                 target_price = self.calculate_target_price(trade, risk_management)
-
                 take_profit_order = self.om.place_target_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
@@ -189,10 +234,16 @@ class TradeChecker(AuthenticationManager):
             self.handle_exception(e, context_description="ensure_orders")
             return None, None
 
-    # -----------------------------
-    # price / calc helpers
-    # -----------------------------
+    # ------------------------------------------------------------------
+    # Price / calculation helpers
+    # ------------------------------------------------------------------
+
     def calculate_sl_price(self, trade: Dict[str, Any], risk_management: Dict[str, Any]) -> float:
+        """Compute the initial stop-loss price from the entry and risk config.
+
+        Raises:
+            ValueError: If ``stop_loss_percent`` is not positive.
+        """
         price = float(trade["price"])
         percent = float(risk_management["stop_loss_percent"])
         if percent <= 0:
@@ -203,6 +254,11 @@ class TradeChecker(AuthenticationManager):
             return price + (price * (percent / 100.0))
 
     def calculate_target_price(self, trade: Dict[str, Any], risk_management: Dict[str, Any]) -> float:
+        """Compute the take-profit price from the entry and risk config.
+
+        Raises:
+            ValueError: If ``target_percent`` is not positive.
+        """
         price = float(trade["price"])
         percent = float(risk_management.get("target_percent", 2))
         if percent <= 0:
@@ -212,11 +268,24 @@ class TradeChecker(AuthenticationManager):
         else:
             return price - (price * (percent / 100.0))
 
-    # -----------------------------
-    # update_trade_data
-    # -----------------------------
-    def update_trade_data(self, symbol: str, trade: Dict[str, Any], current_price: float, stop_loss_order: Dict[str, Any], take_profit_order: Optional[Dict[str, Any]]):
-        # Read stop price robustly
+    # ------------------------------------------------------------------
+    # Trade-data bookkeeping
+    # ------------------------------------------------------------------
+
+    def update_trade_data(
+        self,
+        symbol: str,
+        trade: Dict[str, Any],
+        current_price: float,
+        stop_loss_order: Optional[Dict[str, Any]],
+        take_profit_order: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Refresh the in-memory trade record for *symbol*.
+
+        Updates high/low watermarks, persists the latest SL/TP order
+        references, and returns a summary dict suitable for Discord
+        notifications.
+        """
         try:
             stop_price_val = None
             if stop_loss_order:
@@ -232,11 +301,9 @@ class TradeChecker(AuthenticationManager):
             highest_price = existing_trade.get("high")
             lowest_price = existing_trade.get("low")
 
-            # Initialize trade if not present
             if not existing_trade:
                 self.trades[symbol] = trade.copy()
 
-            # Update high/low based on side
             position_side = trade["positionSide"]
             if position_side == "BUY":
                 if highest_price is None:
@@ -251,7 +318,6 @@ class TradeChecker(AuthenticationManager):
                     low = min(current_price, lowest_price)
                 self.trades[symbol]["low"] = low
 
-            # Update stored data
             self.trades[symbol].update({
                 "stop_loss_price": stop_loss,
                 "target": target,
@@ -281,13 +347,23 @@ class TradeChecker(AuthenticationManager):
             self.handle_exception(e, context_description="update_trade_data")
             return {}
 
-    # -----------------------------
-    # adaptive/trailing logic
-    # -----------------------------
-    def compute_sma(self, close_series: pd.Series, period: int = 20) -> pd.Series:
+    # ------------------------------------------------------------------
+    # Adaptive / trailing logic
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def compute_sma(close_series: pd.Series, period: int = 20) -> pd.Series:
+        """Return the simple moving average of *close_series*."""
         return close_series.rolling(window=period).mean()
 
-    def adaptive_trade_check(self, symbol: str, current_price: float, side: str, quantity: float) -> bool:
+    def adaptive_trade_check(
+        self, symbol: str, current_price: float, side: str, quantity: float
+    ) -> bool:
+        """Exit the position when price crosses the SMA (adaptive mode).
+
+        Returns:
+            ``True`` if the position was closed, ``False`` otherwise.
+        """
         historical_df = self.om.mongo_handler.get_mongo_historical_data(symbol, interval="15m")
         if historical_df is None or historical_df.empty:
             return False
@@ -300,7 +376,11 @@ class TradeChecker(AuthenticationManager):
         sma_series = self.compute_sma(close)
         current_sma = sma_series.iloc[-1]
 
-        self.send_active_trade_prices(data=None, description=f'{symbol} Adaptive running stats on {side} side', fields={"sma": current_sma, "current_price": current_price})
+        self.send_active_trade_prices(
+            data=None,
+            description=f'{symbol} Adaptive running stats on {side} side',
+            fields={"sma": current_sma, "current_price": current_price}
+        )
 
         if side == "BUY" and current_price > current_sma:
             resp = self.om.place_market_order(symbol, 'SELL', quantity)
@@ -315,8 +395,19 @@ class TradeChecker(AuthenticationManager):
 
         return False
 
-    def _place_and_replace_sl(self, symbol: str, new_sl: float, current_stop_order: Optional[Dict[str, Any]], quantity: float, side: str) -> Optional[Dict[str, Any]]:
-        """Place a new SL and cancel the old one if placement succeeded."""
+    def _place_and_replace_sl(
+        self,
+        symbol: str,
+        new_sl: float,
+        current_stop_order: Optional[Dict[str, Any]],
+        quantity: float,
+        side: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically replace the current SL with a new one.
+
+        The new SL is placed **first**; the old order is cancelled only
+        after the new one is confirmed.
+        """
         try:
             placed = self.om.place_sl_order(symbol, side, new_sl, quantity)
             time.sleep(0.5)
@@ -326,7 +417,6 @@ class TradeChecker(AuthenticationManager):
                 except Exception as e:
                     self.handle_exception(e, f"Failed to cancel old SL order for {symbol} after placing new SL")
 
-            # refresh and return the new stop order from open orders
             orders = self.om.get_conditional_open_orders(symbol=symbol)
             for o in orders:
                 if is_stop_order(o):
@@ -338,10 +428,21 @@ class TradeChecker(AuthenticationManager):
             self.handle_exception(e, context_description="_place_and_replace_sl")
             return None
 
-    # -----------------------------
-    # long/short checks
-    # -----------------------------
-    def long_check_trade(self, risk_management: Dict[str, Any], symbol: str, stop_loss: float, target: float, current_price: float, stop_loss_order: Dict[str, Any], quantity: float):
+    # ------------------------------------------------------------------
+    # Long / short position checks
+    # ------------------------------------------------------------------
+
+    def long_check_trade(
+        self,
+        risk_management: Dict[str, Any],
+        symbol: str,
+        stop_loss: float,
+        target: float,
+        current_price: float,
+        stop_loss_order: Dict[str, Any],
+        quantity: float,
+    ) -> None:
+        """Run all trade-management checks for a **long** position."""
         try:
             self.set_cooldown(symbol)
 
@@ -370,7 +471,6 @@ class TradeChecker(AuthenticationManager):
                 cost_price = self.trades[symbol]["price"]
                 sl_price = self.trades[symbol].get("stop_loss_price")
 
-                # move SL to entry when price moves beyond threshold
                 if current_price >= cost_price * 1.03 and sl_price is not None and sl_price < cost_price:
                     new_stop = cost_price
                     new_stop_order = self._place_and_replace_sl(symbol, new_stop, stop_loss_order, quantity, "SELL")
@@ -381,7 +481,7 @@ class TradeChecker(AuthenticationManager):
 
             if not TRAILING_STOPLOSS.get(symbol, True):
                 return
-            
+
             strategy_class = STRATEGY_REGISTRY.get(symbol)
             if not strategy_class:
                 self.send_alerts(f"No strategy found for {symbol}", None)
@@ -396,14 +496,23 @@ class TradeChecker(AuthenticationManager):
                 new_stop_order = self._place_and_replace_sl(symbol, new_stop_loss, stop_loss_order, quantity, "SELL")
                 if new_stop_order:
                     self.trades[symbol]["stop_loss_price"] = new_stop_loss
-                    # refresh local ref
                     stop_loss_order = new_stop_order
                     logger.info(f"Updated SL for {symbol} to {new_stop_loss} at price {current_price}")
 
         except Exception as e:
             self.handle_exception(e, context_description="long_check_trade")
 
-    def short_check_trade(self, risk_management: Dict[str, Any], symbol: str, stop_loss: float, target: float, current_price: float, stop_loss_order: Dict[str, Any], quantity: float):
+    def short_check_trade(
+        self,
+        risk_management: Dict[str, Any],
+        symbol: str,
+        stop_loss: float,
+        target: float,
+        current_price: float,
+        stop_loss_order: Dict[str, Any],
+        quantity: float,
+    ) -> None:
+        """Run all trade-management checks for a **short** position."""
         try:
             self.set_cooldown(symbol)
 
@@ -457,17 +566,27 @@ class TradeChecker(AuthenticationManager):
                 new_stop_order = self._place_and_replace_sl(symbol, new_stop_loss, stop_loss_order, quantity, "SELL")
                 if new_stop_order:
                     self.trades[symbol]["stop_loss_price"] = new_stop_loss
-                    # refresh local ref
                     stop_loss_order = new_stop_order
                     logger.info(f"Updated SL for {symbol} to {new_stop_loss} at price {current_price}")
 
         except Exception as e:
             self.handle_exception(e, context_description="short_check_trade")
 
-    # -----------------------------
-    # main check wrapper
-    # -----------------------------
-    def check_trade(self, risk_management: Dict[str, Any], symbol: str, stop_loss: float, target: float, current_price: float, stop_loss_order: Dict[str, Any], quantity: float = None):
+    # ------------------------------------------------------------------
+    # Main check wrapper
+    # ------------------------------------------------------------------
+
+    def check_trade(
+        self,
+        risk_management: Dict[str, Any],
+        symbol: str,
+        stop_loss: float,
+        target: float,
+        current_price: float,
+        stop_loss_order: Dict[str, Any],
+        quantity: Optional[float] = None,
+    ) -> None:
+        """Dispatch to :meth:`long_check_trade` or :meth:`short_check_trade`."""
         if current_price is None or current_price == 0:
             logger.warning(f"[WARN] Current price for {symbol} is invalid, skipping trade check.")
             return
@@ -489,10 +608,17 @@ class TradeChecker(AuthenticationManager):
         except Exception as e:
             self.handle_exception(e, context_description="check_trade")
 
-    # -----------------------------
-    # active positions discovery
-    # -----------------------------
+    # ------------------------------------------------------------------
+    # Active-position discovery
+    # ------------------------------------------------------------------
+
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
+        """Discover all active Futures positions and set cooldowns.
+
+        Returns:
+            A dict mapping each symbol with a non-zero entry price to its
+            position metadata.
+        """
         positions = self.future_client.get_position_risk()
         trades = {}
         for position in positions:
@@ -510,10 +636,12 @@ class TradeChecker(AuthenticationManager):
             trades[position["symbol"]] = _dict
         return trades
 
-    # -----------------------------
-    # websocket helpers (unchanged)
-    # -----------------------------
-    def public_websocket(self, trading_pairs: List[str]):
+    # ------------------------------------------------------------------
+    # WebSocket helpers
+    # ------------------------------------------------------------------
+
+    def public_websocket(self, trading_pairs: List[str]) -> None:
+        """Open a Binance Futures WebSocket for real-time trade prices."""
         def on_message(ws, message):
             try:
                 message = json.loads(message)
@@ -538,7 +666,7 @@ class TradeChecker(AuthenticationManager):
 
         def on_close(ws, *args):
             logger.info("WebSocket closed")
-            self.send_websocket_logs(data='WebSocket closed', description=F"{args}", fields=None)
+            self.send_websocket_logs(data='WebSocket closed', description=f"{args}", fields=None)
             self.isWebSocketRunning = False
             try:
                 ws.close()
@@ -564,7 +692,8 @@ class TradeChecker(AuthenticationManager):
         self.wst = threading.Thread(target=self.future_ws.run_forever, daemon=True)
         self.wst.start()
 
-    def stop_future_ws(self):
+    def stop_future_ws(self) -> None:
+        """Gracefully close the Futures WebSocket connection (if open)."""
         if hasattr(self, 'future_ws'):
             logger.info("Closing Futures WebSocket connection...")
             try:
@@ -572,10 +701,15 @@ class TradeChecker(AuthenticationManager):
             except Exception:
                 pass
 
-    # -----------------------------
-    # main monitor loop
-    # -----------------------------
-    def monitor_trades(self, trading_pairs: List[str], risk_management: Dict[str, Any]):
+    # ------------------------------------------------------------------
+    # Main monitor loop
+    # ------------------------------------------------------------------
+
+    def monitor_trades(self, trading_pairs: List[str], risk_management: Dict[str, Any]) -> None:
+        """Infinite loop that monitors all active positions.
+
+        Designed to run in a dedicated daemon thread.
+        """
         last_minute_used = -1
         while True:
             try:
@@ -592,7 +726,6 @@ class TradeChecker(AuthenticationManager):
                     if current_price is None:
                         continue
 
-                    # Ensure trade meta-populated
                     if 'stop_loss_price' not in self.trades[symbol] or 'target' not in self.trades[symbol] or 'stop_loss_order' not in self.trades[symbol]:
                         flag = True
                         break
@@ -632,7 +765,7 @@ class TradeChecker(AuthenticationManager):
                     last_minute_used = get_indian_time().minute
 
                     if not any_trade_active:
-                        self.send_active_trades_info(data=None, description=f"No trade is Active", fields=None)
+                        self.send_active_trades_info(data=None, description="No trade is Active", fields=None)
                         self.stop_future_ws()
 
             except ClientError as error:

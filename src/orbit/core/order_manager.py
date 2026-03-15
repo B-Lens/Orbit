@@ -1,9 +1,18 @@
-# src/order_manager.py
-import os
-import sys
+"""
+order_manager
+=============
+
+Provides :class:`OrderManager`, the single gateway for all Binance Futures
+order operations: market / limit orders, stop-loss / take-profit placement,
+bridge orders, and order modification / cancellation.
+
+Dependencies (:class:`MongoHandler`, Binance clients) can be **injected**
+through the constructor for easier testing and looser coupling.
+"""
+
 import time
 import logging
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from binance.error import ClientError
 
@@ -12,43 +21,63 @@ from orbit.core.mongo_handler import MongoHandler
 from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
 
-
 logger = logging.getLogger("Orbit")
 
 
 class OrderManager(AuthenticationManager):
-    """
-    Handles all order-related operations against Binance Futures:
-    - Market / Limit orders
-    - Stop-loss / Take-profit orders
-    - Bridge orders based on swing SL
+    """Binance Futures order lifecycle management.
+
+    Responsibilities:
+        - LIMIT and MARKET order placement
+        - Algo-conditional SL / TP order placement and cancellation
+        - Exchange-filter validation (tick size, step size, notional)
+        - Bridge-order workflow (swing-SL based)
+        - Order modification and cancellation
+
+    Args:
+        mongo_handler: Pre-built :class:`MongoHandler` instance.  When
+            ``None`` (the default) a new handler is created internally.
+        **auth_kwargs: Forwarded to :class:`AuthenticationManager` (e.g.
+            ``spot_client``, ``futures_client``, ``config``).
     """
 
-    FIXED_SPEND_USDT: float = 30.0      # Fixed capital per trade
-    MAX_LOSS_PER_BRIDGE: float = 0.3    # Max loss in USDT for bridge orders
+    FIXED_SPEND_USDT: float = 30.0
+    """Default USDT amount allocated per trade."""
 
-    # cache for exchange filters per symbol
+    MAX_LOSS_PER_BRIDGE: float = 0.3
+    """Maximum acceptable USDT loss for a single bridge order."""
+
     _exchange_filters_cache: Dict[str, Dict[str, Any]] = {}
 
-    def __init__(self):
-        super().__init__()
-        try:
-            self.mongo_handler = MongoHandler()
-        except Exception as e:
-            # Do not crash if Mongo is unavailable; just log & report
-            self.handle_exception(
-                e, "Exception while Creating MongoHandler"
-            )
-            self.mongo_handler = None
+    def __init__(
+        self,
+        mongo_handler: Optional[MongoHandler] = None,
+        **auth_kwargs: Any,
+    ) -> None:
+        super().__init__(**auth_kwargs)
+
+        if mongo_handler is not None:
+            self.mongo_handler: Optional[MongoHandler] = mongo_handler
+        else:
+            try:
+                self.mongo_handler = MongoHandler()
+            except Exception as e:
+                self.handle_exception(e, "Exception while Creating MongoHandler")
+                self.mongo_handler = None
 
     # -------------------------------------------------------------------------
     # Exchange filters helpers (tick, step, notional)
     # -------------------------------------------------------------------------
 
     def get_symbol_filters(self, symbol: str) -> Dict[str, Any]:
-        """
-        Fetch and cache exchange filters for the symbol.
-        Includes: tick size, step size, minQty, minNotional.
+        """Fetch and cache Binance exchange filters for *symbol*.
+
+        Returns:
+            A dict with keys ``PRICE_FILTER``, ``LOT_SIZE``, and
+            ``MIN_NOTIONAL`` (each may be ``None`` if absent).
+
+        Raises:
+            Exception: If *symbol* is not found in exchange info.
         """
         if symbol in self._exchange_filters_cache:
             return self._exchange_filters_cache[symbol]
@@ -57,20 +86,17 @@ class OrderManager(AuthenticationManager):
         for s in info["symbols"]:
             if s["symbol"] == symbol:
                 filters = s["filters"]
+
                 def _get_filter(ftype: str) -> Optional[Dict[str, Any]]:
                     for f in filters:
                         if f.get("filterType") == ftype:
                             return f
                     return None
 
-                price_filter = _get_filter("PRICE_FILTER")
-                lot_size_filter = _get_filter("LOT_SIZE")
-                min_notional_filter = _get_filter("MIN_NOTIONAL")
-
                 symbol_filters = {
-                    "PRICE_FILTER": price_filter,
-                    "LOT_SIZE": lot_size_filter,
-                    "MIN_NOTIONAL": min_notional_filter,
+                    "PRICE_FILTER": _get_filter("PRICE_FILTER"),
+                    "LOT_SIZE": _get_filter("LOT_SIZE"),
+                    "MIN_NOTIONAL": _get_filter("MIN_NOTIONAL"),
                 }
                 self._exchange_filters_cache[symbol] = symbol_filters
                 return symbol_filters
@@ -78,7 +104,7 @@ class OrderManager(AuthenticationManager):
         raise Exception(f"Symbol {symbol} not found in exchange info")
 
     def adjust_price_tick(self, symbol: str, price: float) -> float:
-        """Snap price to Binance tick size."""
+        """Round *price* down to the nearest valid tick for *symbol*."""
         filters = self.get_symbol_filters(symbol)
         price_filter = filters.get("PRICE_FILTER")
         if not price_filter:
@@ -95,7 +121,7 @@ class OrderManager(AuthenticationManager):
         return round(corrected, 8)
 
     def adjust_quantity_step(self, symbol: str, qty: float) -> float:
-        """Snap quantity to Binance step size and minQty."""
+        """Round *qty* down to the nearest valid step size for *symbol*."""
         filters = self.get_symbol_filters(symbol)
         lot_size = filters.get("LOT_SIZE")
         if not lot_size:
@@ -112,47 +138,43 @@ class OrderManager(AuthenticationManager):
         return round(corrected, 8)
 
     def validate_notional(self, symbol: str, price: float, qty: float) -> bool:
-        """Validate if price * qty meets Binance MIN_NOTIONAL (if present)."""
+        """Return ``True`` if ``price * qty`` meets the MIN_NOTIONAL filter."""
         filters = self.get_symbol_filters(symbol)
         min_notional_filter = filters.get("MIN_NOTIONAL")
         if not min_notional_filter:
-            # Some products might not use MIN_NOTIONAL; if so, skip validation
             return True
 
         min_notional = float(min_notional_filter["notional"])
-        notional = price * qty
-        return notional >= min_notional
+        return (price * qty) >= min_notional
 
     # -------------------------------------------------------------------------
     # General helpers
     # -------------------------------------------------------------------------
 
     def get_symbol_price(self, symbol: str) -> float:
-        """Get current futures price for a symbol."""
+        """Return the current Futures ticker price for *symbol*."""
         ticker = self.future_client.ticker_price(symbol=symbol)
-        current_price = float(ticker["price"])
-        return current_price
+        return float(ticker["price"])
 
     def get_future_symbol_price(self, symbol: str) -> float:
-        """
-        Backwards-compatible helper.
-        If other parts of the code call get_future_symbol_price, this keeps them working.
-        """
+        """Backwards-compatible alias for :meth:`get_symbol_price`."""
         return self.get_symbol_price(symbol)
 
     def get_usdt_balance(self) -> float:
-        """Get total USDT wallet balance on futures account."""
+        """Return the total USDT wallet balance on the Futures account."""
         account_info = self.future_client.account()
-        balance = float(account_info["totalWalletBalance"])
-        return balance
+        return float(account_info["totalWalletBalance"])
 
-    def fixed_asset_allocated(self, symbol:str, price: float) -> Tuple[float, float]:
-        """
-        Decide quantity based on a fixed USDT amount.
+    def fixed_asset_allocated(self, symbol: str, price: float) -> float:
+        """Compute the coin quantity affordable from the fixed USDT allocation.
+
+        Args:
+            symbol: Trading pair.
+            price: Current coin price in USDT.
 
         Returns:
-            (coin_qty, usdt_balance)
-            coin_qty may be 0 if balance is insufficient.
+            The computed coin quantity.  Returns ``0.0`` when the wallet
+            balance is insufficient.
         """
         usdt_balance = self.get_usdt_balance()
         amount_to_spend = self.config["FIXED_TRADE_AMOUNT"].get(symbol, self.FIXED_SPEND_USDT)
@@ -168,14 +190,13 @@ class OrderManager(AuthenticationManager):
                 description="Insufficient Wallet balance",
                 fields={"balance": usdt_balance, "required": amount_to_spend},
             )
-            return 0.0, usdt_balance
+            return 0.0
 
-        coin_qty = amount_to_spend / price
-        return coin_qty
+        return amount_to_spend / price
 
     @staticmethod
     def _get_opposite_side(side: str) -> str:
-        """Return the opposite order side ('BUY' ↔ 'SELL')."""
+        """Return the opposite order side (``'BUY'`` ↔ ``'SELL'``)."""
         return "SELL" if side == "BUY" else "BUY"
 
     # -------------------------------------------------------------------------
@@ -189,12 +210,22 @@ class OrderManager(AuthenticationManager):
         order_type: str,
         stop_price: float,
         quantity: float,
-        position_side: str = None,
+        position_side: Optional[str] = None,
         close_position: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Universal handler for SL/TP conditional orders using
-        POST /fapi/v1/algoOrder (algoType=CONDITIONAL)
+        """Place an algo-conditional order (SL or TP) via ``POST /fapi/v1/algoOrder``.
+
+        Args:
+            symbol: Trading pair.
+            side: ``"BUY"`` or ``"SELL"``.
+            order_type: E.g. ``"STOP_MARKET"`` or ``"TAKE_PROFIT_MARKET"``.
+            stop_price: Trigger price.
+            quantity: Order quantity (ignored when *close_position* is ``True``).
+            position_side: Hedge-mode position side (optional).
+            close_position: When ``True`` the order closes the full position.
+
+        Returns:
+            The raw API response dict.
         """
         params = {
             "algoType": "CONDITIONAL",
@@ -205,54 +236,38 @@ class OrderManager(AuthenticationManager):
             "workingType": "MARK_PRICE",
         }
 
-        # Either qty OR closePosition
         if close_position:
             params["closePosition"] = "true"
         else:
             params["quantity"] = str(quantity)
 
-        # Hedge mode support
         if position_side:
             params["positionSide"] = position_side
 
-        # Raw request
         logger.info(f"[ALGO ORDER REQUEST] {params}")
-
-        resp = self.future_client.sign_request(
-            "POST",
-            "/fapi/v1/algoOrder",
-            params,
-        )
-
+        resp = self.future_client.sign_request("POST", "/fapi/v1/algoOrder", params)
         logger.info(f"[ALGO ORDER RESPONSE] {resp}")
         return resp
-    
+
     def cancel_algo_conditional_order(
         self,
         symbol: str,
         algo_id: str,
     ) -> Dict[str, Any]:
-        """
-        Cancel a Binance Futures CONDITIONAL algo order
-        DELETE /fapi/v1/algoOrder
-        """
+        """Cancel a conditional algo order via ``DELETE /fapi/v1/algoOrder``.
 
-        params = {
-            "symbol": symbol,
-            "algoId": algo_id,
-        }
+        Args:
+            symbol: Trading pair.
+            algo_id: The ``algoId`` returned when the order was placed.
 
+        Returns:
+            The raw API response dict.
+        """
+        params = {"symbol": symbol, "algoId": algo_id}
         logger.info(f"[ALGO CANCEL REQUEST] {params}")
-
-        resp = self.future_client.sign_request(
-            "DELETE",
-            "/fapi/v1/algoOrder",
-            params,
-        )
-
+        resp = self.future_client.sign_request("DELETE", "/fapi/v1/algoOrder", params)
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
         return resp
-
 
     def place_sl_order(
         self,
@@ -261,7 +276,17 @@ class OrderManager(AuthenticationManager):
         stoploss_price: float,
         quantity: float,
     ) -> Optional[Dict[str, Any]]:
-        """Place STOP_MARKET SL using new Algo Order API"""
+        """Place a ``STOP_MARKET`` stop-loss order via the Algo Order API.
+
+        Args:
+            symbol: Trading pair.
+            side: ``"BUY"`` or ``"SELL"`` (the exit side).
+            stoploss_price: Trigger price for the stop.
+            quantity: Position quantity to close.
+
+        Returns:
+            The API response dict, or ``None`` on failure.
+        """
         try:
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
@@ -297,14 +322,9 @@ class OrderManager(AuthenticationManager):
             return stop_loss_order
 
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol, error=error,
-                Location="OrderManager -> place_sl_order",
-            )
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> place_sl_order")
         except Exception as e:
-            self.handle_exception(
-                e, "Unexpected exception in place_sl_order"
-            )
+            self.handle_exception(e, "Unexpected exception in place_sl_order")
 
         return None
 
@@ -315,7 +335,17 @@ class OrderManager(AuthenticationManager):
         target_price: float,
         quantity: float,
     ) -> Optional[Dict[str, Any]]:
-        """Place TAKE_PROFIT_MARKET order using Algo API"""
+        """Place a ``TAKE_PROFIT_MARKET`` order via the Algo Order API.
+
+        Args:
+            symbol: Trading pair.
+            side: ``"BUY"`` or ``"SELL"`` (the exit side).
+            target_price: Trigger price for the take-profit.
+            quantity: Position quantity to close.
+
+        Returns:
+            The API response dict, or ``None`` on failure.
+        """
         try:
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
@@ -350,14 +380,9 @@ class OrderManager(AuthenticationManager):
             return take_profit_order
 
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol, error=error,
-                Location="OrderManager -> place_target_order",
-            )
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> place_target_order")
         except Exception as e:
-            self.handle_exception(
-                e, "Unexpected exception in place_target_order"
-            )
+            self.handle_exception(e, "Unexpected exception in place_target_order")
 
         return None
 
@@ -372,21 +397,20 @@ class OrderManager(AuthenticationManager):
         stop_price: float,
         risk_perc: float,
         leverage: int = 1,
-    ) -> float:
-        """
-        Calculate risk-based position size with Binance filters applied.
+    ) -> Tuple[float, float]:
+        """Calculate a risk-based position size with Binance filters applied.
 
         Args:
-            symbol: e.g. "BTCUSDT"
-            entry_price: order entry price
-            stop_price: stop-loss price
-            risk_perc: risk % of equity (0.01 = 1%)
-            leverage: leverage multiplier
+            symbol: Trading pair (e.g. ``"BTCUSDT"``).
+            entry_price: Planned entry price.
+            stop_price: Planned stop-loss price.
+            risk_perc: Risk as a fraction of equity (``0.01`` = 1 %).
+            leverage: Leverage multiplier.
 
         Returns:
-            final_quantity (float)
+            A ``(quantity, required_margin)`` tuple.
         """
-        qty = 0.002 # temporary fixed quantity for testing
+        qty = 0.002  # temporary fixed quantity for testing
         qty = self.adjust_quantity_step(symbol, qty)
         required_margin = (entry_price * qty) / leverage
         return qty, required_margin
@@ -395,54 +419,30 @@ class OrderManager(AuthenticationManager):
         # 1. Fetch equity
         # -----------------------------
         equity = self.config['FIXED_TRADE_AMOUNT'].get(symbol, self.FIXED_SPEND_USDT)
-        risk_value = equity * risk_perc   # USDT to risk
+        risk_value = equity * risk_perc
 
-        # -----------------------------
-        # 2. Compute stop distance
-        # -----------------------------
-        if entry_price <= 0:
-            return 0.0
+        if entry_price <= 0 or stop_price <= 0:
+            return 0.0, 0.0
 
-        if stop_price <= 0:
-            return 0.0
-
-        if entry_price > stop_price:          # LONG
+        if entry_price > stop_price:
             stop_distance = entry_price - stop_price
-        else:                                  # SHORT
+        else:
             stop_distance = stop_price - entry_price
 
         if stop_distance <= 0:
-            return 0.0
+            return 0.0, 0.0
 
-        # -----------------------------
-        # 3. Base quantity from risk
-        # -----------------------------
         qty_risk = risk_value / stop_distance
 
-        # -----------------------------
-        # 5. Binance MIN_NOTIONAL rule
-        # -----------------------------
         filters = self.get_symbol_filters(symbol)
         min_notional_filter = filters.get("MIN_NOTIONAL")
-
-        if min_notional_filter:
-            min_notional = float(min_notional_filter["notional"])
-        else:
-            min_notional = 5.0                   # Default fallback
-
-        min_qty = min_notional / entry_price     # Minimum allowed quantity
-
+        min_notional = float(min_notional_filter["notional"]) if min_notional_filter else 5.0
+        min_qty = min_notional / entry_price
         qty = max(qty_risk, min_qty)
-
-        # -----------------------------
-        # 6. Adjust to LOT_SIZE (step and minQty)
-        # -----------------------------
         qty = self.adjust_quantity_step(symbol, qty)
         required_margin = (entry_price * qty) / leverage
         logger.info(f"Calculated position size for {symbol}: Qty={qty}, Required Margin={required_margin}")
-
         return qty, required_margin
-
 
     def place_order(
         self,
@@ -456,27 +456,27 @@ class OrderManager(AuthenticationManager):
         quantity: Optional[float] = None,
         ros: bool = False,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[float], Optional[Dict[str, Any]]]:
-        """
-        Place a LIMIT order on Binance Futures.
+        """Place a ``LIMIT`` order on Binance Futures with optional SL/TP.
 
         Args:
-            risk_management: dict with at least "stop_loss_percent"
-            symbol: e.g. "BTCUSDT"
-            side: "BUY" or "SELL"
-            price: limit price (required)
-            sl: explicit stop-loss price; if None, computed from risk_management
-            target: explicit take-profit price; if None, no TP unless user sets
-            leverage: leverage to apply
-            quantity: if None, computed from fixed allocation
-            ros: if True, return immediately after main order without placing SL/TP
+            risk_management: Config dict (must contain ``"stop_loss_percent"``).
+            symbol: Trading pair (e.g. ``"BTCUSDT"``).
+            side: ``"BUY"`` or ``"SELL"``.
+            price: Limit price (**required**).
+            sl: Explicit stop-loss price; computed from *risk_management* when ``None``.
+            target: Explicit take-profit price; no TP placed when ``None``.
+            leverage: Leverage to apply on Binance before placing the order.
+            quantity: Coin quantity; computed from fixed allocation when ``None``.
+            ros: *Return On Signal* mode — when ``True`` the method returns
+                immediately after the main order without placing SL/TP.
 
         Returns:
-            (order_response, used_quantity, field_params)
+            A ``(order_response, used_quantity, field_params)`` tuple.
+            All three elements are ``None`` on failure.
         """
         try:
             if price is None:
-                msg = "place_order called without price (LIMIT). Use place_market_order for market trades."
-                logger.error(msg)
+                logger.error("place_order called without price (LIMIT).")
                 self.send_alerts(
                     data=None,
                     description="place_order called without price",
@@ -484,16 +484,18 @@ class OrderManager(AuthenticationManager):
                 )
                 return None, None, None
 
-            # Decide quantity if not provided
             balance_available = self.get_usdt_balance()
             qty_from_alloc: float = 0.0
-            
-            if symbol  == 'BTCUSDT':
-                qty_from_alloc, req_margin = self.calculate_risk_position_size(symbol=symbol, entry_price=price, stop_price=sl, risk_perc=risk_management[symbol], leverage=leverage)
-                self.send_logs(data=None, description=f"Requird margin for {symbol} is {req_margin}", fields=None)
+
+            if symbol == 'BTCUSDT':
+                qty_from_alloc, req_margin = self.calculate_risk_position_size(
+                    symbol=symbol, entry_price=price, stop_price=sl,
+                    risk_perc=risk_management[symbol], leverage=leverage
+                )
+                self.send_logs(data=None, description=f"Required margin for {symbol} is {req_margin}", fields=None)
             else:
-                qty_from_alloc = self.fixed_asset_allocated(symbol=symbol,price=price)
-            
+                qty_from_alloc = self.fixed_asset_allocated(symbol=symbol, price=price)
+
             if quantity is None:
                 quantity = qty_from_alloc
 
@@ -512,42 +514,24 @@ class OrderManager(AuthenticationManager):
                 self.send_alerts(
                     data=None,
                     description=f"Computed quantity <= 0 for {symbol}",
-                    fields={
-                        "symbol": symbol,
-                        "raw_quantity": quantity,
-                        "leverage": leverage,
-                        "balance_available": balance_available,
-                    },
+                    fields={"symbol": symbol, "raw_quantity": quantity, "leverage": leverage, "balance_available": balance_available},
                 )
                 return None, None, None
 
-            # ---------------------------
-            # VALIDATE FINAL PRICE / QTY
-            # ---------------------------
-
-            # Adjust price according to tick-size
             adjusted_price = self.adjust_price_tick(symbol, price)
             if adjusted_price != price:
                 logger.warning(f"[{symbol}] Price adjusted for tickSize: {price} -> {adjusted_price}")
             price = adjusted_price
 
-            # Adjust quantity according to step-size
             qty_valid = self.adjust_quantity_step(symbol, quantity)
             if qty_valid != quantity:
                 logger.warning(f"[{symbol}] Quantity adjusted for stepSize: {quantity} -> {qty_valid}")
             quantity = qty_valid
 
-            # Validate notional
             if not self.validate_notional(symbol, price, quantity):
                 filters = self.get_symbol_filters(symbol)
                 min_notional = filters["MIN_NOTIONAL"]["notional"] if filters.get("MIN_NOTIONAL") else "N/A"
-                msg = (
-                    f"[NOTIONAL ERROR] {symbol} LIMIT order rejected.\n"
-                    f"Required Notional: {min_notional}, Got: {price * quantity}\n"
-                    f"Price: {price}, Qty: {quantity}"
-                )
-                logger.error(msg)
-
+                logger.error(f"[NOTIONAL ERROR] {symbol} LIMIT order rejected. Required: {min_notional}, Got: {price * quantity}")
                 self.send_alerts(
                     data=None,
                     description="Order rejected – Notional too small",
@@ -571,12 +555,8 @@ class OrderManager(AuthenticationManager):
                 fields=field_params,
             )
 
-            # Set leverage on Binance
-            self.future_client.change_leverage(
-                symbol=symbol, leverage=leverage, recvWindow=60000
-            )
+            self.future_client.change_leverage(symbol=symbol, leverage=leverage, recvWindow=60000)
 
-            # Prepare and place the LIMIT order
             params = {
                 "symbol": symbol,
                 "side": side,
@@ -595,37 +575,28 @@ class OrderManager(AuthenticationManager):
 
             self.send_signal_updates(
                 data=None,
-                description=f"{symbol} order placed successfully ",
+                description=f"{symbol} order placed successfully",
                 fields=order_response,
             )
 
-            # In ROS mode, just return the main order (no SL / TP)
             if ros:
                 logger.info(f"ROS mode: returning after main order for {symbol}")
                 return order_response, quantity, field_params
 
-            # Compute SL if not explicitly given
             stoploss_price: float
             if sl is not None:
                 stoploss_price = sl
             else:
                 sl_percent = float(risk_management.get("stop_loss_percent", 0))
                 if side == "BUY":
-                    stoploss_price = round(
-                        price * ((100.0 - sl_percent) / 100.0), 1
-                    )
+                    stoploss_price = round(price * ((100.0 - sl_percent) / 100.0), 1)
                 else:
-                    stoploss_price = round(
-                        price * ((100.0 + sl_percent) / 100.0), 1
-                    )
+                    stoploss_price = round(price * ((100.0 + sl_percent) / 100.0), 1)
 
             sl_target_side = self._get_opposite_side(side)
-
-            # Place SL order
             self.place_sl_order(symbol, sl_target_side, stoploss_price, quantity)
             time.sleep(1)
 
-            # Place TP order if requested
             if target is not None:
                 self.place_target_order(symbol, sl_target_side, target, quantity)
 
@@ -633,15 +604,9 @@ class OrderManager(AuthenticationManager):
             return order_response, quantity, field_params
 
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol,
-                error=error,
-                Location="Order Manager -> place_order",
-            )
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="Order Manager -> place_order")
         except Exception as e:
-            self.handle_exception(
-                e, context_description="Exception caught while Placing order"
-            )
+            self.handle_exception(e, context_description="Exception caught while Placing order")
 
         return None, None, None
 
@@ -656,30 +621,28 @@ class OrderManager(AuthenticationManager):
         quantity: Optional[float] = None,
         leverage: int = 1,
     ) -> Optional[Dict[str, Any]]:
-        """
-        Place a MARKET order on Binance Futures.
+        """Place a ``MARKET`` order on Binance Futures.
 
         Args:
-            symbol: e.g. "BTCUSDT"
-            side: "BUY" or "SELL"
-            quantity: if None, computed using fixed allocation at current price
-            leverage: optional leverage scaling for quantity
+            symbol: Trading pair (e.g. ``"BTCUSDT"``).
+            side: ``"BUY"`` or ``"SELL"``.
+            quantity: Coin quantity; computed from fixed allocation when ``None``.
+            leverage: Multiplier applied to the computed quantity.
+
+        Returns:
+            The API response dict, or ``None`` on failure.
         """
         try:
-            # Derive quantity from fixed allocation if not provided
             current_price = self.get_symbol_price(symbol)
 
             if quantity is None:
-                qty_alloc, balance = self.fixed_asset_allocated(symbol=symbol, price=current_price)
+                qty_alloc = self.fixed_asset_allocated(symbol=symbol, price=current_price)
+                balance = self.get_usdt_balance()
                 if balance < self.FIXED_SPEND_USDT or qty_alloc <= 0:
                     self.send_alerts(
                         data=None,
                         description=f"Not Enough funds for {symbol} market order",
-                        fields={
-                            "symbol": symbol,
-                            "balance": balance,
-                            "price": current_price,
-                        },
+                        fields={"symbol": symbol, "balance": balance, "price": current_price},
                     )
                     return None
                 quantity = qty_alloc
@@ -687,31 +650,19 @@ class OrderManager(AuthenticationManager):
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity) * leverage, precision)
 
-            # Adjust quantity according to step-size
             qty_valid = self.adjust_quantity_step(symbol, quantity)
             if qty_valid != quantity:
                 logger.warning(f"[{symbol}] MARKET qty adjusted for stepSize: {quantity} -> {qty_valid}")
             quantity = qty_valid
 
             if quantity <= 0:
-                self.send_alerts(
-                    data=None,
-                    description=f"Computed MARKET quantity <= 0 for {symbol}",
-                    fields={"symbol": symbol},
-                )
+                self.send_alerts(data=None, description=f"Computed MARKET quantity <= 0 for {symbol}", fields={"symbol": symbol})
                 return None
 
-            # Validate notional using current market price
             if not self.validate_notional(symbol, current_price, quantity):
                 filters = self.get_symbol_filters(symbol)
                 min_notional = filters["MIN_NOTIONAL"]["notional"] if filters.get("MIN_NOTIONAL") else "N/A"
-                msg = (
-                    f"[NOTIONAL ERROR] {symbol} MARKET order rejected.\n"
-                    f"Required Notional: {min_notional}, Got: {current_price * quantity}\n"
-                    f"Price: {current_price}, Qty: {quantity}"
-                )
-                logger.error(msg)
-
+                logger.error(f"[NOTIONAL ERROR] {symbol} MARKET order rejected. Required: {min_notional}, Got: {current_price * quantity}")
                 self.send_alerts(
                     data=None,
                     description="Market order rejected – Notional too small",
@@ -719,40 +670,21 @@ class OrderManager(AuthenticationManager):
                 )
                 return None
 
-            market_order_params = {
-                "symbol": symbol,
-                "side": side,
-                "type": "MARKET",
-                "quantity": quantity,
-            }
+            market_order_params = {"symbol": symbol, "side": side, "type": "MARKET", "quantity": quantity}
 
-            self.send_signal_updates(
-                data=None,
-                description=f"Market Order request for {symbol}",
-                fields=market_order_params,
-            )
+            self.send_signal_updates(data=None, description=f"Market Order request for {symbol}", fields=market_order_params)
 
             order_response = self.future_client.new_order(**market_order_params)
 
             if order_response:
-                self.send_signal_updates(
-                    data=None,
-                    description=f"{symbol} market order placed successfully",
-                    fields=order_response,
-                )
+                self.send_signal_updates(data=None, description=f"{symbol} market order placed successfully", fields=order_response)
 
             return order_response
 
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol,
-                error=error,
-                Location="Order Manager -> place_market_order",
-            )
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="Order Manager -> place_market_order")
         except Exception as e:
-            self.handle_exception(
-                e, context_description="Exception caught while placing market order"
-            )
+            self.handle_exception(e, context_description="Exception caught while placing market order")
 
         return None
 
@@ -761,105 +693,66 @@ class OrderManager(AuthenticationManager):
     # -------------------------------------------------------------------------
 
     def cancel_order(self, symbol: str, order_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Cancel an order on the Binance exchange.
+        """Cancel an open order on Binance Futures.
 
         Args:
-            symbol: e.g. "BTCUSDT"
-            order_id: ID of the order to cancel
+            symbol: Trading pair.
+            order_id: The ``orderId`` to cancel.
+
+        Returns:
+            The cancellation response dict, or ``None`` on failure.
         """
         try:
-            result = self.future_client.cancel_order(
-                symbol=symbol, orderId=order_id
-            )
+            result = self.future_client.cancel_order(symbol=symbol, orderId=order_id)
             logger.info(f"Order canceled: {result}")
             return result
-
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol,
-                error=error,
-                Location="OrderManager -> cancel_order",
-            )
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> cancel_order")
         except Exception as e:
-            self.handle_exception(
-                e,
-                context_description="Exception caught while Cancelling order",
-            )
-
+            self.handle_exception(e, context_description="Exception caught while Cancelling order")
         return None
 
-    def get_open_orders(self, symbol: str, orderId:str= None) -> List[Dict[str, Any]]:
-        """
-        Get all open orders for a given symbol.
+    def get_open_orders(self, symbol: str, orderId: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return all orders for *symbol* (optionally filtered by *orderId*).
 
         Args:
-            symbol: e.g. "BTCUSDT"
+            symbol: Trading pair.
+            orderId: When provided, only orders with this ID are returned.
+
+        Returns:
+            A list of order dicts (may be empty on error).
         """
         try:
             orders = self.future_client.get_all_orders(symbol=symbol, orderId=orderId)
             logger.info(f"Open orders: {orders} for symbol {symbol}")
             return orders
-
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol,
-                error=error,
-                Location="OrderManager -> get_open_orders",
-            )
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> get_open_orders")
         except Exception as e:
-            self.handle_exception(
-                e,
-                context_description="Exception caught while fetching open order",
-            )
-
+            self.handle_exception(e, context_description="Exception caught while fetching open order")
         return []
-    
+
     def get_conditional_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
-        """
-        Get all OPEN conditional (SL/TP) algo orders for a symbol.
+        """Return all **open** conditional (SL/TP) algo orders for *symbol*.
+
+        Only orders with ``algoStatus == "NEW"`` are included.
 
         Args:
-            symbol: e.g. "BTCUSDT"
+            symbol: Trading pair.
+
+        Returns:
+            A list of open algo-order dicts (may be empty).
         """
         try:
-            params = {
-                "symbol": symbol,
-            }
-
-            orders = self.future_client.sign_request(
-                "GET",
-                "/fapi/v1/allAlgoOrders",
-                params,
-            )
-
-            # Binance returns ALL (NEW, CANCELED, TRIGGERED, EXPIRED)
-            open_orders = [
-                o for o in orders
-                if o.get("algoStatus") == "NEW"
-            ]
-
-            logger.info(
-                f"[COND OPEN ORDERS] {symbol} -> {len(open_orders)} orders"
-            )
-
+            orders = self.future_client.sign_request("GET", "/fapi/v1/allAlgoOrders", {"symbol": symbol})
+            open_orders = [o for o in orders if o.get("algoStatus") == "NEW"]
+            logger.info(f"[COND OPEN ORDERS] {symbol} -> {len(open_orders)} orders")
             return open_orders
-
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol,
-                error=error,
-                Location="OrderManager -> get_conditional_open_orders",
-            )
-
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> get_conditional_open_orders")
         except Exception as e:
-            self.handle_exception(
-                e,
-                context_description="Exception caught while fetching conditional open orders",
-            )
-
+            self.handle_exception(e, context_description="Exception caught while fetching conditional open orders")
         return []
-
 
     # -------------------------------------------------------------------------
     # Bridge order (swing SL based)
@@ -873,38 +766,30 @@ class OrderManager(AuthenticationManager):
         price: Optional[float] = None,
         leverage: int = 2,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
-        """
-        Place a 'bridge' limit order with quantity determined by max loss and swing SL.
+        """Place a *bridge* limit order sized by max-loss and swing stop-loss.
 
-        Flow:
-            - Fetch price (if not provided)
-            - Compute swing SL using get_swing_sl
-            - Compute quantity based on MAX_LOSS_PER_BRIDGE
-            - Place LIMIT order (ROS mode: no SL/TP)
-            - Wait until filled (or timeout)
-            - Place SL order at swing SL
+        Args:
+            risk_management: Config dict with ``"stop_loss_percent"``.
+            symbol: Trading pair.
+            side: ``"BUY"`` or ``"SELL"``.
+            price: Limit price; fetched from the API when ``None``.
+            leverage: Leverage multiplier.
+
+        Returns:
+            A ``(order_response, used_quantity)`` tuple, or ``(None, None)`` on failure.
         """
         try:
-            # Get current price if not provided
             if price is None:
                 price = self.get_future_symbol_price(symbol=symbol)
 
-            # Special leverage handling for BTC
             future_leverage = 10 if symbol == "BTCUSDT" else leverage
 
             if self.mongo_handler is None:
-                self.send_alerts(
-                    data=None,
-                    description=f"MongoHandler not available; cannot place bridge order for {symbol}",
-                    fields=None,
-                )
+                self.send_alerts(data=None, description=f"MongoHandler not available; cannot place bridge order for {symbol}", fields=None)
                 return None, None
 
-            existing_data = self.mongo_handler.get_mongo_historical_data(
-                symbol, interval="15m"
-            )
+            existing_data = self.mongo_handler.get_mongo_historical_data(symbol, interval="15m")
 
-            # Swing stop-loss
             if side == "BUY":
                 sl_price = get_swing_sl(df=existing_data, n=5, buy_price=price)
             else:
@@ -913,43 +798,20 @@ class OrderManager(AuthenticationManager):
             sl_percent = float(risk_management.get("stop_loss_percent", 0))
 
             if sl_price is None:
-                self.send_alerts(
-                    data=None,
-                    description=f"No swing level found for {symbol}. Falling back to percent SL.",
-                    fields={"symbol": symbol, "price": price, "side": side},
-                )
+                self.send_alerts(data=None, description=f"No swing level found for {symbol}. Falling back to percent SL.", fields={"symbol": symbol, "price": price, "side": side})
                 if side == "BUY":
-                    sl_price = round(
-                        price * (1.0 - sl_percent / 100.0),
-                        1,
-                    )
+                    sl_price = round(price * (1.0 - sl_percent / 100.0), 1)
                 else:
-                    sl_price = round(
-                        price * (1.0 + sl_percent / 100.0),
-                        1,
-                    )
+                    sl_price = round(price * (1.0 + sl_percent / 100.0), 1)
 
             sl_price = round(sl_price, 1)
-            logger.info(f"Stop Loss Price for {symbol}: {sl_price}")
-
             price_diff = abs(sl_price - price)
             if price_diff <= 0:
-                logger.error(
-                    f"Computed price_diff <= 0 for bridge order: price={price}, sl_price={sl_price}"
-                )
+                logger.error(f"Computed price_diff <= 0 for bridge order: price={price}, sl_price={sl_price}")
                 return None, None
 
-            # Compute quantity based on MAX_LOSS and leverage
             quantity = (self.MAX_LOSS_PER_BRIDGE / future_leverage) / price_diff
 
-            logger.info(
-                f"Bridge order quantity for {symbol}: {quantity}, "
-                f"MAX_LOSS={self.MAX_LOSS_PER_BRIDGE}, "
-                f"price_diff={price_diff}, leverage={future_leverage}"
-            )
-
-            # Place base LIMIT order in ROS mode (no SL/TP yet)
-            logger.info(f"Placing {side} bridge order for {symbol}...")
             order_response, used_qty, order_request = self.place_order(
                 risk_management=risk_management,
                 symbol=symbol,
@@ -957,7 +819,7 @@ class OrderManager(AuthenticationManager):
                 price=price,
                 leverage=future_leverage,
                 quantity=quantity,
-                ros=True,  # no SL/TP from place_order
+                ros=True,
             )
 
             if not order_response:
@@ -966,16 +828,10 @@ class OrderManager(AuthenticationManager):
 
             order_id = order_response["orderId"]
             start_time = time.time()
-            timeout = 300  # 5 minutes
+            timeout = 300
 
-            # Wait until order is filled or timeout
             while True:
-                order_status = self.future_client.get_orders(
-                    symbol=symbol, orderId=order_id
-                )
-
-                # Depending on client, this might be list or dict.
-                # Handle both possibilities defensively.
+                order_status = self.future_client.get_orders(symbol=symbol, orderId=order_id)
                 status: Optional[str] = None
                 if isinstance(order_status, dict):
                     status = order_status.get("status")
@@ -983,40 +839,26 @@ class OrderManager(AuthenticationManager):
                     status = order_status[0].get("status")
 
                 if status == "FILLED":
-                    logger.info(
-                        f"Bridge order filled for {symbol}, placing SL order at {sl_price}"
-                    )
+                    logger.info(f"Bridge order filled for {symbol}, placing SL order at {sl_price}")
                     break
 
-                elapsed_time = time.time() - start_time
-                if elapsed_time > timeout:
-                    logger.info(
-                        f"Timeout reached while waiting for bridge order fill for {symbol}. "
-                        f"OrderId={order_id}"
-                    )
+                if time.time() - start_time > timeout:
+                    logger.info(f"Timeout reached for bridge order for {symbol}. OrderId={order_id}")
                     break
 
                 time.sleep(2)
 
-            # After fill (or timeout), place SL on opposite side
             sl_side = self._get_opposite_side(side)
             if used_qty is None:
                 used_qty = quantity
 
             self.place_sl_order(symbol, sl_side, sl_price, used_qty)
-
             return order_response, used_qty
 
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol,
-                error=error,
-                Location="Order Manager -> place_bridge_order",
-            )
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="Order Manager -> place_bridge_order")
         except Exception as e:
-            self.handle_exception(
-                e, context_description="Exception caught at place_bridge_order"
-            )
+            self.handle_exception(e, context_description="Exception caught at place_bridge_order")
 
         return None, None
 
@@ -1033,50 +875,39 @@ class OrderManager(AuthenticationManager):
         quantity: float,
         order_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Modify an existing order for a given symbol.
+        """Modify an existing Futures order in-place.
 
         Args:
-            symbol: e.g. "BTCUSDT"
-            side: "BUY" or "SELL"
-            orderId: ID of the order to modify
-            price: new price
-            quantity: new quantity
-            order_type: optional descriptor (e.g., "SL", "TP") used in notifications
+            symbol: Trading pair.
+            side: ``"BUY"`` or ``"SELL"``.
+            orderId: The ``orderId`` of the order to modify.
+            price: New limit price.
+            quantity: New quantity.
+            order_type: Human-readable label (e.g. ``"SL"``) used in Discord notifications.
+
+        Returns:
+            A list containing the modification response dict(s), or an empty list on failure.
         """
         try:
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity), precision)
-
-            # Adjust price and quantity based on filters
             price = self.adjust_price_tick(symbol, price)
             quantity = self.adjust_quantity_step(symbol, quantity)
 
             modified_order = self.future_client.modify_order(
-                symbol=symbol,
-                side=side,
-                orderId=orderId,
-                price=price,
-                quantity=quantity,
+                symbol=symbol, side=side, orderId=orderId, price=price, quantity=quantity,
             )
 
             self.send_active_trades_info(
                 data=None,
-                description=f"{symbol} {order_type or ''} Modified ",
+                description=f"{symbol} {order_type or ''} Modified",
                 fields=modified_order,
             )
             return modified_order if isinstance(modified_order, list) else [modified_order]
 
         except ClientError as error:
-            self.clientExceptionHandler(
-                symbol=symbol,
-                error=error,
-                Location="OrderManager -> modify_order",
-            )
+            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> modify_order")
         except Exception as e:
-            self.handle_exception(
-                e,
-                context_description="Exception caught while modifying order",
-            )
+            self.handle_exception(e, context_description="Exception caught while modifying order")
 
         return []
