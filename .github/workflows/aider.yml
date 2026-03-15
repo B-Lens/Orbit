@@ -16,7 +16,6 @@ jobs:
       contents: write
       pull-requests: write
       issues: read
-      workflows: write
 
     steps:
 
