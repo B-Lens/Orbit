@@ -81,12 +81,11 @@ jobs:
 
       - name: Run Aider
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           aider \
             --message-file issue.txt \
-            --model gpt-4.1 \
-            --api-key openai=$OPENAI_API_KEY \
+            --model openrouter/anthropic/claude-opus-4.6  \
             --yes-always \
             --auto-commits \
             --no-pretty \
