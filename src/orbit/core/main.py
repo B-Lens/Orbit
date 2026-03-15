@@ -83,8 +83,8 @@ class BinanceAutomation(ExceptionManager):
 
         # Core components — injected or created with defaults
         self.signal_analyzer: SignalAnalyzer = signal_analyzer or SignalAnalyzer()
-        self.trade_checker: TradeChecker = trade_checker or TradeChecker()
         self.order_manager: OrderManager = order_manager or OrderManager()
+        self.trade_checker: TradeChecker = trade_checker or TradeChecker(order_manager=self.order_manager)
         self._croner: Optional[Croner] = croner
 
         # Configuration
