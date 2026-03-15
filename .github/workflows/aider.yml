@@ -85,7 +85,7 @@ jobs:
         run: |
           aider \
             --message-file issue.txt \
-            --model openrouter/anthropic/claude-opus-4.6  \
+            --model openrouter/anthropic/claude-sonnet-4.6  \
             --yes-always \
             --auto-commits \
             --no-pretty \
