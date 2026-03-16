@@ -47,8 +47,12 @@ class _LazyStrategyRegistry(dict):
     # --- dict protocol overrides for lazy resolution ---
 
     def __getitem__(self, symbol):
-        if symbol not in self and symbol in self._raw:
-            return self._resolve(symbol)
+        if symbol not in self._raw:
+            raise KeyError(symbol)
+
+        if not super().__contains__(symbol):
+            self._resolve(symbol)
+
         return super().__getitem__(symbol)
 
     def __contains__(self, symbol):
