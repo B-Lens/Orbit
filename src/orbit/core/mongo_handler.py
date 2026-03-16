@@ -84,6 +84,11 @@ class MongoHandler(ExceptionManager):
             )
             self.contradict_collection = self.db["contradict_trades"]
             self.contradict_collection.create_index("symbol")
+
+            self.simulated_trades_collection = self.db["simulated_trades"]
+            self.simulated_trades_collection.create_index(
+                [("symbol", ASCENDING), ("trade_timestamp", ASCENDING)]
+            )
         except Exception as exc:
             logger.error(f"Error initializing MongoDB: {exc}")
             self.collection = None
@@ -366,3 +371,53 @@ class MongoHandler(ExceptionManager):
             logger.info(f"Stored contradict trade for {symbol} in MongoDB.")
         except Exception as exc:
             self.handle_exception(exc, f"Error storing contradict trade for {symbol}")
+
+    def store_simulated_trade_result(
+        self,
+        symbol: str,
+        signal: str,
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+        sentiment: str,
+        outcome: str,
+        trade_timestamp: Any,
+        duration_seconds: int,
+    ) -> None:
+        """Persist the result of a simulated contradict trade.
+
+        Args:
+            symbol: Trading pair.
+            signal: ``"BUY"`` or ``"SELL"``.
+            entry_price: Entry price at the time the signal was generated.
+            stop_loss: Stop-loss price level.
+            take_profit: Take-profit price level.
+            sentiment: The contradicting market sentiment.
+            outcome: One of ``"SL"``, ``"Target"``, or ``"Timeout"``.
+            trade_timestamp: Original trade signal timestamp.
+            duration_seconds: Seconds elapsed before the outcome was reached.
+        """
+        if not hasattr(self, "simulated_trades_collection") or self.simulated_trades_collection is None:
+            logger.warning("Mongo simulated_trades collection not available.")
+            return
+        try:
+            record = {
+                "simulated": True,
+                "symbol": symbol,
+                "signal": signal,
+                "entry_price": entry_price,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "sentiment": sentiment,
+                "outcome": outcome,
+                "trade_timestamp": trade_timestamp,
+                "result_timestamp": get_indian_time(),
+                "duration_seconds": duration_seconds,
+            }
+            self.simulated_trades_collection.insert_one(record)
+            logger.info(
+                f"Stored simulated trade result for {symbol}: outcome={outcome}, "
+                f"duration={duration_seconds}s."
+            )
+        except Exception as exc:
+            self.handle_exception(exc, f"Error storing simulated trade result for {symbol}")
