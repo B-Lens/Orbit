@@ -437,7 +437,7 @@ class TradeChecker(AuthenticationManager):
         risk_management: Dict[str, Any],
         symbol: str,
         stop_loss: float,
-        target: float,
+        target: Optional[float],
         current_price: float,
         stop_loss_order: Dict[str, Any],
         quantity: float,
@@ -446,19 +446,19 @@ class TradeChecker(AuthenticationManager):
         try:
             self.set_cooldown(symbol)
 
-            if current_price <= stop_loss and stop_loss <= self.trades[symbol]["price"]:
+            if stop_loss is not None and current_price <= stop_loss and stop_loss <= self.trades[symbol]["price"]:
                 logger.info(f"Stop-loss hit for {symbol}, Exiting trade.")
                 self.send_false_alarm(data=None, description=f"{symbol} SL Hit at BUY side", fields=self.trades[symbol])
                 self.trades.pop(symbol, None)
                 return
 
-            if current_price <= stop_loss and stop_loss > self.trades[symbol]["price"]:
+            if stop_loss is not None and current_price <= stop_loss and stop_loss > self.trades[symbol]["price"]:
                 logger.info(f"Average hit for {symbol}. Exiting trade.")
                 self.send_average_alarm(data=None, description=f"{symbol} SL Hit at BUY side", fields=self.trades[symbol])
                 self.trades.pop(symbol, None)
                 return
 
-            if COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE and current_price >= target:
+            if COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE and target is not None and current_price >= target:
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
                 self.send_true_alarm(data=None, description=f"{symbol} Target Hit at BUY side", fields=self.trades[symbol])
                 self.trades.pop(symbol, None)
@@ -492,7 +492,7 @@ class TradeChecker(AuthenticationManager):
             signal = strategy.generate_signals(symbol=symbol, position_side="LONG")
             new_stop_loss = signal['stop_loss']
 
-            if new_stop_loss > stop_loss:
+            if new_stop_loss is not None and stop_loss is not None and new_stop_loss > stop_loss:
                 new_stop_order = self._place_and_replace_sl(symbol, new_stop_loss, stop_loss_order, quantity, "SELL")
                 if new_stop_order:
                     self.trades[symbol]["stop_loss_price"] = new_stop_loss
@@ -507,7 +507,7 @@ class TradeChecker(AuthenticationManager):
         risk_management: Dict[str, Any],
         symbol: str,
         stop_loss: float,
-        target: float,
+        target: Optional[float],
         current_price: float,
         stop_loss_order: Dict[str, Any],
         quantity: float,
@@ -516,19 +516,19 @@ class TradeChecker(AuthenticationManager):
         try:
             self.set_cooldown(symbol)
 
-            if current_price >= stop_loss and stop_loss >= self.trades[symbol]["price"]:
+            if stop_loss is not None and current_price >= stop_loss and stop_loss >= self.trades[symbol]["price"]:
                 logger.info(f"Stop-loss hit for {symbol}. Exiting trade.")
                 self.send_false_alarm(data=None, description=f"{symbol} SL Hit at SELL Side", fields=self.trades[symbol])
                 self.trades.pop(symbol, None)
                 return
 
-            if current_price >= stop_loss and stop_loss < self.trades[symbol]["price"]:
+            if stop_loss is not None and current_price >= stop_loss and stop_loss < self.trades[symbol]["price"]:
                 logger.info(f"Average hit for {symbol}, Exiting trade.")
                 self.send_average_alarm(data=None, description=f"{symbol} SL Hit at SELL Side", fields=self.trades[symbol])
                 self.trades.pop(symbol, None)
                 return
 
-            if COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE and current_price <= target:
+            if COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE and target is not None and current_price <= target:
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
                 self.send_true_alarm(data=None, description=f"{symbol} Target Hit at SELL Side", fields=self.trades[symbol])
                 self.trades.pop(symbol, None)
@@ -562,7 +562,7 @@ class TradeChecker(AuthenticationManager):
             signal = strategy.generate_signals(symbol=symbol, position_side="SHORT")
             new_stop_loss = signal['stop_loss']
 
-            if new_stop_loss < stop_loss:
+            if new_stop_loss is not None and stop_loss is not None and new_stop_loss < stop_loss:
                 new_stop_order = self._place_and_replace_sl(symbol, new_stop_loss, stop_loss_order, quantity, "SELL")
                 if new_stop_order:
                     self.trades[symbol]["stop_loss_price"] = new_stop_loss
@@ -580,8 +580,8 @@ class TradeChecker(AuthenticationManager):
         self,
         risk_management: Dict[str, Any],
         symbol: str,
-        stop_loss: float,
-        target: float,
+        stop_loss: Optional[float],
+        target: Optional[float],
         current_price: float,
         stop_loss_order: Dict[str, Any],
         quantity: Optional[float] = None,
