@@ -8,6 +8,12 @@ Provides :class:`TradeChecker`, the real-time position monitor that:
   the Binance ``-4045`` duplicate-stop-order error.
 * Trails or adapts stop-losses according to the configured strategy.
 * Maintains a live-price feed via a Binance WebSocket.
+* Uses Redis mappings as the single source of truth for all trade state.
+
+Redis key schema
+----------------
+``trade:{trade_id}``   – full trade data (hash)
+``order:{order_id}``   – trade_id (string)
 
 Module-level helpers :func:`is_stop_order` and :func:`is_take_profit_order`
 classify algo/conditional orders returned by the Binance API.
@@ -36,6 +42,21 @@ from orbit.core.mongo_handler import MongoHandler
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
+
+# ---------------------------------------------------------------------------
+# Redis key helpers
+# ---------------------------------------------------------------------------
+
+TRADE_KEY_PREFIX = "trade:"
+ORDER_KEY_PREFIX = "order:"
+
+
+def _trade_key(trade_id: str) -> str:
+    return f"{TRADE_KEY_PREFIX}{trade_id}"
+
+
+def _order_key(order_id: str) -> str:
+    return f"{ORDER_KEY_PREFIX}{order_id}"
 
 
 def is_stop_order(order: Optional[Dict[str, Any]]) -> bool:
@@ -70,6 +91,12 @@ def is_take_profit_order(order: Optional[Dict[str, Any]]) -> bool:
 
 class TradeChecker(AuthenticationManager):
     """Real-time position monitor and SL/TP lifecycle manager.
+
+    All trade state is persisted in Redis using two mapping families:
+
+    * ``trade:{trade_id}``  – serialised trade dict (JSON string stored as a
+      plain Redis string so the full nested structure is preserved).
+    * ``order:{order_id}``  – the ``trade_id`` that owns this order.
 
     The checker runs in its own thread (see :meth:`monitor_trades`) and
     periodically:
@@ -107,6 +134,65 @@ class TradeChecker(AuthenticationManager):
         self.client: redis.StrictRedis = redis_client or redis.StrictRedis(
             host="localhost", port=6379, db=0, decode_responses=True
         )
+
+    # ------------------------------------------------------------------
+    # Redis mapping helpers
+    # ------------------------------------------------------------------
+
+    def _save_trade(self, trade_id: str, trade: Dict[str, Any]) -> None:
+        """Persist *trade* under ``trade:{trade_id}`` in Redis."""
+        try:
+            self.client.set(_trade_key(trade_id), json.dumps(trade))
+        except Exception as e:
+            self.handle_exception(e, context_description=f"_save_trade({trade_id})")
+
+    def _load_trade(self, trade_id: str) -> Optional[Dict[str, Any]]:
+        """Load and deserialise the trade stored at ``trade:{trade_id}``."""
+        try:
+            raw = self.client.get(_trade_key(trade_id))
+            if raw:
+                return json.loads(raw)
+        except Exception as e:
+            self.handle_exception(e, context_description=f"_load_trade({trade_id})")
+        return None
+
+    def _register_order(self, order_id: str, trade_id: str) -> None:
+        """Map ``order:{order_id}`` → *trade_id* in Redis."""
+        try:
+            self.client.set(_order_key(order_id), trade_id)
+        except Exception as e:
+            self.handle_exception(e, context_description=f"_register_order({order_id})")
+
+    def _trade_id_for_order(self, order_id: str) -> Optional[str]:
+        """Return the *trade_id* that owns *order_id*, or ``None``."""
+        try:
+            return self.client.get(_order_key(order_id))
+        except Exception as e:
+            self.handle_exception(e, context_description=f"_trade_id_for_order({order_id})")
+        return None
+
+    def _delete_trade_mapping(self, trade_id: str) -> None:
+        """Remove ``trade:{trade_id}`` and all associated ``order:*`` keys.
+
+        The trade dict is expected to carry ``sl_order_id`` and
+        ``tp_order_id`` fields that were written when the orders were placed.
+        """
+        try:
+            trade = self._load_trade(trade_id)
+            if trade:
+                for field in ("sl_order_id", "tp_order_id"):
+                    oid = trade.get(field)
+                    if oid:
+                        self.client.delete(_order_key(str(oid)))
+            self.client.delete(_trade_key(trade_id))
+        except Exception as e:
+            self.handle_exception(e, context_description=f"_delete_trade_mapping({trade_id})")
+
+    def _update_trade_field(self, trade_id: str, updates: Dict[str, Any]) -> None:
+        """Merge *updates* into the persisted trade and re-save."""
+        trade = self._load_trade(trade_id) or {}
+        trade.update(updates)
+        self._save_trade(trade_id, trade)
 
     # ------------------------------------------------------------------
     # Cooldown helpers
@@ -170,7 +256,7 @@ class TradeChecker(AuthenticationManager):
             return None
 
     # ------------------------------------------------------------------
-    # Ensure SL / TP orders
+    # Ensure SL / TP orders  (self-healing via mapping)
     # ------------------------------------------------------------------
 
     def ensure_orders(
@@ -181,8 +267,12 @@ class TradeChecker(AuthenticationManager):
     ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Guarantee that exactly one SL (and optionally one TP) exists.
 
-        Missing orders are placed automatically.  Existing orders are left
-        untouched.
+        Uses the Redis mapping as the source of truth:
+
+        1. Derive the ``trade_id`` from the trade dict.
+        2. Load the persisted trade to discover known order IDs.
+        3. Verify each order is still open on the broker.
+        4. Re-create any missing orders and update both mappings.
 
         Args:
             symbol: Trading pair.
@@ -195,17 +285,36 @@ class TradeChecker(AuthenticationManager):
             may be ``None`` if placement failed.
         """
         try:
-            orders = self.om.get_conditional_open_orders(symbol=symbol)
+            trade_id = trade.get("trade_id") or symbol
+            persisted = self._load_trade(trade_id) or {}
 
-            stop_loss_order = None
-            take_profit_order = None
+            # ---- fetch live open orders from broker ----
+            open_orders = self.om.get_conditional_open_orders(symbol=symbol)
+            open_order_ids = {str(o.get("algoId", "")) for o in open_orders}
 
-            for order in orders:
+            stop_loss_order: Optional[Dict[str, Any]] = None
+            take_profit_order: Optional[Dict[str, Any]] = None
+
+            # Match broker orders to our mapping
+            for order in open_orders:
                 if is_stop_order(order):
                     stop_loss_order = stop_loss_order or order
                 if is_take_profit_order(order):
                     take_profit_order = take_profit_order or order
 
+            # Validate persisted SL order ID against live broker state
+            persisted_sl_id = str(persisted.get("sl_order_id", ""))
+            if persisted_sl_id and persisted_sl_id not in open_order_ids:
+                logger.warning(f"[SELF-HEAL] SL order {persisted_sl_id} for {symbol} not found on broker – will recreate")
+                stop_loss_order = None  # force recreation
+
+            # Validate persisted TP order ID against live broker state
+            persisted_tp_id = str(persisted.get("tp_order_id", ""))
+            if persisted_tp_id and persisted_tp_id not in open_order_ids:
+                logger.warning(f"[SELF-HEAL] TP order {persisted_tp_id} for {symbol} not found on broker – will recreate")
+                take_profit_order = None  # force recreation
+
+            # ---- recreate missing SL ----
             if stop_loss_order is None:
                 sl_price = self.calculate_sl_price(trade, risk_management)
                 stop_loss_order = self.om.place_sl_order(
@@ -215,8 +324,16 @@ class TradeChecker(AuthenticationManager):
                     quantity=trade["quantity"],
                 )
                 time.sleep(0.5)
-                logger.info(f"Placed missing SL for {symbol} at {sl_price}")
+                if stop_loss_order:
+                    new_sl_id = str(stop_loss_order.get("algoId", ""))
+                    self._register_order(new_sl_id, trade_id)
+                    self._update_trade_field(trade_id, {"sl_order_id": new_sl_id})
+                    # Remove stale mapping for old order id
+                    if persisted_sl_id and persisted_sl_id != new_sl_id:
+                        self.client.delete(_order_key(persisted_sl_id))
+                    logger.info(f"[SELF-HEAL] Placed missing SL for {symbol} at {sl_price} (order {new_sl_id})")
 
+            # ---- recreate missing TP ----
             if take_profit_order is None and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE:
                 target_price = self.calculate_target_price(trade, risk_management)
                 take_profit_order = self.om.place_target_order(
@@ -226,7 +343,13 @@ class TradeChecker(AuthenticationManager):
                     quantity=trade["quantity"],
                 )
                 time.sleep(0.5)
-                logger.info(f"Placed missing TP for {symbol} at {target_price}")
+                if take_profit_order:
+                    new_tp_id = str(take_profit_order.get("algoId", ""))
+                    self._register_order(new_tp_id, trade_id)
+                    self._update_trade_field(trade_id, {"tp_order_id": new_tp_id})
+                    if persisted_tp_id and persisted_tp_id != new_tp_id:
+                        self.client.delete(_order_key(persisted_tp_id))
+                    logger.info(f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})")
 
             return stop_loss_order, take_profit_order
 
@@ -280,7 +403,7 @@ class TradeChecker(AuthenticationManager):
         stop_loss_order: Optional[Dict[str, Any]],
         take_profit_order: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Refresh the in-memory trade record for *symbol*.
+        """Refresh the in-memory trade record and Redis mapping for *symbol*.
 
         Updates high/low watermarks, persists the latest SL/TP order
         references, and returns a summary dict suitable for Discord
@@ -289,12 +412,20 @@ class TradeChecker(AuthenticationManager):
         try:
             stop_price_val = None
             if stop_loss_order:
-                stop_price_val = stop_loss_order.get("stopPrice") or stop_loss_order.get("triggerPrice") or stop_loss_order.get("stop_price")
+                stop_price_val = (
+                    stop_loss_order.get("stopPrice")
+                    or stop_loss_order.get("triggerPrice")
+                    or stop_loss_order.get("stop_price")
+                )
             stop_loss = float(stop_price_val) if stop_price_val is not None else None
 
             target = None
             if take_profit_order:
-                tval = take_profit_order.get("stopPrice") or take_profit_order.get("triggerPrice") or take_profit_order.get("stop_price")
+                tval = (
+                    take_profit_order.get("stopPrice")
+                    or take_profit_order.get("triggerPrice")
+                    or take_profit_order.get("stop_price")
+                )
                 target = float(tval) if tval is not None else None
 
             existing_trade = self.trades.get(symbol, {})
@@ -307,16 +438,27 @@ class TradeChecker(AuthenticationManager):
             position_side = trade["positionSide"]
             if position_side == "BUY":
                 if highest_price is None:
-                    high = max(current_price, trade["price"] if trade.get("price") else current_price, stop_loss or current_price)
+                    high = max(
+                        current_price,
+                        trade["price"] if trade.get("price") else current_price,
+                        stop_loss or current_price,
+                    )
                 else:
                     high = max(current_price, highest_price)
                 self.trades[symbol]["high"] = high
             else:
                 if lowest_price is None:
-                    low = min(current_price, trade["price"] if trade.get("price") else current_price, stop_loss or current_price)
+                    low = min(
+                        current_price,
+                        trade["price"] if trade.get("price") else current_price,
+                        stop_loss or current_price,
+                    )
                 else:
                     low = min(current_price, lowest_price)
                 self.trades[symbol]["low"] = low
+
+            sl_order_id = str(stop_loss_order.get("algoId", "")) if stop_loss_order else existing_trade.get("sl_order_id", "")
+            tp_order_id = str(take_profit_order.get("algoId", "")) if take_profit_order else existing_trade.get("tp_order_id", "")
 
             self.trades[symbol].update({
                 "stop_loss_price": stop_loss,
@@ -324,7 +466,13 @@ class TradeChecker(AuthenticationManager):
                 "quantity": trade["quantity"],
                 "stop_loss_order": stop_loss_order,
                 "take_profit_order": take_profit_order,
+                "sl_order_id": sl_order_id,
+                "tp_order_id": tp_order_id,
             })
+
+            # Persist updated trade state to Redis mapping
+            trade_id = trade.get("trade_id") or symbol
+            self._save_trade(trade_id, self.trades[symbol])
 
             fields = {
                 "symbol": symbol,
@@ -346,6 +494,22 @@ class TradeChecker(AuthenticationManager):
         except Exception as e:
             self.handle_exception(e, context_description="update_trade_data")
             return {}
+
+    # ------------------------------------------------------------------
+    # Trade exit helper (mapping cleanup)
+    # ------------------------------------------------------------------
+
+    def _exit_trade(self, symbol: str, trade_id: str) -> None:
+        """Remove a trade from in-memory state and clean up Redis mappings.
+
+        Deletes:
+        * ``trade:{trade_id}``
+        * ``order:{sl_order_id}``
+        * ``order:{tp_order_id}``
+        """
+        self._delete_trade_mapping(trade_id)
+        self.trades.pop(symbol, None)
+        logger.info(f"[EXIT] Trade {trade_id} for {symbol} removed from state and Redis mappings.")
 
     # ------------------------------------------------------------------
     # Adaptive / trailing logic
@@ -385,12 +549,14 @@ class TradeChecker(AuthenticationManager):
         if side == "BUY" and current_price > current_sma:
             resp = self.om.place_market_order(symbol, 'SELL', quantity)
             if resp:
-                self.trades.pop(symbol, None)
+                trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
+                self._exit_trade(symbol, trade_id)
                 return True
         if side == "SELL" and current_price < current_sma:
             resp = self.om.place_market_order(symbol, 'BUY', quantity)
             if resp:
-                self.trades.pop(symbol, None)
+                trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
+                self._exit_trade(symbol, trade_id)
                 return True
 
         return False
@@ -406,17 +572,32 @@ class TradeChecker(AuthenticationManager):
         """Atomically replace the current SL with a new one.
 
         The new SL is placed **first**; the old order is cancelled only
-        after the new one is confirmed.
+        after the new one is confirmed.  Both Redis mappings are updated.
         """
         try:
+            trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
+
             placed = self.om.place_sl_order(symbol, side, new_sl, quantity)
             time.sleep(0.5)
-            if placed and current_stop_order and current_stop_order.get("algoId"):
-                try:
-                    self.om.cancel_algo_conditional_order(symbol=symbol, algo_id=current_stop_order["algoId"])
-                except Exception as e:
-                    self.handle_exception(e, f"Failed to cancel old SL order for {symbol} after placing new SL")
 
+            if placed:
+                new_sl_id = str(placed.get("algoId", ""))
+
+                # Cancel old SL order on broker
+                if current_stop_order and current_stop_order.get("algoId"):
+                    old_sl_id = str(current_stop_order["algoId"])
+                    try:
+                        self.om.cancel_algo_conditional_order(symbol=symbol, algo_id=old_sl_id)
+                    except Exception as e:
+                        self.handle_exception(e, f"Failed to cancel old SL order for {symbol} after placing new SL")
+                    # Remove stale order mapping
+                    self.client.delete(_order_key(old_sl_id))
+
+                # Register new order mapping
+                self._register_order(new_sl_id, trade_id)
+                self._update_trade_field(trade_id, {"sl_order_id": new_sl_id, "stop_loss_price": new_sl})
+
+            # Re-fetch to confirm
             orders = self.om.get_conditional_open_orders(symbol=symbol)
             for o in orders:
                 if is_stop_order(o):
@@ -445,23 +626,24 @@ class TradeChecker(AuthenticationManager):
         """Run all trade-management checks for a **long** position."""
         try:
             self.set_cooldown(symbol)
+            trade_id = self.trades[symbol].get("trade_id") or symbol
 
             if current_price <= stop_loss and stop_loss <= self.trades[symbol]["price"]:
                 logger.info(f"Stop-loss hit for {symbol}, Exiting trade.")
                 self.send_false_alarm(data=None, description=f"{symbol} SL Hit at BUY side", fields=self.trades[symbol])
-                self.trades.pop(symbol, None)
+                self._exit_trade(symbol, trade_id)
                 return
 
             if current_price <= stop_loss and stop_loss > self.trades[symbol]["price"]:
                 logger.info(f"Average hit for {symbol}. Exiting trade.")
                 self.send_average_alarm(data=None, description=f"{symbol} SL Hit at BUY side", fields=self.trades[symbol])
-                self.trades.pop(symbol, None)
+                self._exit_trade(symbol, trade_id)
                 return
 
             if COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE and current_price >= target:
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
                 self.send_true_alarm(data=None, description=f"{symbol} Target Hit at BUY side", fields=self.trades[symbol])
-                self.trades.pop(symbol, None)
+                self._exit_trade(symbol, trade_id)
                 return
 
             if COIN_TRADE_TYPE[symbol] == TradeType.ADAPTIVE_TRADE:
@@ -515,23 +697,24 @@ class TradeChecker(AuthenticationManager):
         """Run all trade-management checks for a **short** position."""
         try:
             self.set_cooldown(symbol)
+            trade_id = self.trades[symbol].get("trade_id") or symbol
 
             if current_price >= stop_loss and stop_loss >= self.trades[symbol]["price"]:
                 logger.info(f"Stop-loss hit for {symbol}. Exiting trade.")
                 self.send_false_alarm(data=None, description=f"{symbol} SL Hit at SELL Side", fields=self.trades[symbol])
-                self.trades.pop(symbol, None)
+                self._exit_trade(symbol, trade_id)
                 return
 
             if current_price >= stop_loss and stop_loss < self.trades[symbol]["price"]:
                 logger.info(f"Average hit for {symbol}, Exiting trade.")
                 self.send_average_alarm(data=None, description=f"{symbol} SL Hit at SELL Side", fields=self.trades[symbol])
-                self.trades.pop(symbol, None)
+                self._exit_trade(symbol, trade_id)
                 return
 
             if COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE and current_price <= target:
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
                 self.send_true_alarm(data=None, description=f"{symbol} Target Hit at SELL Side", fields=self.trades[symbol])
-                self.trades.pop(symbol, None)
+                self._exit_trade(symbol, trade_id)
                 return
 
             if COIN_TRADE_TYPE[symbol] == TradeType.ADAPTIVE_TRADE:
@@ -615,25 +798,54 @@ class TradeChecker(AuthenticationManager):
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
         """Discover all active Futures positions and set cooldowns.
 
+        Reconciles broker positions against Redis mappings:
+        * Positions present on the broker are upserted into Redis.
+        * Stale Redis trade entries (no matching broker position) are cleaned up.
+
         Returns:
             A dict mapping each symbol with a non-zero entry price to its
             position metadata.
         """
         positions = self.future_client.get_position_risk()
-        trades = {}
+        trades: Dict[str, Dict[str, Any]] = {}
+
+        active_symbols = set()
         for position in positions:
             entry_price = float(position.get("entryPrice", 0) or 0)
             if entry_price == 0:
                 continue
+
             self.set_cooldown(position["symbol"])
             positionAmount = float(position.get("positionAmt", 0) or 0)
+            symbol = position["symbol"]
+            active_symbols.add(symbol)
+
+            # Use symbol as trade_id for simplicity (one position per symbol)
+            trade_id = symbol
             _dict = {
-                "symbol": position["symbol"],
+                "trade_id": trade_id,
+                "symbol": symbol,
                 "positionSide": "BUY" if positionAmount > 0 else "SELL",
                 "quantity": abs(positionAmount),
                 "price": entry_price,
             }
-            trades[position["symbol"]] = _dict
+
+            # Merge any persisted fields (e.g. sl_order_id, tp_order_id)
+            persisted = self._load_trade(trade_id)
+            if persisted:
+                for key in ("sl_order_id", "tp_order_id", "high", "low", "stop_loss_price", "target"):
+                    if key in persisted:
+                        _dict.setdefault(key, persisted[key])
+
+            trades[symbol] = _dict
+
+        # Clean up stale Redis entries for symbols no longer active on broker
+        for key in self.client.scan_iter(f"{TRADE_KEY_PREFIX}*"):
+            trade_id = key[len(TRADE_KEY_PREFIX):]
+            if trade_id not in active_symbols:
+                logger.info(f"[CLEANUP] Removing stale Redis trade mapping for trade_id={trade_id}")
+                self._delete_trade_mapping(trade_id)
+
         return trades
 
     # ------------------------------------------------------------------
@@ -726,7 +938,11 @@ class TradeChecker(AuthenticationManager):
                     if current_price is None:
                         continue
 
-                    if 'stop_loss_price' not in self.trades[symbol] or 'target' not in self.trades[symbol] or 'stop_loss_order' not in self.trades[symbol]:
+                    if (
+                        'stop_loss_price' not in self.trades[symbol]
+                        or 'target' not in self.trades[symbol]
+                        or 'stop_loss_order' not in self.trades[symbol]
+                    ):
                         flag = True
                         break
 
@@ -748,7 +964,9 @@ class TradeChecker(AuthenticationManager):
                         if symbol not in tradesFound and symbol not in self.trades:
                             continue
                         elif symbol not in tradesFound and symbol in self.trades:
-                            self.trades.pop(symbol, None)
+                            # Broker no longer shows this position – clean up
+                            trade_id = self.trades[symbol].get("trade_id") or symbol
+                            self._exit_trade(symbol, trade_id)
                             continue
 
                         any_trade_active = True
