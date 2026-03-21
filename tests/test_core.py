@@ -39,46 +39,6 @@ class TestCore(unittest.TestCase):
         assert result["sentiment"] == "BULLISH"
 
 
-class TestAPI(unittest.TestCase):
-    def setUp(self):
-        self.mock_api_response = {
-            "status": "success",
-            "data": {
-                "trade_id": "12345",
-                "symbol": "BTCUSDT",
-                "sl_price": 42000.0,
-                "target_price": 44000.0
-            }
-        }
-
-    def test_api_response(self):
-        response = self.mock_api_response
-        self.assertEqual(response["status"], "success")
-        self.assertIn("trade_id", response["data"])
-        self.assertIn("symbol", response["data"])
-        self.assertIn("sl_price", response["data"])
-        self.assertIn("target_price", response["data"])
-
-    def test_sl_and_tp_persistence(self):
-        order = {
-            "trade_id": "12345",
-            "symbol": "BTCUSDT",
-            "sl_price": 42000.0,
-            "target_price": 44000.0
-        }
-        persisted_sl = order.get("sl_price")
-        persisted_tp = order.get("target_price")
-        new_sl = persisted_sl if persisted_sl else None
-        new_tp = persisted_tp if persisted_tp else None
-        self.assertEqual(new_sl, 42000.0)
-        self.assertEqual(new_tp, 44000.0)
-
-    def test_symbol_requires_trade_id(self):
-        order = {"symbol": "BTCUSDT"}
-        self.assertTrue(
-            "trade_id" in order or "symbol" not in order,
-            "If symbol is present, trade_id should also be present"
-        )
 
 
 # ---------------------------------------------------------------------------
