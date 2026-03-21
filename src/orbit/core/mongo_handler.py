@@ -270,7 +270,7 @@ class MongoHandler(ExceptionManager):
             existing_data["timestamp"] = pd.to_datetime(existing_data["timestamp"], unit='ms')
             existing_data = existing_data.set_index("timestamp")
             required_start_time = existing_data.index.max() + timedelta(minutes=15)
-            logger.info(f"{symbol}: Existing data loaded, last timestamp: {existing_data.index.max()}")
+            logger.info(f"{symbol}: Existing data loaded, last timestamp (Opening candle time): {existing_data.index.max()}")
         else:
             logger.info(f"{symbol}: No existing data found in MongoDB.")
 
