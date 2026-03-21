@@ -6,14 +6,21 @@ Provides :class:`OrderManager`, the single gateway for all Binance Futures
 order operations: market / limit orders, stop-loss / take-profit placement,
 bridge orders, and order modification / cancellation.
 
+All order placements write Redis mappings:
+    ``order:{order_id}`` → ``trade_id``
+
+so that :class:`TradeChecker` can resolve any order back to its parent trade.
+
 Dependencies (:class:`MongoHandler`, Binance clients) can be **injected**
 through the constructor for easier testing and looser coupling.
 """
 
+import json
 import time
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+import redis
 from binance.error import ClientError
 
 from orbit.core.authentication_manager import AuthenticationManager
@@ -22,6 +29,12 @@ from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
 
 logger = logging.getLogger("Orbit")
+
+ORDER_KEY_PREFIX = "order:"
+
+
+def _order_key(order_id: str) -> str:
+    return f"{ORDER_KEY_PREFIX}{order_id}"
 
 
 class OrderManager(AuthenticationManager):
@@ -33,10 +46,14 @@ class OrderManager(AuthenticationManager):
         - Exchange-filter validation (tick size, step size, notional)
         - Bridge-order workflow (swing-SL based)
         - Order modification and cancellation
+        - Writing ``order:{order_id}`` → ``trade_id`` Redis mappings on every
+          successful order placement
 
     Args:
         mongo_handler: Pre-built :class:`MongoHandler` instance.  When
             ``None`` (the default) a new handler is created internally.
+        redis_client: Pre-built ``redis.StrictRedis`` connection.  A default
+            ``localhost:6379/0`` connection is created when ``None``.
         **auth_kwargs: Forwarded to :class:`AuthenticationManager` (e.g.
             ``spot_client``, ``futures_client``, ``config``).
     """
@@ -52,6 +69,7 @@ class OrderManager(AuthenticationManager):
     def __init__(
         self,
         mongo_handler: Optional[MongoHandler] = None,
+        redis_client: Optional[redis.StrictRedis] = None,
         **auth_kwargs: Any,
     ) -> None:
         super().__init__(**auth_kwargs)
@@ -64,6 +82,28 @@ class OrderManager(AuthenticationManager):
             except Exception as e:
                 self.handle_exception(e, "Exception while Creating MongoHandler")
                 self.mongo_handler = None
+
+        self.redis_client: redis.StrictRedis = redis_client or redis.StrictRedis(
+            host="localhost", port=6379, db=0, decode_responses=True
+        )
+
+    # -------------------------------------------------------------------------
+    # Redis mapping helpers
+    # -------------------------------------------------------------------------
+
+    def _register_order(self, order_id: str, trade_id: str) -> None:
+        """Persist ``order:{order_id}`` → *trade_id* in Redis."""
+        try:
+            self.redis_client.set(_order_key(str(order_id)), trade_id)
+        except Exception as e:
+            self.handle_exception(e, context_description=f"_register_order({order_id})")
+
+    def _deregister_order(self, order_id: str) -> None:
+        """Remove the ``order:{order_id}`` key from Redis."""
+        try:
+            self.redis_client.delete(_order_key(str(order_id)))
+        except Exception as e:
+            self.handle_exception(e, context_description=f"_deregister_order({order_id})")
 
     # -------------------------------------------------------------------------
     # Exchange filters helpers (tick, step, notional)
@@ -212,8 +252,12 @@ class OrderManager(AuthenticationManager):
         quantity: float,
         position_side: Optional[str] = None,
         close_position: bool = False,
+        trade_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Place an algo-conditional order (SL or TP) via ``POST /fapi/v1/algoOrder``.
+
+        On success the ``order:{algo_id}`` → ``trade_id`` mapping is written
+        to Redis when *trade_id* is provided.
 
         Args:
             symbol: Trading pair.
@@ -223,6 +267,7 @@ class OrderManager(AuthenticationManager):
             quantity: Order quantity (ignored when *close_position* is ``True``).
             position_side: Hedge-mode position side (optional).
             close_position: When ``True`` the order closes the full position.
+            trade_id: Parent trade identifier used to write the Redis mapping.
 
         Returns:
             The raw API response dict.
@@ -248,6 +293,13 @@ class OrderManager(AuthenticationManager):
         logger.info(f"[ALGO ORDER REQUEST] {params}")
         resp = self.future_client.sign_request("POST", "/fapi/v1/algoOrder", params)
         logger.info(f"[ALGO ORDER RESPONSE] {resp}")
+
+        # Register order → trade mapping
+        if resp and trade_id:
+            algo_id = str(resp.get("algoId", ""))
+            if algo_id:
+                self._register_order(algo_id, trade_id)
+
         return resp
 
     def cancel_algo_conditional_order(
@@ -256,6 +308,8 @@ class OrderManager(AuthenticationManager):
         algo_id: str,
     ) -> Dict[str, Any]:
         """Cancel a conditional algo order via ``DELETE /fapi/v1/algoOrder``.
+
+        Also removes the ``order:{algo_id}`` Redis mapping.
 
         Args:
             symbol: Trading pair.
@@ -268,6 +322,10 @@ class OrderManager(AuthenticationManager):
         logger.info(f"[ALGO CANCEL REQUEST] {params}")
         resp = self.future_client.sign_request("DELETE", "/fapi/v1/algoOrder", params)
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
+
+        # Clean up order mapping
+        self._deregister_order(str(algo_id))
+
         return resp
 
     def place_sl_order(
@@ -276,6 +334,7 @@ class OrderManager(AuthenticationManager):
         side: str,
         stoploss_price: float,
         quantity: float,
+        trade_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Place a ``STOP_MARKET`` stop-loss order via the Algo Order API.
 
@@ -284,6 +343,7 @@ class OrderManager(AuthenticationManager):
             side: ``"BUY"`` or ``"SELL"`` (the exit side).
             stoploss_price: Trigger price for the stop.
             quantity: Position quantity to close.
+            trade_id: Parent trade identifier for Redis mapping.
 
         Returns:
             The API response dict, or ``None`` on failure.
@@ -313,6 +373,7 @@ class OrderManager(AuthenticationManager):
                 order_type="STOP_MARKET",
                 stop_price=round(stoploss_price, 1),
                 quantity=quantity,
+                trade_id=trade_id or symbol,
             )
 
             self.send_sl_update_notifier(
@@ -335,6 +396,7 @@ class OrderManager(AuthenticationManager):
         side: str,
         target_price: float,
         quantity: float,
+        trade_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Place a ``TAKE_PROFIT_MARKET`` order via the Algo Order API.
 
@@ -343,6 +405,7 @@ class OrderManager(AuthenticationManager):
             side: ``"BUY"`` or ``"SELL"`` (the exit side).
             target_price: Trigger price for the take-profit.
             quantity: Position quantity to close.
+            trade_id: Parent trade identifier for Redis mapping.
 
         Returns:
             The API response dict, or ``None`` on failure.
@@ -371,6 +434,7 @@ class OrderManager(AuthenticationManager):
                 order_type="TAKE_PROFIT_MARKET",
                 stop_price=round(target_price, 1),
                 quantity=quantity,
+                trade_id=trade_id or symbol,
             )
 
             self.send_signal_updates(
@@ -456,6 +520,7 @@ class OrderManager(AuthenticationManager):
         leverage: int = 2,
         quantity: Optional[float] = None,
         ros: bool = False,
+        trade_id: Optional[str] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[float], Optional[Dict[str, Any]]]:
         """Place a ``LIMIT`` order on Binance Futures with optional SL/TP.
 
@@ -470,6 +535,8 @@ class OrderManager(AuthenticationManager):
             quantity: Coin quantity; computed from fixed allocation when ``None``.
             ros: *Return On Signal* mode — when ``True`` the method returns
                 immediately after the main order without placing SL/TP.
+            trade_id: Parent trade identifier for Redis order mappings.  Falls
+                back to *symbol* when ``None``.
 
         Returns:
             A ``(order_response, used_quantity, field_params)`` tuple.
@@ -484,6 +551,8 @@ class OrderManager(AuthenticationManager):
                     fields={"symbol": symbol, "side": side},
                 )
                 return None, None, None
+
+            effective_trade_id = trade_id or symbol
 
             balance_available = self.get_usdt_balance()
             qty_from_alloc: float = 0.0
@@ -596,11 +665,11 @@ class OrderManager(AuthenticationManager):
                     stoploss_price = round(price * ((100.0 + sl_percent) / 100.0), 1)
 
             sl_target_side = self._get_opposite_side(side)
-            self.place_sl_order(symbol, sl_target_side, stoploss_price, quantity)
+            self.place_sl_order(symbol, sl_target_side, stoploss_price, quantity, trade_id=effective_trade_id)
             time.sleep(1)
 
             if target is not None:
-                self.place_target_order(symbol, sl_target_side, target, quantity)
+                self.place_target_order(symbol, sl_target_side, target, quantity, trade_id=effective_trade_id)
 
             logger.info(f"Order placed: {order_response}")
             return order_response, quantity, field_params
@@ -799,6 +868,7 @@ class OrderManager(AuthenticationManager):
         side: str,
         price: Optional[float] = None,
         leverage: int = 2,
+        trade_id: Optional[str] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
         """Place a *bridge* limit order sized by max-loss and swing stop-loss.
 
@@ -808,6 +878,7 @@ class OrderManager(AuthenticationManager):
             side: ``"BUY"`` or ``"SELL"``.
             price: Limit price; fetched from the API when ``None``.
             leverage: Leverage multiplier.
+            trade_id: Parent trade identifier for Redis order mappings.
 
         Returns:
             A ``(order_response, used_quantity)`` tuple, or ``(None, None)`` on failure.
@@ -816,6 +887,7 @@ class OrderManager(AuthenticationManager):
             if price is None:
                 price = self.get_future_symbol_price(symbol=symbol)
 
+            effective_trade_id = trade_id or symbol
             future_leverage = 10 if symbol == "BTCUSDT" else leverage
 
             if self.mongo_handler is None:
@@ -854,6 +926,7 @@ class OrderManager(AuthenticationManager):
                 leverage=future_leverage,
                 quantity=quantity,
                 ros=True,
+                trade_id=effective_trade_id,
             )
 
             if not order_response:
@@ -886,7 +959,7 @@ class OrderManager(AuthenticationManager):
             if used_qty is None:
                 used_qty = quantity
 
-            self.place_sl_order(symbol, sl_side, sl_price, used_qty)
+            self.place_sl_order(symbol, sl_side, sl_price, used_qty, trade_id=effective_trade_id)
             return order_response, used_qty
 
         except ClientError as error:
