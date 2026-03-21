@@ -234,6 +234,7 @@ class OrderManager(AuthenticationManager):
             "type": order_type,
             "triggerPrice": str(stop_price),
             "workingType": "MARK_PRICE",
+            "recvWindow": 60000,
         }
 
         if close_position:
@@ -263,7 +264,7 @@ class OrderManager(AuthenticationManager):
         Returns:
             The raw API response dict.
         """
-        params = {"symbol": symbol, "algoId": algo_id}
+        params = {"symbol": symbol, "algoId": algo_id, "recvWindow": 60000}
         logger.info(f"[ALGO CANCEL REQUEST] {params}")
         resp = self.future_client.sign_request("DELETE", "/fapi/v1/algoOrder", params)
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
@@ -564,6 +565,7 @@ class OrderManager(AuthenticationManager):
                 "timeInForce": "GTC",
                 "quantity": str(quantity),
                 "price": str(price),
+                "recvWindow": 60000,
             }
 
             order_response = self.future_client.new_order(**params)
@@ -670,7 +672,13 @@ class OrderManager(AuthenticationManager):
                 )
                 return None
 
-            market_order_params = {"symbol": symbol, "side": side, "type": "MARKET", "quantity": quantity}
+            market_order_params = {
+                "symbol": symbol,
+                "side": side,
+                "type": "MARKET",
+                "quantity": quantity,
+                "recvWindow": 60000,
+            }
 
             self.send_signal_updates(data=None, description=f"Market Order request for {symbol}", fields=market_order_params)
 
@@ -703,7 +711,7 @@ class OrderManager(AuthenticationManager):
             The cancellation response dict, or ``None`` on failure.
         """
         try:
-            result = self.future_client.cancel_order(symbol=symbol, orderId=order_id)
+            result = self.future_client.cancel_order(symbol=symbol, orderId=order_id, recvWindow=60000)
             logger.info(f"Order canceled: {result}")
             return result
         except ClientError as error:
@@ -723,7 +731,7 @@ class OrderManager(AuthenticationManager):
             A list of order dicts (may be empty on error).
         """
         try:
-            orders = self.future_client.get_all_orders(symbol=symbol, orderId=orderId)
+            orders = self.future_client.get_all_orders(symbol=symbol, orderId=orderId, recvWindow=60000)
             logger.info(f"Open orders: {orders} for symbol {symbol}")
             return orders
         except ClientError as error:
@@ -743,15 +751,41 @@ class OrderManager(AuthenticationManager):
         Returns:
             A list of open algo-order dicts (may be empty).
         """
-        try:
-            orders = self.future_client.sign_request("GET", "/fapi/v1/allAlgoOrders", {"symbol": symbol})
-            open_orders = [o for o in orders if o.get("algoStatus") == "NEW"]
-            logger.info(f"[COND OPEN ORDERS] {symbol} -> {len(open_orders)} orders")
-            return open_orders
-        except ClientError as error:
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> get_conditional_open_orders")
-        except Exception as e:
-            self.handle_exception(e, context_description="Exception caught while fetching conditional open orders")
+        max_retries = 3
+        retry_delay = 2
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                orders = self.future_client.sign_request(
+                    "GET",
+                    "/fapi/v1/allAlgoOrders",
+                    {"symbol": symbol, "recvWindow": 60000},
+                )
+                open_orders = [o for o in orders if o.get("algoStatus") == "NEW"]
+                logger.info(f"[COND OPEN ORDERS] {symbol} -> {len(open_orders)} orders")
+                return open_orders
+
+            except ClientError as error:
+                # -1021 = Timestamp outside recvWindow; retry after a short delay
+                if error.error_code == -1021 and attempt < max_retries:
+                    logger.warning(
+                        f"[COND OPEN ORDERS] Timestamp error for {symbol} "
+                        f"(attempt {attempt}/{max_retries}), retrying in {retry_delay}s…"
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # exponential back-off
+                else:
+                    self.clientExceptionHandler(
+                        symbol=symbol,
+                        error=error,
+                        Location="OrderManager -> get_conditional_open_orders",
+                    )
+                    return []
+
+            except Exception as e:
+                self.handle_exception(e, context_description="Exception caught while fetching conditional open orders")
+                return []
+
         return []
 
     # -------------------------------------------------------------------------
@@ -831,7 +865,7 @@ class OrderManager(AuthenticationManager):
             timeout = 300
 
             while True:
-                order_status = self.future_client.get_orders(symbol=symbol, orderId=order_id)
+                order_status = self.future_client.get_orders(symbol=symbol, orderId=order_id, recvWindow=60000)
                 status: Optional[str] = None
                 if isinstance(order_status, dict):
                     status = order_status.get("status")
@@ -895,7 +929,7 @@ class OrderManager(AuthenticationManager):
             quantity = self.adjust_quantity_step(symbol, quantity)
 
             modified_order = self.future_client.modify_order(
-                symbol=symbol, side=side, orderId=orderId, price=price, quantity=quantity,
+                symbol=symbol, side=side, orderId=orderId, price=price, quantity=quantity, recvWindow=60000,
             )
 
             self.send_active_trades_info(
