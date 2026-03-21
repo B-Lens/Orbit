@@ -50,7 +50,7 @@ def _make_spot_client():
     return MagicMock()
 
 
-def _make_futures_client():
+def _make_future_client():
     """Return a MagicMock that mimics binance.um_futures.UMFutures."""
     return MagicMock()
 
@@ -63,15 +63,15 @@ def _make_order_manager():
     from orbit.core.order_manager import OrderManager
 
     spot = _make_spot_client()
-    futures = _make_futures_client()
+    futures = _make_future_client()
     mongo = MagicMock()
     redis_client = MagicMock()
 
     om = OrderManager(
-        spot_client=spot,
-        futures_client=futures,
         mongo_handler=mongo,
         redis_client=redis_client,
+        spot_client=spot,
+        futures_client=futures,
     )
     return om
 
@@ -83,17 +83,17 @@ def _make_trade_checker():
     from orbit.core.trade_checker import TradeChecker
 
     spot = _make_spot_client()
-    futures = _make_futures_client()
+    futures = _make_future_client()
     mongo = MagicMock()
     redis_client = MagicMock()
     order_manager = _make_order_manager()
 
     tc = TradeChecker(
-        spot_client=spot,
-        futures_client=futures,
         order_manager=order_manager,
         mongo_handler=mongo,
         redis_client=redis_client,
+        spot_client=spot,
+        futures_client=futures,
     )
     return tc
 
@@ -109,17 +109,17 @@ class TestOrderManagerGetSymbolPrice(unittest.TestCase):
         self.om = _make_order_manager()
 
     def test_get_symbol_price_success(self):
-        self.om.futures_client.ticker_price.return_value = {"price": "50000.00"}
+        self.om.future_client.ticker_price.return_value = {"price": "50000.00"}
         price = self.om.get_symbol_price("BTCUSDT")
         self.assertAlmostEqual(price, 50000.0)
 
     def test_get_future_symbol_price_success(self):
-        self.om.futures_client.ticker_price.return_value = {"price": "49500.50"}
+        self.om.future_client.ticker_price.return_value = {"price": "49500.50"}
         price = self.om.get_future_symbol_price("BTCUSDT")
         self.assertAlmostEqual(price, 49500.50)
 
     def test_get_symbol_price_api_error(self):
-        self.om.futures_client.ticker_price.side_effect = Exception("API error")
+        self.om.future_client.ticker_price.side_effect = Exception("API error")
         with self.assertRaises(Exception):
             self.om.get_symbol_price("BTCUSDT")
 
@@ -131,7 +131,7 @@ class TestOrderManagerGetUSDTBalance(unittest.TestCase):
         self.om = _make_order_manager()
 
     def test_get_usdt_balance_success(self):
-        self.om.futures_client.balance.return_value = [
+        self.om.future_client.balance.return_value = [
             {"asset": "USDT", "balance": "1000.00"},
             {"asset": "BNB", "balance": "5.00"},
         ]
@@ -139,7 +139,7 @@ class TestOrderManagerGetUSDTBalance(unittest.TestCase):
         self.assertAlmostEqual(balance, 1000.0)
 
     def test_get_usdt_balance_no_usdt(self):
-        self.om.futures_client.balance.return_value = [
+        self.om.future_client.balance.return_value = [
             {"asset": "BNB", "balance": "5.00"},
         ]
         balance = self.om.get_usdt_balance()
@@ -147,7 +147,7 @@ class TestOrderManagerGetUSDTBalance(unittest.TestCase):
         self.assertIn(balance, [0, 0.0, None])
 
     def test_get_usdt_balance_api_error(self):
-        self.om.futures_client.balance.side_effect = Exception("Network error")
+        self.om.future_client.balance.side_effect = Exception("Network error")
         with self.assertRaises(Exception):
             self.om.get_usdt_balance()
 
@@ -173,18 +173,18 @@ class TestOrderManagerGetSymbolFilters(unittest.TestCase):
         }
 
     def test_get_symbol_filters_returns_dict(self):
-        self.om.futures_client.exchange_info.return_value = self._exchange_info()
+        self.om.future_client.exchange_info.return_value = self._exchange_info()
         filters = self.om.get_symbol_filters("BTCUSDT")
         self.assertIsInstance(filters, dict)
 
     def test_get_symbol_filters_contains_tick_size(self):
-        self.om.futures_client.exchange_info.return_value = self._exchange_info(tick_size="0.10")
+        self.om.future_client.exchange_info.return_value = self._exchange_info(tick_size="0.10")
         filters = self.om.get_symbol_filters("BTCUSDT")
         self.assertIn("tick_size", filters)
         self.assertAlmostEqual(float(filters["tick_size"]), 0.10)
 
     def test_get_symbol_filters_contains_step_size(self):
-        self.om.futures_client.exchange_info.return_value = self._exchange_info(step_size="0.001")
+        self.om.future_client.exchange_info.return_value = self._exchange_info(step_size="0.001")
         filters = self.om.get_symbol_filters("BTCUSDT")
         self.assertIn("step_size", filters)
         self.assertAlmostEqual(float(filters["step_size"]), 0.001)
@@ -223,7 +223,7 @@ class TestOrderManagerPlaceSLOrder(unittest.TestCase):
         })
 
     def test_place_sl_order_success(self):
-        self.om.futures_client.new_order.return_value = {
+        self.om.future_client.new_order.return_value = {
             "orderId": 111,
             "status": "NEW",
             "symbol": "BTCUSDT",
@@ -239,7 +239,7 @@ class TestOrderManagerPlaceSLOrder(unittest.TestCase):
         self.assertEqual(result["orderId"], 111)
 
     def test_place_sl_order_stores_redis_mapping(self):
-        self.om.futures_client.new_order.return_value = {
+        self.om.future_client.new_order.return_value = {
             "orderId": 222,
             "status": "NEW",
             "symbol": "BTCUSDT",
@@ -254,7 +254,7 @@ class TestOrderManagerPlaceSLOrder(unittest.TestCase):
         self.om.redis_client.set.assert_called()
 
     def test_place_sl_order_api_failure(self):
-        self.om.futures_client.new_order.side_effect = Exception("Order rejected")
+        self.om.future_client.new_order.side_effect = Exception("Order rejected")
         with self.assertRaises(Exception):
             self.om.place_sl_order(
                 symbol="BTCUSDT",
@@ -277,7 +277,7 @@ class TestOrderManagerPlaceTargetOrder(unittest.TestCase):
         })
 
     def test_place_target_order_success(self):
-        self.om.futures_client.new_order.return_value = {
+        self.om.future_client.new_order.return_value = {
             "orderId": 333,
             "status": "NEW",
             "symbol": "BTCUSDT",
@@ -293,7 +293,7 @@ class TestOrderManagerPlaceTargetOrder(unittest.TestCase):
         self.assertEqual(result["orderId"], 333)
 
     def test_place_target_order_stores_redis_mapping(self):
-        self.om.futures_client.new_order.return_value = {
+        self.om.future_client.new_order.return_value = {
             "orderId": 444,
             "status": "NEW",
             "symbol": "BTCUSDT",
@@ -308,7 +308,7 @@ class TestOrderManagerPlaceTargetOrder(unittest.TestCase):
         self.om.redis_client.set.assert_called()
 
     def test_place_target_order_api_failure(self):
-        self.om.futures_client.new_order.side_effect = Exception("Order rejected")
+        self.om.future_client.new_order.side_effect = Exception("Order rejected")
         with self.assertRaises(Exception):
             self.om.place_target_order(
                 symbol="BTCUSDT",
@@ -326,7 +326,7 @@ class TestOrderManagerCancelOrder(unittest.TestCase):
         self.om = _make_order_manager()
 
     def test_cancel_order_success(self):
-        self.om.futures_client.cancel_order.return_value = {
+        self.om.future_client.cancel_order.return_value = {
             "orderId": 555,
             "status": "CANCELED",
         }
@@ -335,15 +335,15 @@ class TestOrderManagerCancelOrder(unittest.TestCase):
         self.assertEqual(result["status"], "CANCELED")
 
     def test_cancel_order_not_found(self):
-        self.om.futures_client.cancel_order.side_effect = Exception("Order does not exist")
+        self.om.future_client.cancel_order.side_effect = Exception("Order does not exist")
         result = self.om.cancel_order("BTCUSDT", 9999)
         # Should return None (not raise) when order is missing
         self.assertIsNone(result)
 
-    def test_cancel_order_calls_futures_client(self):
-        self.om.futures_client.cancel_order.return_value = {"orderId": 666, "status": "CANCELED"}
+    def test_cancel_order_calls_future_client(self):
+        self.om.future_client.cancel_order.return_value = {"orderId": 666, "status": "CANCELED"}
         self.om.cancel_order("ETHUSDT", 666)
-        self.om.futures_client.cancel_order.assert_called_once()
+        self.om.future_client.cancel_order.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +411,7 @@ class TestTradeCheckerOrderStatusTransitions(unittest.TestCase):
         self.tc = _make_trade_checker()
 
     def _mock_order_status(self, status: str, order_id: int = 101):
-        self.tc.order_manager.futures_client.query_order.return_value = {
+        self.tc.order_manager.future_client.query_order.return_value = {
             "orderId": order_id,
             "status": status,
             "symbol": "BTCUSDT",
@@ -419,35 +419,35 @@ class TestTradeCheckerOrderStatusTransitions(unittest.TestCase):
 
     def test_sl_order_filled_detected(self):
         self._mock_order_status("FILLED", order_id=101)
-        order = self.tc.order_manager.futures_client.query_order(
+        order = self.tc.order_manager.future_client.query_order(
             symbol="BTCUSDT", orderId=101
         )
         self.assertEqual(order["status"], "FILLED")
 
     def test_target_order_filled_detected(self):
         self._mock_order_status("FILLED", order_id=102)
-        order = self.tc.order_manager.futures_client.query_order(
+        order = self.tc.order_manager.future_client.query_order(
             symbol="BTCUSDT", orderId=102
         )
         self.assertEqual(order["status"], "FILLED")
 
     def test_order_still_open(self):
         self._mock_order_status("NEW", order_id=101)
-        order = self.tc.order_manager.futures_client.query_order(
+        order = self.tc.order_manager.future_client.query_order(
             symbol="BTCUSDT", orderId=101
         )
         self.assertEqual(order["status"], "NEW")
 
     def test_order_canceled(self):
         self._mock_order_status("CANCELED", order_id=101)
-        order = self.tc.order_manager.futures_client.query_order(
+        order = self.tc.order_manager.future_client.query_order(
             symbol="BTCUSDT", orderId=101
         )
         self.assertEqual(order["status"], "CANCELED")
 
     def test_order_partially_filled(self):
         self._mock_order_status("PARTIALLY_FILLED", order_id=101)
-        order = self.tc.order_manager.futures_client.query_order(
+        order = self.tc.order_manager.future_client.query_order(
             symbol="BTCUSDT", orderId=101
         )
         self.assertEqual(order["status"], "PARTIALLY_FILLED")
@@ -557,9 +557,9 @@ class TestTradeCheckerEdgeCases(unittest.TestCase):
         self.assertEqual(trade["status"], "CLOSED")
 
     def test_query_order_raises_on_unknown_symbol(self):
-        self.tc.order_manager.futures_client.query_order.side_effect = Exception("Invalid symbol")
+        self.tc.order_manager.future_client.query_order.side_effect = Exception("Invalid symbol")
         with self.assertRaises(Exception):
-            self.tc.order_manager.futures_client.query_order(
+            self.tc.order_manager.future_client.query_order(
                 symbol="INVALID", orderId=101
             )
 
