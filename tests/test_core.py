@@ -73,6 +73,8 @@ def _make_order_manager():
             spot_client=spot,
             futures_client=futures,
         )
+        # disable inherited discord calls
+        om.send_to_webhook = MagicMock()
     return om
 
 
