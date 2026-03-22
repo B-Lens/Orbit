@@ -659,8 +659,8 @@ class TradeChecker(AuthenticationManager):
             })
 
             # Persist updated trade state to Redis mapping.
-            # Also store the trigger prices and full order snapshots so that
-            # ensure_orders can recover them after a restart or exchange desync.
+            # Only store the full order dicts for stop_loss_order and take_profit_order,
+            # as these already contain all relevant fields (including triggerPrice, etc).
             trade_id = trade.get("trade_id") or symbol
             redis_updates: Dict[str, Any] = dict(self.trades[symbol])
             if stop_loss_order:
