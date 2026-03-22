@@ -286,7 +286,6 @@ class TradeChecker(AuthenticationManager):
         """
         try:
             trade_id = trade.get("trade_id") or symbol
-            persisted = self._load_trade(trade_id) or {}
 
             # ---- fetch live open orders from broker ----
             open_orders = self.order_manager.get_conditional_open_orders(symbol=symbol)
@@ -302,6 +301,20 @@ class TradeChecker(AuthenticationManager):
                 if is_take_profit_order(order):
                     take_profit_order = take_profit_order or order
 
+            if stop_loss_order:
+                self._register_order(str(stop_loss_order.get("algoId", "")), trade_id)
+                self._update_trade_field(trade_id, {"sl_order_id": str(stop_loss_order.get("algoId", ""))})
+                self._update_trade_field(trade_id, {"stop_loss_order": stop_loss_order})
+                self._update_trade_field(trade_id, {"stop_loss_price": stop_loss_order.get("stopPrice") or stop_loss_order.get("triggerPrice") or stop_loss_order.get("stop_price")})
+
+            if take_profit_order:
+                self._register_order(str(take_profit_order.get("algoId", "")), trade_id)
+                self._update_trade_field(trade_id, {"tp_order_id": str(take_profit_order.get("algoId", ""))})
+                self._update_trade_field(trade_id, {"take_profit_order": take_profit_order})
+                self._update_trade_field(trade_id, {"target": take_profit_order.get("stopPrice") or take_profit_order.get("triggerPrice") or take_profit_order.get("stop_price")})
+
+            persisted = self._load_trade(trade_id) or {}
+
             # Validate persisted SL order ID against live broker state
             persisted_sl_id = str(persisted.get("sl_order_id", ""))
             if persisted_sl_id and persisted_sl_id not in open_order_ids:
@@ -316,7 +329,7 @@ class TradeChecker(AuthenticationManager):
 
             # ---- recreate missing SL ----
             if stop_loss_order is None:
-                sl_price = self.calculate_sl_price(trade, risk_management)
+                sl_price = persisted.get("stop_loss_price") or self.calculate_sl_price(trade, risk_management)
                 stop_loss_order = self.order_manager.place_sl_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
@@ -335,7 +348,7 @@ class TradeChecker(AuthenticationManager):
 
             # ---- recreate missing TP ----
             if take_profit_order is None and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE:
-                target_price = self.calculate_target_price(trade, risk_management)
+                target_price = persisted.get("target") or self.calculate_target_price(trade, risk_management)
                 take_profit_order = self.order_manager.place_target_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
