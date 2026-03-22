@@ -89,6 +89,27 @@ def is_take_profit_order(order: Optional[Dict[str, Any]]) -> bool:
     return False
 
 
+def _extract_trigger_price(order: Optional[Dict[str, Any]]) -> Optional[float]:
+    """Extract the trigger/stop price from an order dict.
+
+    Tries the following keys in order:
+    ``triggerPrice``, ``stopPrice``, ``stop_price``.
+
+    Returns:
+        The price as a ``float``, or ``None`` if no valid value is found.
+    """
+    if not order:
+        return None
+    for key in ("triggerPrice", "stopPrice", "stop_price"):
+        val = order.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 class TradeChecker(AuthenticationManager):
     """Real-time position monitor and SL/TP lifecycle manager.
 
@@ -274,6 +295,13 @@ class TradeChecker(AuthenticationManager):
         3. Verify each order is still open on the broker.
         4. Re-create any missing orders and update both mappings.
 
+        When an SL or TP order is not found among open orders, the method
+        falls back to the persisted ``triggerPrice`` stored in the Redis
+        trade record (under ``persisted_sl`` / ``persisted_tp`` sub-dicts or
+        the flat ``sl_trigger_price`` / ``tp_trigger_price`` fields) before
+        falling back to a freshly calculated price.  This ensures correct
+        recovery after restarts, partial cancellations, or exchange desyncs.
+
         Args:
             symbol: Trading pair.
             trade: Position metadata (must contain ``positionSide``,
@@ -302,21 +330,46 @@ class TradeChecker(AuthenticationManager):
                 if is_take_profit_order(order):
                     take_profit_order = take_profit_order or order
 
-            # Validate persisted SL order ID against live broker state
+            # ------------------------------------------------------------------
+            # Validate persisted SL order ID against live broker state.
+            # When the SL is missing from open orders, attempt to recover the
+            # trigger price from the persisted trade record before recalculating.
+            # ------------------------------------------------------------------
             persisted_sl_id = str(persisted.get("sl_order_id", ""))
-            if persisted_sl_id and persisted_sl_id not in open_order_ids:
-                logger.warning(f"[SELF-HEAL] SL order {persisted_sl_id} for {symbol} not found on broker – will recreate")
+            sl_missing = persisted_sl_id and persisted_sl_id not in open_order_ids
+
+            if sl_missing:
+                logger.warning(
+                    f"[SELF-HEAL] SL order {persisted_sl_id} for {symbol} not found on broker – will recreate"
+                )
                 stop_loss_order = None  # force recreation
 
-            # Validate persisted TP order ID against live broker state
+            # ------------------------------------------------------------------
+            # Validate persisted TP order ID against live broker state.
+            # Same fallback logic applies for the take-profit order.
+            # ------------------------------------------------------------------
             persisted_tp_id = str(persisted.get("tp_order_id", ""))
-            if persisted_tp_id and persisted_tp_id not in open_order_ids:
-                logger.warning(f"[SELF-HEAL] TP order {persisted_tp_id} for {symbol} not found on broker – will recreate")
+            tp_missing = persisted_tp_id and persisted_tp_id not in open_order_ids
+
+            if tp_missing:
+                logger.warning(
+                    f"[SELF-HEAL] TP order {persisted_tp_id} for {symbol} not found on broker – will recreate"
+                )
                 take_profit_order = None  # force recreation
 
             # ---- recreate missing SL ----
             if stop_loss_order is None:
-                sl_price = self.calculate_sl_price(trade, risk_management)
+                # Prefer the trigger price stored in the persisted trade record.
+                # The persisted record may carry the original order snapshot under
+                # ``persisted_sl`` or a flat ``sl_trigger_price`` field written
+                # when the order was first placed / last updated.
+                sl_price = self._resolve_persisted_sl_price(persisted, trade, risk_management)
+
+                logger.info(
+                    f"[SELF-HEAL] Recreating SL for {symbol} using price={sl_price} "
+                    f"(source: {'persisted' if self._has_persisted_sl_price(persisted) else 'calculated'})"
+                )
+
                 stop_loss_order = self.order_manager.place_sl_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
@@ -327,15 +380,31 @@ class TradeChecker(AuthenticationManager):
                 if stop_loss_order:
                     new_sl_id = str(stop_loss_order.get("algoId", ""))
                     self._register_order(new_sl_id, trade_id)
-                    self._update_trade_field(trade_id, {"sl_order_id": new_sl_id})
+                    self._update_trade_field(
+                        trade_id,
+                        {
+                            "sl_order_id": new_sl_id,
+                            "sl_trigger_price": sl_price,
+                            "persisted_sl": stop_loss_order,
+                        },
+                    )
                     # Remove stale mapping for old order id
                     if persisted_sl_id and persisted_sl_id != new_sl_id:
                         self.redis_client.delete(_order_key(persisted_sl_id))
-                    logger.info(f"[SELF-HEAL] Placed missing SL for {symbol} at {sl_price} (order {new_sl_id})")
+                    logger.info(
+                        f"[SELF-HEAL] Placed missing SL for {symbol} at {sl_price} (order {new_sl_id})"
+                    )
 
             # ---- recreate missing TP ----
             if take_profit_order is None and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE:
-                target_price = self.calculate_target_price(trade, risk_management)
+                # Prefer the trigger price stored in the persisted trade record.
+                target_price = self._resolve_persisted_tp_price(persisted, trade, risk_management)
+
+                logger.info(
+                    f"[SELF-HEAL] Recreating TP for {symbol} using price={target_price} "
+                    f"(source: {'persisted' if self._has_persisted_tp_price(persisted) else 'calculated'})"
+                )
+
                 take_profit_order = self.order_manager.place_target_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
@@ -346,16 +415,134 @@ class TradeChecker(AuthenticationManager):
                 if take_profit_order:
                     new_tp_id = str(take_profit_order.get("algoId", ""))
                     self._register_order(new_tp_id, trade_id)
-                    self._update_trade_field(trade_id, {"tp_order_id": new_tp_id})
+                    self._update_trade_field(
+                        trade_id,
+                        {
+                            "tp_order_id": new_tp_id,
+                            "tp_trigger_price": target_price,
+                            "persisted_tp": take_profit_order,
+                        },
+                    )
                     if persisted_tp_id and persisted_tp_id != new_tp_id:
                         self.redis_client.delete(_order_key(persisted_tp_id))
-                    logger.info(f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})")
+                    logger.info(
+                        f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})"
+                    )
 
             return stop_loss_order, take_profit_order
 
         except Exception as e:
             self.handle_exception(e, context_description="ensure_orders")
             return None, None
+
+    # ------------------------------------------------------------------
+    # Persisted trigger-price resolution helpers
+    # ------------------------------------------------------------------
+
+    def _has_persisted_sl_price(self, persisted: Dict[str, Any]) -> bool:
+        """Return ``True`` if the persisted trade contains a usable SL trigger price."""
+        if _extract_trigger_price(persisted.get("persisted_sl")):
+            return True
+        if persisted.get("sl_trigger_price") is not None:
+            return True
+        return False
+
+    def _has_persisted_tp_price(self, persisted: Dict[str, Any]) -> bool:
+        """Return ``True`` if the persisted trade contains a usable TP trigger price."""
+        if _extract_trigger_price(persisted.get("persisted_tp")):
+            return True
+        if persisted.get("tp_trigger_price") is not None:
+            return True
+        return False
+
+    def _resolve_persisted_sl_price(
+        self,
+        persisted: Dict[str, Any],
+        trade: Dict[str, Any],
+        risk_management: Dict[str, Any],
+    ) -> float:
+        """Return the best available SL trigger price for order recreation.
+
+        Resolution order:
+        1. ``persisted["persisted_sl"]["triggerPrice"]`` (or ``stopPrice`` /
+           ``stop_price``) – the original order snapshot saved when the SL
+           was last placed.
+        2. ``persisted["sl_trigger_price"]`` – flat field written as a
+           convenience copy alongside the order snapshot.
+        3. Freshly calculated price via :meth:`calculate_sl_price`.
+
+        Args:
+            persisted: The trade dict loaded from Redis.
+            trade: Live position metadata (used for fresh calculation).
+            risk_management: Risk config (used for fresh calculation).
+
+        Returns:
+            The SL price to use when recreating the order.
+        """
+        # 1. Try the full persisted order snapshot
+        price = _extract_trigger_price(persisted.get("persisted_sl"))
+        if price is not None:
+            logger.debug(f"[FALLBACK] Using persisted_sl.triggerPrice={price} for SL recreation")
+            return price
+
+        # 2. Try the flat convenience field
+        flat = persisted.get("sl_trigger_price")
+        if flat is not None:
+            try:
+                price = float(flat)
+                logger.debug(f"[FALLBACK] Using sl_trigger_price={price} for SL recreation")
+                return price
+            except (TypeError, ValueError):
+                pass
+
+        # 3. Fall back to a fresh calculation
+        price = self.calculate_sl_price(trade, risk_management)
+        logger.debug(f"[FALLBACK] Using calculated SL price={price}")
+        return price
+
+    def _resolve_persisted_tp_price(
+        self,
+        persisted: Dict[str, Any],
+        trade: Dict[str, Any],
+        risk_management: Dict[str, Any],
+    ) -> float:
+        """Return the best available TP trigger price for order recreation.
+
+        Resolution order:
+        1. ``persisted["persisted_tp"]["triggerPrice"]`` (or ``stopPrice`` /
+           ``stop_price``) – the original order snapshot saved when the TP
+           was last placed.
+        2. ``persisted["tp_trigger_price"]`` – flat convenience field.
+        3. Freshly calculated price via :meth:`calculate_target_price`.
+
+        Args:
+            persisted: The trade dict loaded from Redis.
+            trade: Live position metadata (used for fresh calculation).
+            risk_management: Risk config (used for fresh calculation).
+
+        Returns:
+            The TP price to use when recreating the order.
+        """
+        # 1. Try the full persisted order snapshot
+        price = _extract_trigger_price(persisted.get("persisted_tp"))
+        if price is not None:
+            logger.debug(f"[FALLBACK] Using persisted_tp.triggerPrice={price} for TP recreation")
+            return price
+
+        # 2. Try the flat convenience field
+        flat = persisted.get("tp_trigger_price")
+        if flat is not None:
+            try:
+                price = float(flat)
+                logger.debug(f"[FALLBACK] Using tp_trigger_price={price} for TP recreation")
+                return price
+            except (TypeError, ValueError):
+                pass
+
+        # 3. Fall back to a fresh calculation
+        price = self.calculate_target_price(trade, risk_management)
+        logger.debug(f"[FALLBACK] Using calculated TP price={price}")
+        return price
 
     # ------------------------------------------------------------------
     # Price / calculation helpers
@@ -406,7 +593,8 @@ class TradeChecker(AuthenticationManager):
         """Refresh the in-memory trade record and Redis mapping for *symbol*.
 
         Updates high/low watermarks, persists the latest SL/TP order
-        references, and returns a summary dict suitable for Discord
+        references (including their trigger prices for future fallback
+        recovery), and returns a summary dict suitable for Discord
         notifications.
         """
         try:
@@ -470,9 +658,20 @@ class TradeChecker(AuthenticationManager):
                 "tp_order_id": tp_order_id,
             })
 
-            # Persist updated trade state to Redis mapping
+            # Persist updated trade state to Redis mapping.
+            # Only store the full order dicts for stop_loss_order and take_profit_order,
+            # as these already contain all relevant fields (including triggerPrice, etc).
             trade_id = trade.get("trade_id") or symbol
-            self._save_trade(trade_id, self.trades[symbol])
+            redis_updates: Dict[str, Any] = dict(self.trades[symbol])
+            if stop_loss_order:
+                redis_updates["persisted_sl"] = stop_loss_order
+                if stop_loss is not None:
+                    redis_updates["sl_trigger_price"] = stop_loss
+            if take_profit_order:
+                redis_updates["persisted_tp"] = take_profit_order
+                if target is not None:
+                    redis_updates["tp_trigger_price"] = target
+            self._save_trade(trade_id, redis_updates)
 
             fields = {
                 "symbol": symbol,
@@ -572,7 +771,9 @@ class TradeChecker(AuthenticationManager):
         """Atomically replace the current SL with a new one.
 
         The new SL is placed **first**; the old order is cancelled only
-        after the new one is confirmed.  Both Redis mappings are updated.
+        after the new one is confirmed.  Both Redis mappings are updated,
+        including the ``persisted_sl`` snapshot and ``sl_trigger_price``
+        flat field used for fallback recovery.
         """
         try:
             trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
@@ -593,9 +794,17 @@ class TradeChecker(AuthenticationManager):
                     # Remove stale order mapping
                     self.redis_client.delete(_order_key(old_sl_id))
 
-                # Register new order mapping
+                # Register new order mapping and persist trigger price + snapshot
                 self._register_order(new_sl_id, trade_id)
-                self._update_trade_field(trade_id, {"sl_order_id": new_sl_id, "stop_loss_price": new_sl})
+                self._update_trade_field(
+                    trade_id,
+                    {
+                        "sl_order_id": new_sl_id,
+                        "stop_loss_price": new_sl,
+                        "sl_trigger_price": new_sl,
+                        "persisted_sl": placed,
+                    },
+                )
 
             # Re-fetch to confirm
             orders = self.order_manager.get_conditional_open_orders(symbol=symbol)
@@ -830,10 +1039,22 @@ class TradeChecker(AuthenticationManager):
                 "price": entry_price,
             }
 
-            # Merge any persisted fields (e.g. sl_order_id, tp_order_id)
+            # Merge any persisted fields (e.g. sl_order_id, tp_order_id,
+            # persisted_sl, persisted_tp, sl_trigger_price, tp_trigger_price)
             persisted = self._load_trade(trade_id)
             if persisted:
-                for key in ("sl_order_id", "tp_order_id", "high", "low", "stop_loss_price", "target"):
+                for key in (
+                    "sl_order_id",
+                    "tp_order_id",
+                    "high",
+                    "low",
+                    "stop_loss_price",
+                    "target",
+                    "sl_trigger_price",
+                    "tp_trigger_price",
+                    "persisted_sl",
+                    "persisted_tp",
+                ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])
 
