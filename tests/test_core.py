@@ -11,6 +11,7 @@ import asyncio
 import json
 from orbit.core.sentimen_cron import Croner
 
+patch("orbit.core.discord_manager.DiscordManager.send_to_webhook", return_value=None).start()
 
 class TestCore(unittest.TestCase):
 
