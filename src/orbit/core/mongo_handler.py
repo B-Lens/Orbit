@@ -421,3 +421,9 @@ class MongoHandler(ExceptionManager):
             )
         except Exception as exc:
             self.handle_exception(exc, f"Error storing simulated trade result for {symbol}")
+
+    def close(self) -> None:
+        """Close the MongoDB connection."""
+        if hasattr(self, "_mongo_client") and self._mongo_client is not None:
+            self._mongo_client.close()
+            logger.info("MongoDB connection closed.")
