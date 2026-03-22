@@ -127,11 +127,11 @@ class TradeChecker(AuthenticationManager):
 
         self.cooldown_tracker: Dict[str, str] = {}
         self.trades: Dict[str, Dict[str, Any]] = {}
-        self.om: OrderManager = order_manager or OrderManager()
+        self.order_manager: OrderManager = order_manager or OrderManager()
         self.mongo_handler: MongoHandler = mongo_handler or MongoHandler()
         self.live_prices: Dict[str, Tuple[float, float]] = {}
         self.isWebSocketRunning: bool = False
-        self.client: redis.StrictRedis = redis_client or redis.StrictRedis(
+        self.redis_client: redis.StrictRedis = redis_client or redis.StrictRedis(
             host="localhost", port=6379, db=0, decode_responses=True
         )
 
@@ -142,14 +142,14 @@ class TradeChecker(AuthenticationManager):
     def _save_trade(self, trade_id: str, trade: Dict[str, Any]) -> None:
         """Persist *trade* under ``trade:{trade_id}`` in Redis."""
         try:
-            self.client.set(_trade_key(trade_id), json.dumps(trade))
+            self.redis_client.set(_trade_key(trade_id), json.dumps(trade))
         except Exception as e:
             self.handle_exception(e, context_description=f"_save_trade({trade_id})")
 
     def _load_trade(self, trade_id: str) -> Optional[Dict[str, Any]]:
         """Load and deserialise the trade stored at ``trade:{trade_id}``."""
         try:
-            raw = self.client.get(_trade_key(trade_id))
+            raw = self.redis_client.get(_trade_key(trade_id))
             if raw:
                 return json.loads(raw)
         except Exception as e:
@@ -159,14 +159,14 @@ class TradeChecker(AuthenticationManager):
     def _register_order(self, order_id: str, trade_id: str) -> None:
         """Map ``order:{order_id}`` → *trade_id* in Redis."""
         try:
-            self.client.set(_order_key(order_id), trade_id)
+            self.redis_client.set(_order_key(order_id), trade_id)
         except Exception as e:
             self.handle_exception(e, context_description=f"_register_order({order_id})")
 
     def _trade_id_for_order(self, order_id: str) -> Optional[str]:
         """Return the *trade_id* that owns *order_id*, or ``None``."""
         try:
-            return self.client.get(_order_key(order_id))
+            return self.redis_client.get(_order_key(order_id))
         except Exception as e:
             self.handle_exception(e, context_description=f"_trade_id_for_order({order_id})")
         return None
@@ -183,8 +183,8 @@ class TradeChecker(AuthenticationManager):
                 for field in ("sl_order_id", "tp_order_id"):
                     oid = trade.get(field)
                     if oid:
-                        self.client.delete(_order_key(str(oid)))
-            self.client.delete(_trade_key(trade_id))
+                        self.redis_client.delete(_order_key(str(oid)))
+            self.redis_client.delete(_trade_key(trade_id))
         except Exception as e:
             self.handle_exception(e, context_description=f"_delete_trade_mapping({trade_id})")
 
@@ -200,7 +200,7 @@ class TradeChecker(AuthenticationManager):
 
     def is_in_cooldown(self, symbol: str) -> bool:
         """Return ``True`` if *symbol* is still within its cooldown window."""
-        cooldown_end = self.client.get(symbol)
+        cooldown_end = self.redis_client.get(symbol)
         if cooldown_end:
             try:
                 ind = get_indian_time()
@@ -221,7 +221,7 @@ class TradeChecker(AuthenticationManager):
             minutes = 5
         ind_time = get_indian_time()
         cooldown_end = (ind_time.now() + timedelta(hours=cooldown_hours, minutes=minutes)).isoformat()
-        self.client.set(symbol, cooldown_end)
+        self.redis_client.set(symbol, cooldown_end)
 
     # ------------------------------------------------------------------
     # Price helpers
@@ -289,7 +289,7 @@ class TradeChecker(AuthenticationManager):
             persisted = self._load_trade(trade_id) or {}
 
             # ---- fetch live open orders from broker ----
-            open_orders = self.om.get_conditional_open_orders(symbol=symbol)
+            open_orders = self.order_manager.get_conditional_open_orders(symbol=symbol)
             open_order_ids = {str(o.get("algoId", "")) for o in open_orders}
 
             stop_loss_order: Optional[Dict[str, Any]] = None
@@ -317,7 +317,7 @@ class TradeChecker(AuthenticationManager):
             # ---- recreate missing SL ----
             if stop_loss_order is None:
                 sl_price = self.calculate_sl_price(trade, risk_management)
-                stop_loss_order = self.om.place_sl_order(
+                stop_loss_order = self.order_manager.place_sl_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
                     stoploss_price=sl_price,
@@ -330,13 +330,13 @@ class TradeChecker(AuthenticationManager):
                     self._update_trade_field(trade_id, {"sl_order_id": new_sl_id})
                     # Remove stale mapping for old order id
                     if persisted_sl_id and persisted_sl_id != new_sl_id:
-                        self.client.delete(_order_key(persisted_sl_id))
+                        self.redis_client.delete(_order_key(persisted_sl_id))
                     logger.info(f"[SELF-HEAL] Placed missing SL for {symbol} at {sl_price} (order {new_sl_id})")
 
             # ---- recreate missing TP ----
             if take_profit_order is None and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE:
                 target_price = self.calculate_target_price(trade, risk_management)
-                take_profit_order = self.om.place_target_order(
+                take_profit_order = self.order_manager.place_target_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
                     target_price=target_price,
@@ -348,7 +348,7 @@ class TradeChecker(AuthenticationManager):
                     self._register_order(new_tp_id, trade_id)
                     self._update_trade_field(trade_id, {"tp_order_id": new_tp_id})
                     if persisted_tp_id and persisted_tp_id != new_tp_id:
-                        self.client.delete(_order_key(persisted_tp_id))
+                        self.redis_client.delete(_order_key(persisted_tp_id))
                     logger.info(f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})")
 
             return stop_loss_order, take_profit_order
@@ -528,7 +528,7 @@ class TradeChecker(AuthenticationManager):
         Returns:
             ``True`` if the position was closed, ``False`` otherwise.
         """
-        historical_df = self.om.mongo_handler.get_mongo_historical_data(symbol, interval="15m")
+        historical_df = self.order_manager.mongo_handler.get_mongo_historical_data(symbol, interval="15m")
         if historical_df is None or historical_df.empty:
             return False
 
@@ -547,13 +547,13 @@ class TradeChecker(AuthenticationManager):
         )
 
         if side == "BUY" and current_price > current_sma:
-            resp = self.om.place_market_order(symbol, 'SELL', quantity)
+            resp = self.order_manager.place_market_order(symbol, 'SELL', quantity)
             if resp:
                 trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
                 self._exit_trade(symbol, trade_id)
                 return True
         if side == "SELL" and current_price < current_sma:
-            resp = self.om.place_market_order(symbol, 'BUY', quantity)
+            resp = self.order_manager.place_market_order(symbol, 'BUY', quantity)
             if resp:
                 trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
                 self._exit_trade(symbol, trade_id)
@@ -577,7 +577,7 @@ class TradeChecker(AuthenticationManager):
         try:
             trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
 
-            placed = self.om.place_sl_order(symbol, side, new_sl, quantity)
+            placed = self.order_manager.place_sl_order(symbol, side, new_sl, quantity)
             time.sleep(0.5)
 
             if placed:
@@ -587,18 +587,18 @@ class TradeChecker(AuthenticationManager):
                 if current_stop_order and current_stop_order.get("algoId"):
                     old_sl_id = str(current_stop_order["algoId"])
                     try:
-                        self.om.cancel_algo_conditional_order(symbol=symbol, algo_id=old_sl_id)
+                        self.order_manager.cancel_algo_conditional_order(symbol=symbol, algo_id=old_sl_id)
                     except Exception as e:
                         self.handle_exception(e, f"Failed to cancel old SL order for {symbol} after placing new SL")
                     # Remove stale order mapping
-                    self.client.delete(_order_key(old_sl_id))
+                    self.redis_client.delete(_order_key(old_sl_id))
 
                 # Register new order mapping
                 self._register_order(new_sl_id, trade_id)
                 self._update_trade_field(trade_id, {"sl_order_id": new_sl_id, "stop_loss_price": new_sl})
 
             # Re-fetch to confirm
-            orders = self.om.get_conditional_open_orders(symbol=symbol)
+            orders = self.order_manager.get_conditional_open_orders(symbol=symbol)
             for o in orders:
                 if is_stop_order(o):
                     return o
@@ -840,7 +840,7 @@ class TradeChecker(AuthenticationManager):
             trades[symbol] = _dict
 
         # Clean up stale Redis entries for symbols no longer active on broker
-        for key in self.client.scan_iter(f"{TRADE_KEY_PREFIX}*"):
+        for key in self.redis_client.scan_iter(f"{TRADE_KEY_PREFIX}*"):
             trade_id = key[len(TRADE_KEY_PREFIX):]
             if trade_id not in active_symbols:
                 logger.info(f"[CLEANUP] Removing stale Redis trade mapping for trade_id={trade_id}")
