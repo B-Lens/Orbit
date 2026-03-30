@@ -44,25 +44,51 @@ def main():
                 continue
 
             user_prompt = f"""
-                          Review the following code diff.
-                          
-                          Focus ONLY on:
-                          - logical bugs
-                          - correctness issues
-                          - safety issues
-                          
-                          Ignore style, formatting, naming.
-                          
-                          If no critical issues exist, say so.
-                          
-                          FILE: {file}
-                          
-                          DIFF:
-                          {diff}
-                          """
+                You are reviewing a Git diff for **critical issues only**.
+                
+                Flag ONLY:
+                
+                1. Logical bugs (wrong conditions, incorrect state handling, bad assumptions)
+                2. Correctness issues (wrong return values, broken edge cases, data corruption)
+                3. Safety issues (crashes, None access, race conditions, resource leaks, security risks)
+                
+                DO NOT mention:
+                
+                * style
+                * formatting
+                * naming
+                * comments
+                * refactoring suggestions
+                * performance (unless it causes correctness bug)
+                
+                Rules:
+                
+                * Only report **real, high-confidence problems**
+                * If unsure, DO NOT report
+                * Keep output minimal
+                * One issue = one bullet
+                * Include exact reason and impact
+                * Reference the diff line when possible
+                
+                Output format:
+                
+                CRITICAL ISSUES:
+                
+                * [file:line] Problem → Impact
+                
+                If no issues found, output exactly:
+                NO CRITICAL ISSUES
+                
+                FILE:
+                {file}
+                
+                DIFF:
+                {diff}
+                """
+
 
             response = ai.chat(
-                system_prompt="You are a strict senior software engineer performing a code review.",
+                system_prompt="You are a strict Senior software engineer performing a code review.",
                 user_prompt=user_prompt,
             )
 
