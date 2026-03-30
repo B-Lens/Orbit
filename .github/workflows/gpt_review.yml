@@ -1,32 +1,13 @@
-name: GPT Code Review
+name: CodeRabiit Reviewer
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-
 jobs:
-  gpt-review:
+  review:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Upgrade deps
-        run: |
-          pip install --upgrade pip
-          pip install --upgrade typing_extensions langchain langchain-core
-
-      - name: GPT Review
-        uses: microsoft/gpt-review@v0.9.5
+      - uses: coderabbitai/ai-pr-reviewer@latest
         with:
-          # GitHub token (auto provided)
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-          # OpenAI key (you must add this in repo secrets)
-          OPENAI_API_KEY: ${{ secrets.MODEL_TOKEN }}
+          openai_api_key: ${{ secrets.MODEL_TOKEN }}
