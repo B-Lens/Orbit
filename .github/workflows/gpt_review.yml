@@ -17,8 +17,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Fix typing_extensions
-        run: pip install --upgrade typing_extensions
+      - name: Upgrade deps
+        run: |
+          pip install --upgrade pip
+          pip install --upgrade typing_extensions langchain langchain-core
 
       - name: GPT Review
         uses: microsoft/gpt-review@v0.9.5
