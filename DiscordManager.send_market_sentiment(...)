@@ -1,0 +1,18 @@
+
+---
+
+## Redis State Schema
+
+All trade state is stored in Redis. There is no in-process locking — Redis is the single source of truth shared across threads.
+
+| Key | Type | Value | Written by | Read by |
+|---|---|---|---|---|
+| `trade:{trade_id}` | String (JSON) | Full serialised trade dict | `TradeChecker` | `TradeChecker` |
+| `order:{order_id}` | String | `trade_id` | `TradeChecker`, `OrderManager` | `TradeChecker` |
+| `{symbol}` | String | ISO timestamp (cooldown end) | `TradeChecker` | `TradeChecker`, `SignalAnalyzer` |
+| `market_sentiments` | String | `"BULLISH"` / `"BEARISH"` / `"NEUTRAL"` | `Croner` | `SignalAnalyzer` |
+
+> **Note:** Cooldown keys use the bare symbol string (e.g. `BTCUSDT`) as the key — not a prefixed form.
+
+### Trade Dict Structure (stored at `trade:{trade_id}`)
+

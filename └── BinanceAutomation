@@ -1,0 +1,12 @@
+
+Every class that inherits from `ExceptionManager` automatically gains:
+- `handle_exception()` — generic exception handler with full traceback
+- `clientExceptionHandler()` — Binance `ClientError`-specific handler
+- All Discord webhook send methods from `DiscordManager`
+
+`BinanceAutomation` composes (not inherits) `SignalAnalyzer`, `OrderManager`, `TradeChecker`, and `Croner`.
+
+---
+
+## High-Level Architecture Diagram
+
