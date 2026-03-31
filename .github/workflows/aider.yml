@@ -79,6 +79,11 @@ jobs:
           - Do not explain or propose a plan. Directly make the necessary file changes.
           EOF
 
+      - name: Repo Map
+        continue-on-error: true
+        run: |
+          aider --show-repo-map > aider_repo_map.txt
+
       - name: Run Aider
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -150,3 +155,4 @@ jobs:
             aider.log
             aider_changes.diff
             aider_changes.patch
+            aider_repo_map.txt
