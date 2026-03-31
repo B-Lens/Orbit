@@ -5,17 +5,17 @@
 Orbit is an AI-based trading framework that bridges research experimentation and production trading. It integrates classical strategies, machine learning models, and reinforcement learning experiments into a modular, automation-friendly architecture for both market intelligence and trading operations.
 
 ### Key Features
-- **Market Intelligence:** Harness social media and news data for insights.
-- **Automated Trading:** Execute and monitor trades with precision.
-- **Modular Design:** Easily integrate custom strategies and tools.
-- **Research to Production:** Smooth transition from trading ideas to live trading.
+- **Market Intelligence:** Harness Reddit and news sentiment data for actionable insights using LLM-powered analysis.
+- **Automated Trading:** Execute and monitor Binance Futures trades with precision, including SL/TP lifecycle management.
+- **Modular Design:** Easily integrate custom strategies via a lazy-loading strategy registry.
+- **Research to Production:** Smooth transition from trading ideas to live trading with contradict simulation support.
 
 ## Setup and Installation
 
 ### Prerequisites
 - Python 3.10+
 - Linux environment (recommended)
-- Redis and MongoDB (optional based on configuration)
+- Redis and MongoDB (required for trade state and OHLCV data)
 
 ### Installation Steps
 1. Clone the repository:
@@ -38,7 +38,23 @@ Start the application with:
 ```
 poetry run orbit
 ```
-This command launches the main trading automation controller. Refer to the source code for customization and further configurations.
+This command launches `BinanceAutomation`, the top-level trading automation controller found in `src/orbit/core/main.py`. It orchestrates three long-running daemon threads:
+
+1. **Signal Analysis** — aligns to 15-minute candle boundaries, generates and processes trading signals via `SignalAnalyzer`, and sleeps for 900 seconds (15 minutes) between cycles.
+2. **Trade Checker** — monitors active Binance Futures positions and manages SL/TP lifecycle via `TradeChecker`.
+3. **Sentiment Cron** — runs hourly sentiment analysis via `Croner` and `SentimentWorkflow`.
+
+A fourth daemon thread, **MonitorThread**, periodically checks all worker threads every 300 seconds and sends Discord alerts if any have stopped.
+
+Configuration is loaded from `config/config.json` via `config/config.py`. Key configuration fields include:
+
+- `trading_pairs` — symbols analysed for signals: `BTCUSDT`, `ETHUSDT`, `BCHUSDT`.
+- `trade_checker_pair` — symbols monitored for open positions: `BCHUSDT`, `BTCUSDT`, `BNBUSDT`, `ETHUSDT`, `MKRUSDT`, `LTCUSDT`, `SOLUSDT`, `ATOMUSDT`, `XRPUSDT`.
+- `risk_management` — per-symbol risk fractions (`BTCUSDT`: 0.01, `ETHUSDT`: 0.03, `BCHUSDT`: 0.03) and a shared `stop_loss_percent` of 1.
+- `FUTURE_LEVERAGE` — default futures leverage of `2` (overridden to `5` for `BTCUSDT` in code).
+- `FIXED_TRADE_AMOUNT` — fixed notional per symbol (`BTCUSDT`: $600, `ETHUSDT`: $30, `BCHUSDT`: $30).
+- `cooldown_hours` — per-symbol cooldown after a trade (e.g. `SOLUSDT`: 8 h, `ETHUSDT`: 1 h, others: 2 h).
+- `trading_pairs_precision` — quantity precision (decimal places) per symbol used when placing orders.
 
 ## Contributing
 
@@ -65,26 +81,28 @@ For any questions or to discuss ideas, please create an issue.
 flowchart LR
     subgraph AI["Market Intelligence Engine"]
         A1[Reddit / News Clients]
-        A2[Sentiment Analysis]
-        A3[Sentiment Workflow]
-        A4[Sentiment Data]
-        A5[Sentiment Market Impact]
-        A6[(MongoDB)]
-        A7[(Redis)]
+        A2[WeightedRedditAnalyzer / LLM]
+        A3[SentimentWorkflow]
+        A4[Sentiment Score & Signal]
+        A5[MarketIndicators - VIX / Fear & Greed]
+        A6[(MongoDB - crypto_sentiment)]
+        A7[(Redis - sentiment cache)]
         A1 --> A2 --> A3 --> A4 --> A7
         A3 --> A5 --> A6
     end
     subgraph CORE["Core Engine (Threaded)"]
-        C1[Strategy Signal Generation]
-        C2[Order Manager]
-        C3[Trade SL/TP Monitoring]
-        C4[(MongoDB OHLCV)]
-        C5[(Redis)]
+        C1[SignalAnalyzer - Strategy Registry]
+        C2[OrderManager - Binance Futures]
+        C3[TradeChecker - SL/TP Monitor]
+        C4[ContradictSimulator]
+        C5[(MongoDB - OHLCV)]
+        C6[(Redis - trade & order state)]
         C1 --> C2
         C2 --> C3
-        C3 <--> C5
-        C2 <--> C5
-        C1 <--> C4
+        C3 <--> C6
+        C2 <--> C6
+        C1 <--> C5
+        C2 --> C4
     end
 ```
 
