@@ -88,7 +88,7 @@ flowchart LR
         A6[(MongoDB - crypto_sentiment)]
         A7[(Redis - sentiment cache)]
         A1 --> A2 --> A3 --> A4 --> A7
-        A3 --> A5 --> A6
+        A3 --> A4 --> A5 --> A6
     end
     subgraph CORE["Core Engine (Threaded)"]
         C1[SignalAnalyzer - Strategy Registry]
