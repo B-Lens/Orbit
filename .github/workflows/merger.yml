@@ -1,0 +1,25 @@
+name: PR Merger
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [labeled, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: >
+      contains(github.event.pull_request.labels.*.name, 'ai-autonomous') &&
+      github.event.pull_request.state == 'open'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Enable auto-merge when approved
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          merge-method: squash
