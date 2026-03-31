@@ -11,6 +11,10 @@ This module orchestrates the full market sentiment analysis pipeline by:
 - Persisting results to MongoDB
 - Producing trading signals and trends
 
+Also provides a lightweight `run_news_update()` path that only fetches
+*new* articles since the last call and re-scores news sentiment without
+re-running the full Reddit / indicator pipeline — keeping LLM token usage low.
+
 Designed for traceability using LangSmith.
 """
 
@@ -19,13 +23,16 @@ import time
 import logging
 from pydantic import BaseModel, Field
 from tqdm import tqdm
-from datetime import datetime
-from typing import Dict, Any, List, Literal
+from datetime import datetime, timezone
+from typing import Dict, Any, List, Literal, Optional
 
 from langsmith import traceable
 
 from orbit.market_intelligence.clients.reddit_client import RedditClient
-from orbit.market_intelligence.clients.news_client import fetch_news_articles
+from orbit.market_intelligence.clients.news_client import (
+    fetch_news_articles,
+    fetch_news_articles_since,
+)
 from orbit.market_intelligence.analysis.reddit_sentiment import (
     RedditSentimentEntry,
     WeightedRedditAnalyzer,
@@ -77,6 +84,11 @@ class SentimentWorkflow:
     - Combine multiple sentiment signals into a unified score
     - Persist analysis results to MongoDB
     - Generate trends and trading signals
+
+    Lightweight path:
+    - ``run_news_update()`` fetches only *new* articles since the last call,
+      re-scores news sentiment, and patches the latest MongoDB record.
+      No Reddit or indicator calls are made, keeping LLM token usage low.
     """
 
     def __init__(self, llm: LLM) -> None:
@@ -90,6 +102,12 @@ class SentimentWorkflow:
         self.reddit_client: RedditClient = RedditClient()
         self.reddit_analyzer: WeightedRedditAnalyzer = WeightedRedditAnalyzer(llm)
         self.mongodb: MongoDBManager = MongoDBManager()
+
+        # Timestamp of the last news fetch — used by run_news_update()
+        self._last_news_fetch: Optional[datetime] = None
+
+        # Last news sentiment produced by any run — used for drift detection
+        self.last_news_sentiment: Optional[NewsSentiment] = None
 
     # ------------------------------------------------------------------
     # TRACEABLE STEPS
@@ -161,7 +179,8 @@ class SentimentWorkflow:
         Returns:
             Combined news text.
         """
-        news_article:str = fetch_news_articles.invoke(topic)
+        news_article: str = fetch_news_articles.invoke(topic)
+        self._last_news_fetch = datetime.now(timezone.utc)
         return news_article
 
     @traceable(name="fetch_indicators")
@@ -204,20 +223,24 @@ class SentimentWorkflow:
             raw_content = self.llm.invoke(prompt)
             raw_content = str(raw_content)
             data = extract_json(raw_content)
-            return NewsSentiment(**data)
+            result = NewsSentiment(**data)
+            self.last_news_sentiment = result
+            return result
 
         except Exception:
             logger.exception("News sentiment analysis failed")
-            return NewsSentiment(
+            fallback = NewsSentiment(
                 sentiment="NEUTRAL",
                 confidence=0.3,
-                explanation="Analysis failed"
+                explanation="Analysis failed",
             )
+            self.last_news_sentiment = fallback
+            return fallback
 
     def get_reasoning(
         self,
         posts: List[Dict[str, Any]],
-        news_sentiment: NewsSentiment
+        news_sentiment: NewsSentiment,
     ) -> str:
         """
         Generate LLM-based reasoning for final market sentiment.
@@ -247,6 +270,100 @@ class SentimentWorkflow:
         except Exception:
             logger.exception("Reasoning generation failed")
             return "Market reasoning unavailable."
+
+    # ------------------------------------------------------------------
+    # LIGHTWEIGHT NEWS-ONLY UPDATE
+    # ------------------------------------------------------------------
+
+    async def run_news_update(self) -> Dict[str, Any]:
+        """
+        Lightweight update: fetch only *new* news articles and re-score
+        news sentiment without touching Reddit or macro indicators.
+
+        This is designed to be called every 10 minutes.  It returns a
+        minimal result dict so the caller can decide whether a full
+        ``run_analysis()`` is warranted.
+
+        Token usage is kept low because:
+        - No Reddit batch analysis is performed.
+        - The LLM prompt is only sent when new articles are actually found.
+
+        Returns:
+            Dict with keys:
+                ``has_new_articles`` (bool),
+                ``news_sentiment`` (NewsSentiment | None),
+                ``new_article_count`` (int),
+                ``timestamp`` (str),
+                ``success`` (bool).
+        """
+        try:
+            news_text, new_ids = fetch_news_articles_since(
+                since=self._last_news_fetch
+            )
+            self._last_news_fetch = datetime.now(timezone.utc)
+
+            if not news_text:
+                logger.info("News update: no new articles found.")
+                return {
+                    "success": True,
+                    "has_new_articles": False,
+                    "news_sentiment": None,
+                    "new_article_count": 0,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+
+            logger.info(
+                f"News update: {len(new_ids)} new articles — running LLM sentiment."
+            )
+            news_sentiment = self.get_market_sentiments(news_text)
+
+            # Patch the most recent MongoDB record with the refreshed news sentiment
+            try:
+                recent = self.mongodb.get_recent_sentiments(hours=1)
+                if recent:
+                    latest = recent[0]
+                    record_id = latest.get("_id")
+                    if record_id:
+                        self.mongodb.sentiment_history.update_one(
+                            {"_id": record_id},
+                            {
+                                "$set": {
+                                    "news_sentiment.latest_update": {
+                                        "sentiment": news_sentiment.sentiment,
+                                        "confidence": news_sentiment.confidence,
+                                        "explanation": news_sentiment.explanation,
+                                        "updated_at": datetime.now(
+                                            timezone.utc
+                                        ).isoformat(),
+                                        "new_articles": len(new_ids),
+                                    }
+                                }
+                            },
+                        )
+                        logger.info(
+                            f"Patched MongoDB record {record_id} with fresh news sentiment."
+                        )
+            except Exception:
+                logger.exception("Failed to patch MongoDB record with news update.")
+
+            return {
+                "success": True,
+                "has_new_articles": True,
+                "news_sentiment": news_sentiment,
+                "new_article_count": len(new_ids),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        except Exception as e:
+            logger.exception("run_news_update failed")
+            return {
+                "success": False,
+                "has_new_articles": False,
+                "news_sentiment": None,
+                "new_article_count": 0,
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
 
     # ------------------------------------------------------------------
     # MAIN WORKFLOW
@@ -299,7 +416,9 @@ class SentimentWorkflow:
 
             historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
             historical_score: float = (
-                sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment) if historical_sentiment else 0
+                sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment)
+                if historical_sentiment
+                else 0
             )
 
             reasoning: str = self.get_reasoning(top_posts, news_sentiment)
@@ -308,7 +427,7 @@ class SentimentWorkflow:
                 reddit_result,
                 news_sentiment,
                 indicators,
-                historical_score=historical_score
+                historical_score=historical_score,
             )
 
             record_id = self._save_to_database(
@@ -353,10 +472,11 @@ class SentimentWorkflow:
         reddit_result: Dict[str, Any],
         news_sentiment: NewsSentiment,
         indicators: MarketIndicators,
-        historical_score: float = 0.0, # Placeholder for historical data
+        historical_score: float = 0.0,
     ) -> Dict[str, Any]:
         """
-        Combine Reddit, News, Indicator signals and historical score into a final sentiment score.
+        Combine Reddit, News, Indicator signals and historical score into a
+        final sentiment score.
 
         Returns:
             Dictionary with combined score, label, and confidence.
@@ -368,7 +488,7 @@ class SentimentWorkflow:
         fear_greed_weight = 0.05
 
         fear_greed = indicators.fear_greed_index
-        fear_greed_score:float = 0
+        fear_greed_score: float = 0
 
         if fear_greed is not None:
             direction = 1 if fear_greed < 50 else -1
@@ -386,8 +506,9 @@ class SentimentWorkflow:
                 else 0
             )
             + historical_score * historical_weight
-            + (indicators.vix or 0) * vix_weight * -1  # Higher VIX = more bearish
-            + fear_greed_score)
+            + (indicators.vix or 0) * vix_weight * -1
+            + fear_greed_score
+        )
 
         if combined_score > 0.2:
             label = "BULLISH"
@@ -399,7 +520,11 @@ class SentimentWorkflow:
         return {
             "score": round(combined_score, 3),
             "sentiment": label,
-            "confidence": round(reddit_result["confidence"] * reddit_weight + news_sentiment.confidence * news_weight, 2),
+            "confidence": round(
+                reddit_result["confidence"] * reddit_weight
+                + news_sentiment.confidence * news_weight,
+                2,
+            ),
         }
 
     def _save_to_database(
