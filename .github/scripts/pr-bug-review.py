@@ -44,40 +44,30 @@ def main():
                 continue
 
             user_prompt = f"""
-                You are reviewing a Git diff for **critical issues only**.
+                Review this Git diff for real correctness problems only.
+
+                Report:
+                - logical bugs
+                - incorrect behavior
+                - crash risks
+                - None access
+                - bad assumptions
+                - broken edge cases
+                - security risks
                 
-                Flag ONLY:
-                
-                1. Logical bugs (wrong conditions, incorrect state handling, bad assumptions)
-                2. Correctness issues (wrong return values, broken edge cases, data corruption)
-                3. Safety issues (crashes, None access, race conditions, resource leaks, security risks)
-                
-                DO NOT mention:
-                
-                * style
-                * formatting
-                * naming
-                * comments
-                * refactoring suggestions
-                * performance (unless it causes correctness bug)
+                Ignore:
+                - style
+                - formatting
+                - naming
+                - refactoring
+                - comments
+                - performance
                 
                 Rules:
-                
-                * Only report **real, high-confidence problems**
-                * If unsure, DO NOT report
-                * Keep output minimal
-                * One issue = one bullet
-                * Include exact reason and impact
-                * Reference the diff line when possible
-                
-                Output format:
-                
-                CRITICAL ISSUES:
-                
-                * [file:line] Problem → Impact
-                
-                If no issues found, output exactly:
-                NO CRITICAL ISSUES
+                - Only high-confidence issues
+                - One bullet per issue
+                - Include file + reason + impact
+                - If none, output: NO CRITICAL ISSUES
                 
                 FILE:
                 {file}
@@ -88,7 +78,7 @@ def main():
 
 
             response = ai.chat(
-                system_prompt="You are a strict Senior software engineer performing a code review.",
+                system_prompt="You are a strict senior engineer reviewing for correctness bugs only.",
                 user_prompt=user_prompt,
             )
 
