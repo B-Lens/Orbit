@@ -1,9 +1,10 @@
 name: Update Supermemory
 
 on:
-  push:
+  pull_request:
     branches:
       - main
+    types: [closed]
 
 jobs:
   update-memory:
@@ -24,7 +25,7 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install supermemory
+          pip install supermemory openai
 
       - name: Update supermemory
         run: python .github/scripts/update_supermemory.py
