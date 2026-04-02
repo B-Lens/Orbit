@@ -30,7 +30,7 @@ jobs:
       - name: Update supermemory
         run: python .github/scripts/update_supermemory.py
         env:
-          BASE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
           SUPERMEMORY_API_KEY: ${{ secrets.SUPERMEMORY_API_KEY }}
           MODEL_TOKEN: ${{ secrets.MODEL_TOKEN }}
