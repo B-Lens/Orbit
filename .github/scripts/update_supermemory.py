@@ -2,7 +2,7 @@ import os
 import subprocess
 # pylint: disable=import-error
 from ai_client import GitHubModelClient
-from supermemory import Memory
+from supermemory import Supermemory   # ✅ FIXED
 
 
 def run_git_command(cmd):
@@ -88,7 +88,7 @@ def main():
                 
                 DIFF:
                 {diff}
-            """
+                """
 
             response = ai.chat(
                 system_prompt="You summarize repository evolution for long-term AI memory.",
@@ -106,7 +106,7 @@ def main():
         return
 
     try:
-        memory = Memory(
+        memory = Supermemory(   # ✅ FIXED
             api_key=api_key,
             namespace="repo-evolution"
         )
