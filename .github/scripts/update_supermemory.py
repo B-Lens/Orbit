@@ -108,10 +108,9 @@ def main():
     try:
         memory = Supermemory(   # ✅ FIXED
             api_key=api_key,
-            namespace="repo-evolution"
         )
 
-        memory.add(
+        memory.memories.add(
             content=reasoning_output,
             metadata={
                 "type": "pr_merge",
