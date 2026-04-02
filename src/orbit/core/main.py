@@ -315,7 +315,7 @@ class BinanceAutomation(ExceptionManager):
 
         def cron_runner() -> None:
             try:
-                croner.sentiment_croner()
+                croner.news_croner()
             except Exception as e:
                 self.handle_exception(e, context_description="Exception in cron thread")
 
