@@ -72,28 +72,28 @@ def main():
             continue
 
         user_prompt = f"""
-You are analyzing a merged PR.
-
-Extract REASONING about what changed in the repository.
-
-Focus on:
-- capability added or changed
-- behavior change
-- architectural impact
-- workflow changes
-- new integrations
-- bug fixes
-
-Do NOT mention formatting or style.
-
-Return concise bullet points.
-
-FILE:
-{file}
-
-DIFF:
-{diff}
-"""
+            You are analyzing a merged PR for Adding to the Memory Context.
+            
+            Extract REASONING about what changed in the repository.
+            
+            Focus on:
+            - capability added or changed
+            - behavior change
+            - architectural impact
+            - workflow changes
+            - new integrations
+            - bug fixes
+            
+            Do NOT mention formatting or style.
+            
+            Return concise bullet points.
+            
+            FILE:
+            {file}
+            
+            DIFF:
+            {diff}
+            """
 
         response = ai.chat(
             system_prompt="You summarize repository evolution for long-term AI memory.",
