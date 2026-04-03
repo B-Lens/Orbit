@@ -6,15 +6,14 @@ import requests
 import logging
 from orbit.utils.utils import get_indian_time
 from dotenv import load_dotenv
-from config.webhooks import WEBHOOKS as WEBHOOK_URLS
+from config.webhooks import WEBHOOKS
 
 load_dotenv()  # Load environment variables from .env file
 
 logger = logging.getLogger("Orbit")
 
 class URLS:
-    WEBHOOKS = WEBHOOK_URLS
-
+    
     @classmethod
     def get_url(cls, key: str) -> str:
         """
