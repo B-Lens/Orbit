@@ -1,3 +1,4 @@
 .env
 issue.txt
 .aider*
+config/webhooks.yaml
