@@ -25,12 +25,15 @@ jobs:
           python-version: "3.11"
 
       - name: Install deps
-        run: pip install openai
+        run: pip install openai requests
 
       - name: Run AI analysis
         env:
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MODEL_TOKEN: ${{ secrets.MODEL_TOKEN }}
         run: python .github/scripts/pr-bug-review.py
 
