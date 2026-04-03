@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import requests
+import yaml
 
 import logging
 from orbit.utils.utils import get_indian_time
@@ -11,27 +12,30 @@ load_dotenv()  # Load environment variables from .env file
 
 logger = logging.getLogger("Orbit")
 
+def _load_webhooks() -> dict:
+    """
+    Load webhook URLs from the YAML config file.
+
+    Returns:
+        dict: A dictionary mapping webhook keys to their URLs.
+
+    Raises:
+        FileNotFoundError: If the webhooks YAML file cannot be found.
+        KeyError: If the YAML file does not contain a 'webhooks' key.
+    """
+    config_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "config", "webhooks.yaml"
+    )
+    config_path = os.path.abspath(config_path)
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    return config["webhooks"]
+
+
 class URLS:
-    WEBHOOKS = {
-        "logs": os.getenv("LOGS_WEBHOOK"),
-        "params": os.getenv("PARAMS_WEBHOOK"),
-        "active_trades": os.getenv("ACTIVE_TRADES_WEBHOOK"),
-        "signal": os.getenv("SIGNAL_WEBHOOK"),
-        "exception": os.getenv("EXCEPTION_WEBHOOK"),
-        "exception_params": os.getenv("EXCEPTION_PARAMS_WEBHOOK"),
-        "cooldown": os.getenv("COOLDOWN_WEBHOOK"),
-        "sl_update": os.getenv("SL_UPDATE_WEBHOOK"),
-        "true_alarm": os.getenv("TRUE_ALARM_WEBHOOK"),
-        "false_alarm": os.getenv("FALSE_ALARM_WEBHOOK"),
-        "active_trade_prices": os.getenv("ACTIVE_TRADE_PRICES_WEBHOOK"),
-        "ai_predictions": os.getenv("AI_PREDICTIONS_WEBHOOK"),
-        "average_alarm": os.getenv("AVERAGE_ALARM_WEBHOOK"),
-        "market_sentiment": os.getenv("MARKET_SENTIMENT_WEBHOOK"),
-        "alerts": os.getenv("ALERTS_WEBHOOK"),
-        "websocket": os.getenv("WEBSOCKET_WEBHOOK"),
-        "chart_signal": os.getenv("CHART_SIGNAL_WEBHOOK"),
-        "levels_webhook": os.getenv("LEVELS_WEBHOOK"),
-    }
+    WEBHOOKS = _load_webhooks()
 
     @classmethod
     def get_url(cls, key: str) -> str:
@@ -89,7 +93,7 @@ class DiscordManager:
         """
         time = get_indian_time()
         return time.now().strftime("%d-%m-%y %H:%M")
-    
+
     @staticmethod
     def _truncate(text: str, limit: int):
         if not text:
@@ -157,7 +161,6 @@ class DiscordManager:
                 "embeds": [embed],
             }
 
-
             file_path = kwargs.get("file_path")
 
             if file_path:
@@ -188,7 +191,7 @@ class DiscordManager:
     def send_market_sentiment(self, data: str, description: str, fields: dict = None):
         return self.send_to_webhook("market_sentiment", data, description, fields)
 
-    def send_prediction(self, data: str, description: str, fields: dict = None, file_path: str=None):
+    def send_prediction(self, data: str, description: str, fields: dict = None, file_path: str = None):
         return self.send_to_webhook("ai_predictions", data, description, fields, file_path=file_path)
 
     def send_active_trade_prices(self, data: str, description: str, fields: dict = None):
@@ -226,9 +229,9 @@ class DiscordManager:
 
     def send_cooldown_update(self, data: str, description: str, fields: dict = None):
         return self.send_to_webhook("cooldown", data, description, fields)
-    
+
     def send_levels_info(self, data: str, description: str, fields: dict = None):
         return self.send_to_webhook("levels_webhook", data, description, fields)
-    
-    def send_chart_to_webhook(self, file_path: str, data: str, description:str, fields: dict = None):
-        return self.send_to_webhook("chart_signal", data, description, fields, file_path=file_path )
+
+    def send_chart_to_webhook(self, file_path: str, data: str, description: str, fields: dict = None):
+        return self.send_to_webhook("chart_signal", data, description, fields, file_path=file_path)
