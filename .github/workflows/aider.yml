@@ -82,7 +82,7 @@ jobs:
       - name: Repo Map
         continue-on-error: true
         run: |
-          aider --show-repo-map > aider_repo_map.txt
+          aider --show-repo-map --exit --yes > aider_repo_map.txt
 
       - name: Run Aider
         env:
