@@ -1,95 +1,62 @@
 import os
-import sys
 import json
 import requests
-
 import logging
-from orbit.utils.utils import get_indian_time
-from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from .env file
+from orbit.utils.utils import get_indian_time
+from orbit.core.discord_webhook_registry import DiscordWebhookRegistry
 
 logger = logging.getLogger("Orbit")
 
-class URLS:
-    WEBHOOKS = {
-        "logs": os.getenv("LOGS_WEBHOOK"),
-        "params": os.getenv("PARAMS_WEBHOOK"),
-        "active_trades": os.getenv("ACTIVE_TRADES_WEBHOOK"),
-        "signal": os.getenv("SIGNAL_WEBHOOK"),
-        "exception": os.getenv("EXCEPTION_WEBHOOK"),
-        "exception_params": os.getenv("EXCEPTION_PARAMS_WEBHOOK"),
-        "cooldown": os.getenv("COOLDOWN_WEBHOOK"),
-        "sl_update": os.getenv("SL_UPDATE_WEBHOOK"),
-        "true_alarm": os.getenv("TRUE_ALARM_WEBHOOK"),
-        "false_alarm": os.getenv("FALSE_ALARM_WEBHOOK"),
-        "active_trade_prices": os.getenv("ACTIVE_TRADE_PRICES_WEBHOOK"),
-        "ai_predictions": os.getenv("AI_PREDICTIONS_WEBHOOK"),
-        "average_alarm": os.getenv("AVERAGE_ALARM_WEBHOOK"),
-        "market_sentiment": os.getenv("MARKET_SENTIMENT_WEBHOOK"),
-        "alerts": os.getenv("ALERTS_WEBHOOK"),
-        "websocket": os.getenv("WEBSOCKET_WEBHOOK"),
-        "chart_signal": os.getenv("CHART_SIGNAL_WEBHOOK"),
-        "levels_webhook": os.getenv("LEVELS_WEBHOOK"),
-    }
-
-    @classmethod
-    def get_url(cls, key: str) -> str:
-        """
-        Retrieve the webhook URL for the given key.
-
-        Args:
-            key (str): The key to identify the webhook.
-
-        Returns:
-            str: The webhook URL.
-
-        Raises:
-            ValueError: If the key does not exist in WEBHOOKS.
-        """
-        if key not in cls.WEBHOOKS:
-            raise ValueError(f"Invalid webhook key: {key}")
-        return cls.WEBHOOKS[key]
+# Module-level singleton registry — one place to swap in a secret manager.
+_webhook_registry = DiscordWebhookRegistry()
 
 
 class DiscordManager:
     """
     Manages sending notifications to Discord webhooks.
+
+    Webhook URLs are resolved exclusively through :class:`DiscordWebhookRegistry`,
+    keeping raw URLs out of environment variables and away from the rest of the
+    codebase.
     """
-    EMBED_COLOR = 16711680  # Red color constant
+
+    EMBED_COLOR = 16711680  # Red
     MAX_CONTENT = 2000
     MAX_DESCRIPTION = 4096
     MAX_FIELD_VALUE = 1024
     MAX_FIELDS = 25
     MAX_TITLE = 256
 
-    def __init__(self):
-        pass
+    def __init__(self) -> None:
+        self._registry = _webhook_registry
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def process_fields(fields: dict) -> list:
         """
-        Process a dictionary of fields into the format required by Discord.
+        Convert a plain dict into the list-of-dicts format Discord expects.
 
         Args:
-            fields (dict): A dictionary of field names and values.
+            fields: Mapping of field name → value.
 
         Returns:
-            list: A list of dictionaries formatted for Discord embeds.
+            List of Discord embed field dicts.
         """
-        return [{"name": key, "value": str(value), "inline": True} for key, value in fields.items()]
+        return [
+            {"name": key, "value": str(value), "inline": True}
+            for key, value in fields.items()
+        ]
 
     @staticmethod
     def get_current_time() -> str:
-        """
-        Get the current time formatted as a string in Indian Standard Time.
-
-        Returns:
-            str: The formatted current time.
-        """
+        """Return the current Indian Standard Time as a formatted string."""
         time = get_indian_time()
         return time.now().strftime("%d-%m-%y %H:%M")
-    
+
     @staticmethod
     def _truncate(text: str, limit: int):
         if not text:
@@ -98,19 +65,42 @@ class DiscordManager:
             return text[:limit], True
         return text, False
 
-    def send_to_webhook(self, key: str, data: str, description: str, fields: dict = None, **kwargs):
+    # ------------------------------------------------------------------
+    # Core dispatch
+    # ------------------------------------------------------------------
+
+    def send_to_webhook(
+        self,
+        key: str,
+        data: str,
+        description: str,
+        fields: dict = None,
+        **kwargs,
+    ):
+        """
+        Build a Discord embed payload and POST it to the webhook for *key*.
+
+        Args:
+            key:         Logical chat name resolved via :class:`DiscordWebhookRegistry`.
+            data:        Top-level ``content`` string (appears above the embed).
+            description: Embed description text.
+            fields:      Optional dict of name → value pairs rendered as embed fields.
+            **kwargs:    ``file_path`` – local path to attach as a file upload.
+
+        Returns:
+            HTTP status code returned by Discord, or ``None`` on error.
+        """
         try:
-            url = URLS.get_url(key)
+            url = self._registry.get_url(key)
+
             if data is None:
                 data = ""
 
             truncated = False
 
-            # 🔹 Truncate content
             data, was_cut = self._truncate(data, self.MAX_CONTENT)
             truncated = truncated or was_cut
 
-            # 🔹 Truncate description
             description, was_cut = self._truncate(description, self.MAX_DESCRIPTION)
             truncated = truncated or was_cut
 
@@ -124,24 +114,22 @@ class DiscordManager:
                     if cut_name or cut_val:
                         truncated = True
 
-                    processed_fields.append({
-                        "name": name,
-                        "value": value,
-                        "inline": True
-                    })
+                    processed_fields.append(
+                        {"name": name, "value": value, "inline": True}
+                    )
 
-            # 🔹 Respect max 25 fields
             if len(processed_fields) > self.MAX_FIELDS:
-                processed_fields = processed_fields[:self.MAX_FIELDS]
+                processed_fields = processed_fields[: self.MAX_FIELDS]
                 truncated = True
 
-            # 🔹 If anything was truncated, add warning field
             if truncated:
-                processed_fields.append({
-                    "name": "⚠ Warning",
-                    "value": "Message was truncated due to Discord size limits.",
-                    "inline": False
-                })
+                processed_fields.append(
+                    {
+                        "name": "⚠ Warning",
+                        "value": "Message was truncated due to Discord size limits.",
+                        "inline": False,
+                    }
+                )
 
             embed = {
                 "description": description,
@@ -150,27 +138,25 @@ class DiscordManager:
             }
 
             if description or processed_fields:
-                embed["title"] = self.get_current_time()[:self.MAX_TITLE]
+                embed["title"] = self.get_current_time()[: self.MAX_TITLE]
 
-            payload = {
-                "content": data,
-                "embeds": [embed],
-            }
-
+            payload = {"content": data, "embeds": [embed]}
 
             file_path = kwargs.get("file_path")
 
             if file_path:
-                with open(file_path, 'rb') as f:
-                    files = {'file': (os.path.basename(file_path), f)}
-                    multipart_data = {'payload_json': json.dumps(payload)}
+                with open(file_path, "rb") as f:
+                    files = {"file": (os.path.basename(file_path), f)}
+                    multipart_data = {"payload_json": json.dumps(payload)}
                     response = requests.post(url, data=multipart_data, files=files)
             else:
                 response = requests.post(url, json=payload)
 
             if response.status_code != 204:
                 logger.error(
-                    f"Failed webhook | Status: {response.status_code} | Response: {response.text}"
+                    "Failed webhook | Status: %s | Response: %s",
+                    response.status_code,
+                    response.text,
                 )
 
             return response.status_code
@@ -178,7 +164,10 @@ class DiscordManager:
         except Exception as e:
             logger.exception("Error sending webhook '%s': %s", key, str(e))
 
-    # Webhook calls
+    # ------------------------------------------------------------------
+    # Named webhook helpers
+    # ------------------------------------------------------------------
+
     def send_websocket_logs(self, data: str, description: str, fields: dict = None):
         return self.send_to_webhook("websocket", data, description, fields)
 
@@ -188,8 +177,16 @@ class DiscordManager:
     def send_market_sentiment(self, data: str, description: str, fields: dict = None):
         return self.send_to_webhook("market_sentiment", data, description, fields)
 
-    def send_prediction(self, data: str, description: str, fields: dict = None, file_path: str=None):
-        return self.send_to_webhook("ai_predictions", data, description, fields, file_path=file_path)
+    def send_prediction(
+        self,
+        data: str,
+        description: str,
+        fields: dict = None,
+        file_path: str = None,
+    ):
+        return self.send_to_webhook(
+            "ai_predictions", data, description, fields, file_path=file_path
+        )
 
     def send_active_trade_prices(self, data: str, description: str, fields: dict = None):
         return self.send_to_webhook("active_trade_prices", data, description, fields)
@@ -226,9 +223,17 @@ class DiscordManager:
 
     def send_cooldown_update(self, data: str, description: str, fields: dict = None):
         return self.send_to_webhook("cooldown", data, description, fields)
-    
+
     def send_levels_info(self, data: str, description: str, fields: dict = None):
         return self.send_to_webhook("levels_webhook", data, description, fields)
-    
-    def send_chart_to_webhook(self, file_path: str, data: str, description:str, fields: dict = None):
-        return self.send_to_webhook("chart_signal", data, description, fields, file_path=file_path )
+
+    def send_chart_to_webhook(
+        self,
+        file_path: str,
+        data: str,
+        description: str,
+        fields: dict = None,
+    ):
+        return self.send_to_webhook(
+            "chart_signal", data, description, fields, file_path=file_path
+        )
