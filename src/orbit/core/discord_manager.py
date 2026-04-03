@@ -6,32 +6,14 @@ import requests
 import logging
 from orbit.utils.utils import get_indian_time
 from dotenv import load_dotenv
+from config.webhooks import WEBHOOKS as WEBHOOK_URLS
 
 load_dotenv()  # Load environment variables from .env file
 
 logger = logging.getLogger("Orbit")
 
 class URLS:
-    WEBHOOKS = {
-        "logs": os.getenv("LOGS_WEBHOOK"),
-        "params": os.getenv("PARAMS_WEBHOOK"),
-        "active_trades": os.getenv("ACTIVE_TRADES_WEBHOOK"),
-        "signal": os.getenv("SIGNAL_WEBHOOK"),
-        "exception": os.getenv("EXCEPTION_WEBHOOK"),
-        "exception_params": os.getenv("EXCEPTION_PARAMS_WEBHOOK"),
-        "cooldown": os.getenv("COOLDOWN_WEBHOOK"),
-        "sl_update": os.getenv("SL_UPDATE_WEBHOOK"),
-        "true_alarm": os.getenv("TRUE_ALARM_WEBHOOK"),
-        "false_alarm": os.getenv("FALSE_ALARM_WEBHOOK"),
-        "active_trade_prices": os.getenv("ACTIVE_TRADE_PRICES_WEBHOOK"),
-        "ai_predictions": os.getenv("AI_PREDICTIONS_WEBHOOK"),
-        "average_alarm": os.getenv("AVERAGE_ALARM_WEBHOOK"),
-        "market_sentiment": os.getenv("MARKET_SENTIMENT_WEBHOOK"),
-        "alerts": os.getenv("ALERTS_WEBHOOK"),
-        "websocket": os.getenv("WEBSOCKET_WEBHOOK"),
-        "chart_signal": os.getenv("CHART_SIGNAL_WEBHOOK"),
-        "levels_webhook": os.getenv("LEVELS_WEBHOOK"),
-    }
+    WEBHOOKS = WEBHOOK_URLS
 
     @classmethod
     def get_url(cls, key: str) -> str:
@@ -231,4 +213,4 @@ class DiscordManager:
         return self.send_to_webhook("levels_webhook", data, description, fields)
     
     def send_chart_to_webhook(self, file_path: str, data: str, description:str, fields: dict = None):
-        return self.send_to_webhook("chart_signal", data, description, fields, file_path=file_path )
+        return self.send_to_webhook("chart_signal", data, description, fields, file_path=file_path)
