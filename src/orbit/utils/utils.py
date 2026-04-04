@@ -17,12 +17,10 @@ def require_env(name: str) -> str:
         raise RuntimeError(f"{name} environment variable is not set")
     return value
 
-def get_indian_time():
+def get_indian_time() -> datetime.datetime:
     utc_now = datetime.datetime.utcnow()
     india_timezone = pytz.timezone("Asia/Kolkata")
-    india_time = utc_now.replace(tzinfo=pytz.utc).astimezone(
-        india_timezone
-    )
+    india_time = utc_now.replace(tzinfo=pytz.utc).astimezone(india_timezone)
     return india_time
 
 def get_symbol_price(symbol: str):
