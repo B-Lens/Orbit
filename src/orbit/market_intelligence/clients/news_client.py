@@ -36,7 +36,7 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
 
     if not NEWSDATA_API_KEY:
         logger.error("NEWSDATA_API_KEY not configured")
-        return "", []
+        return "", [], _last_fetch_time
 
     query = "bitcoin OR crypto OR stock market"
     url = (
@@ -53,17 +53,17 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
         response.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"Failed to fetch news: {e}")
-        return "", []
+        return "", [], _last_fetch_time
 
     try:
         news_data = response.json()
     except ValueError as e:
         logger.error(f"Failed to parse News JSON: {e}")
-        return "", []
+        return "", [], _last_fetch_time
 
     if "error" in news_data:
         logger.error("Error in News API response from NewsData API")
-        return "", []
+        return "", [], _last_fetch_time
 
     articles = []
     new_ids = []
@@ -122,7 +122,7 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
 
     if not articles_text.strip():
         logger.info("No new news articles found since last fetch.")
-        return "", []
+        return "", [], _last_fetch_time
 
     logger.info(f"Fetched {len(articles)} new news articles.")
     return articles_text, new_ids, _last_fetch_time
