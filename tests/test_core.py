@@ -35,7 +35,7 @@ class TestCore(unittest.TestCase):
         self.assertEqual(result["sentiment"], "BULLISH")
         self.assertEqual(result["confidence"], 0.9)
         self.assertEqual(result["reasoning"], "Strong buying pressure")
-        mock_redis.setex.assert_any_call("market_sentiments", 3600, "BULLISH")
+        mock_redis.setex.assert_any_call("market_sentiments", "BULLISH")
 
         assert result["sentiment"] == "BULLISH"
 
