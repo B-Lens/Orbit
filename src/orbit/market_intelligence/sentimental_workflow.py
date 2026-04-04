@@ -188,7 +188,7 @@ class SentimentWorkflow:
             Combined news text.
         """
         news_article: str = fetch_news_articles.invoke(topic)
-        self._last_news_fetch = datetime.now(timezone.utc)
+        self._last_news_fetch = datetime.now()
         return news_article
 
     @traceable(name="fetch_indicators")
@@ -321,7 +321,7 @@ class SentimentWorkflow:
                 # Reddit posts carry a UTC unix timestamp in "created_utc"
                 created_utc = post.get("created_utc")
                 if created_utc is not None:
-                    post_dt = datetime.fromtimestamp(float(created_utc), tz=timezone.utc)
+                    post_dt = datetime.fromtimestamp(float(created_utc))
                     if post_dt <= since:
                         continue
                 new_posts.append(post)
@@ -376,7 +376,7 @@ class SentimentWorkflow:
         effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
         effective_reddit_since: Optional[datetime] = last_reddit_fetch or self._last_reddit_fetch
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now()
 
         try:
             # ---- News ----
@@ -577,7 +577,7 @@ class SentimentWorkflow:
             )
 
             # Update in-process timestamps after a successful full run
-            now = datetime.now(timezone.utc)
+            now = datetime.now()
             self._last_news_fetch = now
             self._last_reddit_fetch = now
 
