@@ -379,6 +379,8 @@ class SentimentWorkflow(ExceptionManager):
 
         now = get_indian_time()
 
+        logger.info(f"Last news fetch: {effective_news_since}, last Reddit fetch: {effective_reddit_since}")
+
         try:
             # ---- News ----
             news_text, new_ids = fetch_news_articles_since(since=effective_news_since)
