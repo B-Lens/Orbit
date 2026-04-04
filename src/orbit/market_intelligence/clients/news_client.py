@@ -68,6 +68,11 @@ def fetch_news_articles_since(since_aware: Optional[datetime] = None) -> tuple[s
     articles = []
     new_ids = []
 
+    if since_aware:
+        logger.info(f"Filtering news articles published after {since_aware.isoformat()}")
+    else:
+        logger.info("No 'since' timestamp provided, using seen-IDs cache for deduplication")
+
     for article in news_data.get("results", []):
         article_id = article.get("article_id") or article.get("link") or ""
 
@@ -87,7 +92,7 @@ def fetch_news_articles_since(since_aware: Optional[datetime] = None) -> tuple[s
             continue  # If we can't parse, exclude the article
 
 
-        logger.info(f"Article '{article.get('title', '')}' published at {pub_dt.isoformat()} (since={since_aware.isoformat()})")
+        logger.info(f"Article '{article.get('title', '')}' published at {pub_dt.isoformat()}")
                     
         if _last_fetch_time is None or pub_dt > _last_fetch_time:
             _last_fetch_time = pub_dt
