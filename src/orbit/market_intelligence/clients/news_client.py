@@ -7,6 +7,8 @@ from langchain_core.tools import tool
 
 from dotenv import load_dotenv
 
+from orbit.utils.utils import get_indian_time
+
 load_dotenv()
 
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
@@ -66,6 +68,15 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
     articles = []
     new_ids = []
 
+    # Normalise `since` to offset-aware UTC so comparisons are always
+    # between two aware datetimes regardless of what the caller passes in.
+    since_aware: Optional[datetime] = None
+    if since is not None:
+        if since.tzinfo is None:
+            since_aware = since.replace(tzinfo=timezone.utc)
+        else:
+            since_aware = since
+
     for article in news_data.get("results", []):
         article_id = article.get("article_id") or article.get("link") or ""
 
@@ -74,14 +85,14 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
             continue
 
         # Skip articles older than `since` if provided
-        if since is not None:
+        if since_aware is not None:
             pub_date_str = article.get("pubDate") or ""
             if pub_date_str:
                 try:
                     pub_dt = datetime.strptime(pub_date_str, "%Y-%m-%d %H:%M:%S").replace(
                         tzinfo=timezone.utc
                     )
-                    if pub_dt <= since:
+                    if pub_dt <= since_aware:
                         continue
                 except ValueError:
                     pass  # If we can't parse, include the article
@@ -97,7 +108,7 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
 
     # Update the seen-IDs cache
     _seen_article_ids.update(new_ids)
-    _last_fetch_time = datetime.now(timezone.utc)
+    _last_fetch_time = get_indian_time()
 
     articles_text = "\n\n".join(articles)
 

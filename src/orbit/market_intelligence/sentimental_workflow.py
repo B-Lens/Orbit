@@ -51,7 +51,7 @@ from orbit.market_intelligence.utils.utils import (
     SentimentType,
     MarketIndicators,
 )
-from orbit.utils.utils import require_env
+from orbit.utils.utils import require_env, get_indian_time
 
 
 # ---- LangSmith env ----
@@ -188,7 +188,7 @@ class SentimentWorkflow:
             Combined news text.
         """
         news_article: str = fetch_news_articles.invoke(topic)
-        self._last_news_fetch = datetime.now()
+        self._last_news_fetch = get_indian_time()
         return news_article
 
     @traceable(name="fetch_indicators")
@@ -376,7 +376,7 @@ class SentimentWorkflow:
         effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
         effective_reddit_since: Optional[datetime] = last_reddit_fetch or self._last_reddit_fetch
 
-        now = datetime.now()
+        now = get_indian_time()
 
         try:
             # ---- News ----
@@ -577,7 +577,7 @@ class SentimentWorkflow:
             )
 
             # Update in-process timestamps after a successful full run
-            now = datetime.now()
+            now = get_indian_time()
             self._last_news_fetch = now
             self._last_reddit_fetch = now
 
@@ -586,7 +586,7 @@ class SentimentWorkflow:
 
             return {
                 "success": True,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": get_indian_time().isoformat(),
                 "database_id": record_id,
                 **combined_result,
                 "reasoning": reasoning,
@@ -602,7 +602,7 @@ class SentimentWorkflow:
             return {
                 "success": False,
                 "error": str(e),
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": get_indian_time().isoformat(),
             }
 
     # ------------------------------------------------------------------
