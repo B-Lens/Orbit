@@ -167,7 +167,7 @@ class Croner(ExceptionManager):
             fields=result,
         )
 
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now().isoformat()
 
         # Cache sentiment label and update fetch timestamps
         try:
