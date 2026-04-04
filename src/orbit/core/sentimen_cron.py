@@ -276,9 +276,10 @@ class Croner(ExceptionManager):
                 _REDIS_KEY_MARKET_SENTIMENT
             )
             sentiment_drifted: bool = (
-                cached_sentiment is not None
-                and news_sentiment.sentiment != cached_sentiment
-                and news_sentiment.confidence >= self.sentiment_drift_threshold
+                cached_sentiment is None or (
+                    news_sentiment.sentiment != cached_sentiment
+                    and news_sentiment.confidence >= self.sentiment_drift_threshold
+                )
             )
 
             if sentiment_drifted:
