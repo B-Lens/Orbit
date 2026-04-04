@@ -22,9 +22,11 @@ trading systems.
 Author: Pankaj Kumar
 """
 
+import sys
 import time
 import logging
 import threading
+import traceback
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -43,6 +45,27 @@ from orbit.utils.utils import get_indian_time
 SIGNAL_ANALYSIS_SLEEP: int = 900  # 15 minutes in seconds
 
 logger = logging.getLogger("Orbit")
+
+def install_global_exception_handler(manager):
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            return
+
+        traceback_str = "".join(
+            traceback.format_exception(exc_type, exc_value, exc_traceback)
+        )
+
+        manager.exception_trigger(
+            data=None,
+            description=f"UNCAUGHT GLOBAL EXCEPTION\n{traceback_str}",
+        )
+
+    sys.excepthook = handle_exception
+
+    def thread_exception_handler(args):
+        handle_exception(args.exc_type, args.exc_value, args.exc_traceback)
+
+    threading.excepthook = thread_exception_handler
 
 
 class BinanceAutomation(ExceptionManager):
@@ -315,7 +338,7 @@ class BinanceAutomation(ExceptionManager):
 
         def cron_runner() -> None:
             try:
-                croner.sentiment_croner()
+                croner.news_croner()
             except Exception as e:
                 self.handle_exception(e, context_description="Exception in cron thread")
 
@@ -369,6 +392,10 @@ class BinanceAutomation(ExceptionManager):
 def main() -> None:
     """Create a :class:`BinanceAutomation` instance and run it."""
     automation = BinanceAutomation()
+    
+    # install global crash handler
+    install_global_exception_handler(automation)
+
     try:
         automation.run()
         while True:

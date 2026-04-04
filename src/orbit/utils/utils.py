@@ -7,9 +7,12 @@ import pytz
 import pandas as pd
 import tempfile
 import mplfinance as mpf
+from zoneinfo import ZoneInfo
 
 import logging
 logger = logging.getLogger("Orbit")
+
+IST = ZoneInfo("Asia/Kolkata")
 
 def require_env(name: str) -> str:
     value = os.getenv(name)
@@ -17,12 +20,13 @@ def require_env(name: str) -> str:
         raise RuntimeError(f"{name} environment variable is not set")
     return value
 
-def get_indian_time():
+def to_ist(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=IST) if dt.tzinfo is None else dt.astimezone(IST)
+
+def get_indian_time() -> datetime.datetime:
     utc_now = datetime.datetime.utcnow()
     india_timezone = pytz.timezone("Asia/Kolkata")
-    india_time = utc_now.replace(tzinfo=pytz.utc).astimezone(
-        india_timezone
-    )
+    india_time = utc_now.replace(tzinfo=pytz.utc).astimezone(india_timezone)
     return india_time
 
 def get_symbol_price(symbol: str):
