@@ -100,7 +100,7 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
                     if pub_dt <= since_aware:
                         continue
 
-                    if pub_dt > _last_fetch_time:
+                    if _last_fetch_time is None or pub_dt > _last_fetch_time:
                         _last_fetch_time = pub_dt
 
                 except ValueError:

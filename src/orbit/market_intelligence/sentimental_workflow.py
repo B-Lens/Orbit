@@ -327,7 +327,7 @@ class SentimentWorkflow(ExceptionManager):
                     if post_dt <= since:
                         continue
 
-                    if post_dt > self._last_reddit_fetch:
+                    if self._last_reddit_fetch is None or post_dt > self._last_reddit_fetch:
                         self._last_reddit_fetch = post_dt
                 new_posts.append(post)
 
