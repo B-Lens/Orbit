@@ -111,21 +111,26 @@ def main():
         log.info("Sending diff to AI for reasoning: %s", file)
 
         user_prompt = f"""
-            You are analyzing a merged PR for Adding to the Memory Context.
+            Analyze the merged PR diff and extract ONLY meaningful repository changes.
             
-            Extract REASONING about what changed in the repository.
-            
-            Focus on:
-            - capability added or changed
+            Include:
+            - new capability
             - behavior change
-            - architectural impact
-            - workflow changes
-            - new integrations
-            - bug fixes
+            - architecture change
+            - workflow change
+            - integration added/removed
+            - bug fix affecting logic
             
-            Do NOT mention formatting or style.
+            Exclude:
+            - formatting
+            - refactoring with no behavior change
+            - comments/docs
+            - renames
             
-            Return concise bullet points.
+            Return:
+            - concise bullet points
+            - one change per bullet
+            - no explanations
             
             FILE:
             {file}
