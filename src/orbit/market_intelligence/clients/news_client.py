@@ -63,6 +63,16 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
         logger.error("Error in News API response from NewsData API")
         return "", []
 
+    # Normalise `since` to UTC-aware so we can safely compare with pub_dt
+    # which is always parsed as UTC-aware below.
+    since_utc: Optional[datetime] = None
+    if since is not None:
+        if since.tzinfo is None:
+            # Treat naive datetimes as UTC
+            since_utc = since.replace(tzinfo=timezone.utc)
+        else:
+            since_utc = since.astimezone(timezone.utc)
+
     articles = []
     new_ids = []
 
@@ -74,14 +84,14 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
             continue
 
         # Skip articles older than `since` if provided
-        if since is not None:
+        if since_utc is not None:
             pub_date_str = article.get("pubDate") or ""
             if pub_date_str:
                 try:
                     pub_dt = datetime.strptime(pub_date_str, "%Y-%m-%d %H:%M:%S").replace(
                         tzinfo=timezone.utc
                     )
-                    if pub_dt <= since:
+                    if pub_dt <= since_utc:
                         continue
                 except ValueError:
                     pass  # If we can't parse, include the article
