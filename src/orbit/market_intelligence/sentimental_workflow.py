@@ -235,8 +235,12 @@ class SentimentWorkflow(ExceptionManager):
             self.last_news_sentiment = result
             return result
 
-        except Exception:
+        except Exception as e:
             logger.exception("News sentiment analysis failed")
+            self.handle_exception(
+                exception=e,
+                context_description="News sentiment analysis failed",
+            )
             fallback = NewsSentiment(
                 sentiment="NEUTRAL",
                 confidence=0.3,
@@ -275,8 +279,12 @@ class SentimentWorkflow(ExceptionManager):
         try:
             content = self.llm.invoke(prompt)
             return str(content).strip()
-        except Exception:
+        except Exception as e:
             logger.exception("Reasoning generation failed")
+            self.handle_exception(
+                exception=e,
+                context_description="Reasoning generation failed",
+            )
             return "Market reasoning unavailable."
 
     # ------------------------------------------------------------------
@@ -475,8 +483,12 @@ class SentimentWorkflow(ExceptionManager):
                         logger.info(
                             f"Patched MongoDB record {record_id} with fresh sentiment."
                         )
-            except Exception:
+            except Exception as e:
                 logger.exception("Failed to patch MongoDB record with news update.")
+                self.handle_exception(
+                    exception=e,
+                    context_description="Failed to patch MongoDB record with news update",
+                )
 
             return {
                 "success": True,
@@ -486,8 +498,8 @@ class SentimentWorkflow(ExceptionManager):
                 "news_sentiment": news_sentiment,
                 "new_article_count": new_article_count,
                 "new_reddit_post_count": new_reddit_post_count,
-                "last_news_fetch": now.isoformat(),
-                "last_reddit_fetch": now.isoformat(),
+                "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
+                "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
                 "timestamp": now.isoformat(),
             }
 
@@ -505,8 +517,8 @@ class SentimentWorkflow(ExceptionManager):
                 "new_article_count": 0,
                 "new_reddit_post_count": 0,
                 "error": str(e),
-                "last_news_fetch": (last_news_fetch or self._last_news_fetch or now).isoformat(),
-                "last_reddit_fetch": (last_reddit_fetch or self._last_reddit_fetch or now).isoformat(),
+                "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
+                "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
                 "timestamp": now.isoformat(),
             }
 
