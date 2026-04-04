@@ -171,7 +171,7 @@ class Croner(ExceptionManager):
 
         # Cache sentiment label and update fetch timestamps
         try:
-            self.redis_client.setex(_REDIS_KEY_MARKET_SENTIMENT, 3600, sentiment)
+            self.redis_client.setex(_REDIS_KEY_MARKET_SENTIMENT, sentiment)
             self._save_last_fetch_times(
                 last_news_fetch=now_iso,
                 last_reddit_fetch=now_iso,
