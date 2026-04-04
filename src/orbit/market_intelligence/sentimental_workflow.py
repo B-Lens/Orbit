@@ -326,6 +326,9 @@ class SentimentWorkflow(ExceptionManager):
                     logger.info(f"Post '{post.get('title', '')}' created at {post_dt.isoformat()} (since={since.isoformat()})")
                     if post_dt <= since:
                         continue
+
+                    if self._last_reddit_fetch is None or post_dt > self._last_reddit_fetch:
+                        self._last_reddit_fetch = post_dt
                 new_posts.append(post)
 
             if new_posts:
@@ -384,8 +387,7 @@ class SentimentWorkflow(ExceptionManager):
 
         try:
             # ---- News ----
-            news_text, new_ids = fetch_news_articles_since(since=effective_news_since)
-            self._last_news_fetch = now
+            news_text, new_ids, self._last_news_fetch = fetch_news_articles_since(since=effective_news_since)
             has_new_articles = bool(news_text)
             new_article_count = len(new_ids)
 
@@ -398,7 +400,6 @@ class SentimentWorkflow(ExceptionManager):
                 hours_back=1,
                 posts_per_subreddit=15,
             )
-            self._last_reddit_fetch = now
             has_new_reddit_posts = new_reddit_post_count > 0
 
             if not has_new_reddit_posts:
@@ -416,8 +417,8 @@ class SentimentWorkflow(ExceptionManager):
                     "news_sentiment": None,
                     "new_article_count": 0,
                     "new_reddit_post_count": 0,
-                    "last_news_fetch": now.isoformat(),
-                    "last_reddit_fetch": now.isoformat(),
+                    "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
+                    "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
                     "timestamp": now.isoformat(),
                 }
 
