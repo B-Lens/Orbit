@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Literal, Optional
 
 from langsmith import traceable
-
+from orbit.core.exception_manager import ExceptionManager
 from orbit.market_intelligence.clients.reddit_client import RedditClient
 from orbit.market_intelligence.clients.news_client import (
     fetch_news_articles,
@@ -76,7 +76,7 @@ class NewsSentiment(BaseModel):
     explanation: str
 
 
-class SentimentWorkflow:
+class SentimentWorkflow(ExceptionManager):
     """
     End-to-end market sentiment analysis workflow.
 
@@ -488,6 +488,9 @@ class SentimentWorkflow:
 
         except Exception as e:
             logger.exception("run_news_update failed")
+            self.handle_exception(
+                exception=e,
+                context_description="run_news_update",)
             return {
                 "success": False,
                 "has_new_data": False,
@@ -599,6 +602,9 @@ class SentimentWorkflow:
 
         except Exception as e:
             logger.exception("Workflow failed")
+            self.handle_exception(
+                exception=e,
+                context_description="run_analysis",)    
             return {
                 "success": False,
                 "error": str(e),
