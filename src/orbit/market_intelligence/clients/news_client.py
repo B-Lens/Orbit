@@ -20,7 +20,7 @@ _seen_article_ids: set = set()
 _last_fetch_time: Optional[datetime] = None
 
 
-def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, list[str]]:
+def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, list[str], Optional[datetime]]:
     """
     Fetch recent news articles, returning only articles not seen before.
 
