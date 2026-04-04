@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 from dotenv import load_dotenv
 
-from orbit.utils.utils import get_indian_time, to_ist
+from orbit.utils.utils import to_ist
 
 load_dotenv()
 
@@ -78,6 +78,7 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
             since_aware = since
 
     since_aware = to_ist(since_aware) if since_aware else None
+    _last_fetch_time = since_aware
 
     for article in news_data.get("results", []):
         article_id = article.get("article_id") or article.get("link") or ""
@@ -98,6 +99,10 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
                     logger.info(f"Article '{article.get('title', '')}' published at {pub_dt.isoformat()} (since={since_aware.isoformat()})")
                     if pub_dt <= since_aware:
                         continue
+
+                    if pub_dt > _last_fetch_time:
+                        _last_fetch_time = pub_dt
+
                 except ValueError:
                     pass  # If we can't parse, include the article
 
@@ -112,7 +117,6 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
 
     # Update the seen-IDs cache
     _seen_article_ids.update(new_ids)
-    _last_fetch_time = get_indian_time()
 
     articles_text = "\n\n".join(articles)
 
@@ -121,7 +125,7 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
         return "", []
 
     logger.info(f"Fetched {len(articles)} new news articles.")
-    return articles_text, new_ids
+    return articles_text, new_ids, _last_fetch_time
 
 
 @tool
