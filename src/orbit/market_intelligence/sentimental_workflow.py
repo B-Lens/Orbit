@@ -19,6 +19,14 @@ Also provides a lightweight `run_news_update()` path that:
 - Keeps LLM token usage low by skipping the call when nothing is new.
 
 Designed for traceability using LangSmith.
+
+Exception policy
+----------------
+Neither ``run_analysis`` nor ``run_news_update`` swallow unexpected exceptions.
+They catch, log, and then **re-raise** so that the caller
+(:class:`~orbit.core.sentimen_cron.Croner`, which inherits from
+:class:`~orbit.core.exception_manager.ExceptionManager`) can forward the
+traceback to the Discord exception webhook.
 """
 
 import os
@@ -95,6 +103,10 @@ class SentimentWorkflow:
     - Skips LLM entirely when nothing new is found, keeping token usage low.
     - Last-fetch timestamps are managed externally via Redis by Croner so
       they survive process restarts.
+
+    Exception policy:
+    - Unexpected exceptions are logged and then re-raised so the caller
+      (Croner / ExceptionManager) can forward them to Discord.
     """
 
     def __init__(self, llm: LLM) -> None:
@@ -312,6 +324,14 @@ class SentimentWorkflow:
             total = sum(len(v.get("posts", [])) for v in raw_data.values())
             return raw_data, total
 
+        # Normalise `since` to a UTC unix timestamp for comparison with
+        # the Reddit `created_utc` field (which is always UTC).
+        if since.tzinfo is None:
+            since_utc = since.replace(tzinfo=timezone.utc)
+        else:
+            since_utc = since.astimezone(timezone.utc)
+        since_ts = since_utc.timestamp()
+
         filtered: Dict[str, Dict[str, Any]] = {}
         total_new = 0
 
@@ -321,8 +341,7 @@ class SentimentWorkflow:
                 # Reddit posts carry a UTC unix timestamp in "created_utc"
                 created_utc = post.get("created_utc")
                 if created_utc is not None:
-                    post_dt = datetime.fromtimestamp(float(created_utc))
-                    if post_dt <= since:
+                    if float(created_utc) <= since_ts:
                         continue
                 new_posts.append(post)
 
@@ -371,6 +390,10 @@ class SentimentWorkflow:
                 ``last_reddit_fetch`` (str ISO-8601),
                 ``timestamp`` (str),
                 ``success`` (bool).
+
+        Raises:
+            Exception: Any unexpected error is logged and re-raised so the
+                caller (Croner / ExceptionManager) can forward it to Discord.
         """
         # Resolve timestamps — prefer caller-supplied (from Redis) over in-process cache
         effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
@@ -378,129 +401,112 @@ class SentimentWorkflow:
 
         now = datetime.now()
 
-        try:
-            # ---- News ----
-            news_text, new_ids = fetch_news_articles_since(since=effective_news_since)
-            self._last_news_fetch = now
-            has_new_articles = bool(news_text)
-            new_article_count = len(new_ids)
+        # ---- News ----
+        news_text, new_ids = fetch_news_articles_since(since=effective_news_since)
+        self._last_news_fetch = now
+        has_new_articles = bool(news_text)
+        new_article_count = len(new_ids)
 
-            if not has_new_articles:
-                logger.info("News update: no new articles found.")
+        if not has_new_articles:
+            logger.info("News update: no new articles found.")
 
-            # ---- Reddit ----
-            new_reddit_data, new_reddit_post_count = self._fetch_new_reddit_posts(
-                since=effective_reddit_since,
-                hours_back=1,
-                posts_per_subreddit=15,
-            )
-            self._last_reddit_fetch = now
-            has_new_reddit_posts = new_reddit_post_count > 0
+        # ---- Reddit ----
+        new_reddit_data, new_reddit_post_count = self._fetch_new_reddit_posts(
+            since=effective_reddit_since,
+            hours_back=1,
+            posts_per_subreddit=15,
+        )
+        self._last_reddit_fetch = now
+        has_new_reddit_posts = new_reddit_post_count > 0
 
-            if not has_new_reddit_posts:
-                logger.info("News update: no new Reddit posts found.")
+        if not has_new_reddit_posts:
+            logger.info("News update: no new Reddit posts found.")
 
-            has_new_data = has_new_articles or has_new_reddit_posts
+        has_new_data = has_new_articles or has_new_reddit_posts
 
-            if not has_new_data:
-                logger.info("News update: nothing new from news or Reddit — skipping LLM.")
-                return {
-                    "success": True,
-                    "has_new_data": False,
-                    "has_new_articles": False,
-                    "has_new_reddit_posts": False,
-                    "news_sentiment": None,
-                    "new_article_count": 0,
-                    "new_reddit_post_count": 0,
-                    "last_news_fetch": now.isoformat(),
-                    "last_reddit_fetch": now.isoformat(),
-                    "timestamp": now.isoformat(),
-                }
-
-            logger.info(
-                f"News update: {new_article_count} new articles, "
-                f"{new_reddit_post_count} new Reddit posts — running LLM sentiment."
-            )
-
-            # ---- Build combined text for LLM ----
-            combined_text_parts: List[str] = []
-
-            if has_new_articles:
-                combined_text_parts.append(f"[NEWS]\n{news_text}")
-
-            if has_new_reddit_posts:
-                reddit_snippets: List[str] = []
-                for subreddit, data in new_reddit_data.items():
-                    for post in data.get("posts", []):
-                        title = post.get("title", "")
-                        selftext = post.get("selftext", "")
-                        snippet = f"{title}. {selftext}".strip()
-                        if snippet:
-                            reddit_snippets.append(snippet)
-                if reddit_snippets:
-                    combined_text_parts.append(
-                        f"[REDDIT]\n" + "\n\n".join(reddit_snippets)
-                    )
-
-            combined_text = "\n\n".join(combined_text_parts)
-            news_sentiment = self.get_market_sentiments(combined_text)
-
-            # ---- Patch the most recent MongoDB record ----
-            try:
-                recent = self.mongodb.get_recent_sentiments(hours=1)
-                if recent:
-                    latest = recent[0]
-                    record_id = latest.get("_id")
-                    if record_id:
-                        self.mongodb.sentiment_history.update_one(
-                            {"_id": record_id},
-                            {
-                                "$set": {
-                                    "news_sentiment.latest_update": {
-                                        "sentiment": news_sentiment.sentiment,
-                                        "confidence": news_sentiment.confidence,
-                                        "explanation": news_sentiment.explanation,
-                                        "updated_at": now.isoformat(),
-                                        "new_articles": new_article_count,
-                                        "new_reddit_posts": new_reddit_post_count,
-                                    }
-                                }
-                            },
-                        )
-                        logger.info(
-                            f"Patched MongoDB record {record_id} with fresh sentiment."
-                        )
-            except Exception:
-                logger.exception("Failed to patch MongoDB record with news update.")
-
+        if not has_new_data:
+            logger.info("News update: nothing new from news or Reddit — skipping LLM.")
             return {
                 "success": True,
-                "has_new_data": True,
-                "has_new_articles": has_new_articles,
-                "has_new_reddit_posts": has_new_reddit_posts,
-                "news_sentiment": news_sentiment,
-                "new_article_count": new_article_count,
-                "new_reddit_post_count": new_reddit_post_count,
-                "last_news_fetch": now.isoformat(),
-                "last_reddit_fetch": now.isoformat(),
-                "timestamp": now.isoformat(),
-            }
-
-        except Exception as e:
-            logger.exception("run_news_update failed")
-            return {
-                "success": False,
                 "has_new_data": False,
                 "has_new_articles": False,
                 "has_new_reddit_posts": False,
                 "news_sentiment": None,
                 "new_article_count": 0,
                 "new_reddit_post_count": 0,
-                "error": str(e),
-                "last_news_fetch": (last_news_fetch or self._last_news_fetch or now).isoformat(),
-                "last_reddit_fetch": (last_reddit_fetch or self._last_reddit_fetch or now).isoformat(),
+                "last_news_fetch": now.isoformat(),
+                "last_reddit_fetch": now.isoformat(),
                 "timestamp": now.isoformat(),
             }
+
+        logger.info(
+            f"News update: {new_article_count} new articles, "
+            f"{new_reddit_post_count} new Reddit posts — running LLM sentiment."
+        )
+
+        # ---- Build combined text for LLM ----
+        combined_text_parts: List[str] = []
+
+        if has_new_articles:
+            combined_text_parts.append(f"[NEWS]\n{news_text}")
+
+        if has_new_reddit_posts:
+            reddit_snippets: List[str] = []
+            for subreddit, data in new_reddit_data.items():
+                for post in data.get("posts", []):
+                    title = post.get("title", "")
+                    selftext = post.get("selftext", "")
+                    snippet = f"{title}. {selftext}".strip()
+                    if snippet:
+                        reddit_snippets.append(snippet)
+            if reddit_snippets:
+                combined_text_parts.append(
+                    f"[REDDIT]\n" + "\n\n".join(reddit_snippets)
+                )
+
+        combined_text = "\n\n".join(combined_text_parts)
+        news_sentiment = self.get_market_sentiments(combined_text)
+
+        # ---- Patch the most recent MongoDB record ----
+        try:
+            recent = self.mongodb.get_recent_sentiments(hours=1)
+            if recent:
+                latest = recent[0]
+                record_id = latest.get("_id")
+                if record_id:
+                    self.mongodb.sentiment_history.update_one(
+                        {"_id": record_id},
+                        {
+                            "$set": {
+                                "news_sentiment.latest_update": {
+                                    "sentiment": news_sentiment.sentiment,
+                                    "confidence": news_sentiment.confidence,
+                                    "explanation": news_sentiment.explanation,
+                                    "updated_at": now.isoformat(),
+                                    "new_articles": new_article_count,
+                                    "new_reddit_posts": new_reddit_post_count,
+                                }
+                            }
+                        },
+                    )
+                    logger.info(
+                        f"Patched MongoDB record {record_id} with fresh sentiment."
+                    )
+        except Exception:
+            logger.exception("Failed to patch MongoDB record with news update.")
+
+        return {
+            "success": True,
+            "has_new_data": True,
+            "has_new_articles": has_new_articles,
+            "has_new_reddit_posts": has_new_reddit_posts,
+            "news_sentiment": news_sentiment,
+            "new_article_count": new_article_count,
+            "new_reddit_post_count": new_reddit_post_count,
+            "last_news_fetch": now.isoformat(),
+            "last_reddit_fetch": now.isoformat(),
+            "timestamp": now.isoformat(),
+        }
 
     # ------------------------------------------------------------------
     # MAIN WORKFLOW
@@ -520,90 +526,85 @@ class SentimentWorkflow:
 
         Returns:
             Dictionary containing final sentiment analysis results.
+
+        Raises:
+            Exception: Any unexpected error is logged and re-raised so the
+                caller (Croner / ExceptionManager) can forward it to Discord.
         """
         start_time = time.time()
 
-        try:
-            reddit_posts_data = self.fetch_reddit()
-            dynamic_weights = self.calculate_weights(reddit_posts_data)
+        reddit_posts_data = self.fetch_reddit()
+        dynamic_weights = self.calculate_weights(reddit_posts_data)
 
-            all_sentiments: List[RedditSentimentEntry] = []
+        all_sentiments: List[RedditSentimentEntry] = []
 
-            for subreddit_name, data in tqdm(reddit_posts_data.items()):
-                weight = dynamic_weights.get(subreddit_name, 0.5)
-                posts = data["posts"]
+        for subreddit_name, data in tqdm(reddit_posts_data.items()):
+            weight = dynamic_weights.get(subreddit_name, 0.5)
+            posts = data["posts"]
 
-                batch_id = 1
-                for i in range(0, len(posts), BATCH_SIZE):
-                    batch = posts[i:i + BATCH_SIZE]
-                    sentiments = self.reddit_analyzer.analyze_batch_sentiment(
-                        batch_id, batch, weight
-                    )
-                    all_sentiments.append(sentiments)
-                    batch_id += 1
+            batch_id = 1
+            for i in range(0, len(posts), BATCH_SIZE):
+                batch = posts[i:i + BATCH_SIZE]
+                sentiments = self.reddit_analyzer.analyze_batch_sentiment(
+                    batch_id, batch, weight
+                )
+                all_sentiments.append(sentiments)
+                batch_id += 1
 
-            reddit_result = self.aggregate_sentiment(all_sentiments)
-            top_posts = self.reddit_analyzer.get_top_influential_posts(
-                all_sentiments
-            )
+        reddit_result = self.aggregate_sentiment(all_sentiments)
+        top_posts = self.reddit_analyzer.get_top_influential_posts(
+            all_sentiments
+        )
 
-            news_text = self.fetch_news()
-            indicators = self.fetch_indicators()
-            news_sentiment = self.get_market_sentiments(news_text)
+        news_text = self.fetch_news()
+        indicators = self.fetch_indicators()
+        news_sentiment = self.get_market_sentiments(news_text)
 
-            historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
-            historical_score: float = (
-                sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment)
-                if historical_sentiment
-                else 0
-            )
+        historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
+        historical_score: float = (
+            sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment)
+            if historical_sentiment
+            else 0
+        )
 
-            reasoning: str = self.get_reasoning(top_posts, news_sentiment)
+        reasoning: str = self.get_reasoning(top_posts, news_sentiment)
 
-            combined_result = self._combine_results(
-                reddit_result,
-                news_sentiment,
-                indicators,
-                historical_score=historical_score,
-            )
+        combined_result = self._combine_results(
+            reddit_result,
+            news_sentiment,
+            indicators,
+            historical_score=historical_score,
+        )
 
-            record_id = self._save_to_database(
-                reddit_result,
-                top_posts,
-                news_text,
-                indicators,
-                combined_result,
-                int((time.time() - start_time) * 1000),
-            )
+        record_id = self._save_to_database(
+            reddit_result,
+            top_posts,
+            news_text,
+            indicators,
+            combined_result,
+            int((time.time() - start_time) * 1000),
+        )
 
-            # Update in-process timestamps after a successful full run
-            now = datetime.now()
-            self._last_news_fetch = now
-            self._last_reddit_fetch = now
+        # Update in-process timestamps after a successful full run
+        now = datetime.now()
+        self._last_news_fetch = now
+        self._last_reddit_fetch = now
 
-            trend = self.mongodb.calculate_trends(hours=24)
-            signal = self.mongodb.get_trading_signals()
+        trend = self.mongodb.calculate_trends(hours=24)
+        signal = self.mongodb.get_trading_signals()
 
-            return {
-                "success": True,
-                "timestamp": datetime.now().isoformat(),
-                "database_id": record_id,
-                **combined_result,
-                "reasoning": reasoning,
-                "trends": trend.dict() if trend else None,
-                "trading_signal": signal,
-                "processing_time_ms": int(
-                    (time.time() - start_time) * 1000
-                ),
-            }
-
-        except Exception as e:
-            logger.exception("Workflow failed")
-            return {
-                "success": False,
-                "error": str(e),
-                "timestamp": datetime.now().isoformat(),
-            }
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "database_id": record_id,
+            **combined_result,
+            "reasoning": reasoning,
+            "trends": trend.dict() if trend else None,
+            "trading_signal": signal,
+            "processing_time_ms": int(
+                (time.time() - start_time) * 1000
+            ),
+        }
 
     # ------------------------------------------------------------------
     # INTERNAL HELPERS

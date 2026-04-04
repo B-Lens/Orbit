@@ -48,6 +48,9 @@ _REDIS_KEY_LAST_NEWS_FETCH: str = "sentiment:last_news_fetch"
 _REDIS_KEY_LAST_REDDIT_FETCH: str = "sentiment:last_reddit_fetch"
 _REDIS_KEY_MARKET_SENTIMENT: str = "market_sentiments"
 
+# TTL for Redis keys (48 hours)
+_REDIS_TTL: int = 172800
+
 
 class Croner(ExceptionManager):
     """Hourly full-analysis + 10-minute news+Reddit update scheduler.
@@ -128,13 +131,12 @@ class Croner(ExceptionManager):
         """
         try:
             if last_news_fetch:
-                # Keep for 48 hours — well beyond any polling window
                 self.redis_client.setex(
-                    _REDIS_KEY_LAST_NEWS_FETCH, 172800, last_news_fetch
+                    _REDIS_KEY_LAST_NEWS_FETCH, _REDIS_TTL, last_news_fetch
                 )
             if last_reddit_fetch:
                 self.redis_client.setex(
-                    _REDIS_KEY_LAST_REDDIT_FETCH, 172800, last_reddit_fetch
+                    _REDIS_KEY_LAST_REDDIT_FETCH, _REDIS_TTL, last_reddit_fetch
                 )
         except Exception:
             logger.exception("Failed to save last-fetch timestamps to Redis.")
@@ -152,6 +154,10 @@ class Croner(ExceptionManager):
         Returns:
             The analysis result dict (keys typically include ``sentiment``,
             ``confidence``, ``reasoning``).
+
+        Raises:
+            Exception: Propagated from the workflow so the caller or the
+                global exception handler can forward it to Discord.
         """
         result = await self.sentimental_workflow.run_analysis()
         logger.info(f"Sentiment Analysis Result: {result}")
@@ -171,7 +177,9 @@ class Croner(ExceptionManager):
 
         # Cache sentiment label and update fetch timestamps
         try:
-            self.redis_client.setex(_REDIS_KEY_MARKET_SENTIMENT, sentiment)
+            self.redis_client.setex(
+                _REDIS_KEY_MARKET_SENTIMENT, _REDIS_TTL, str(sentiment)
+            )
             self._save_last_fetch_times(
                 last_news_fetch=now_iso,
                 last_reddit_fetch=now_iso,
@@ -217,6 +225,10 @@ class Croner(ExceptionManager):
 
         Returns:
             The result dict from :meth:`SentimentWorkflow.run_news_update`.
+
+        Raises:
+            Exception: Propagated after being forwarded to Discord via
+                :meth:`~ExceptionManager.handle_exception`.
         """
         # Load persisted timestamps so we don't re-process old data after restart
         last_news_fetch, last_reddit_fetch = self._load_last_fetch_times()
@@ -232,10 +244,6 @@ class Croner(ExceptionManager):
             last_news_fetch=result.get("last_news_fetch"),
             last_reddit_fetch=result.get("last_reddit_fetch"),
         )
-
-        if not result.get("success"):
-            logger.warning(f"News update failed: {result.get('error')}")
-            return result
 
         if not result.get("has_new_data"):
             logger.info("News update: no new data from news or Reddit — skipping LLM call.")
@@ -310,6 +318,9 @@ class Croner(ExceptionManager):
           keeping token usage low.
         * Triggers a full analysis automatically on significant sentiment
           drift so the Redis cache and MongoDB record stay fresh.
+        * Exceptions are forwarded to Discord via
+          :meth:`~ExceptionManager.handle_exception` before the loop sleeps
+          and retries.
         """
         while True:
             try:
