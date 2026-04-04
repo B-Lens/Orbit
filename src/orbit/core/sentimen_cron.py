@@ -167,17 +167,15 @@ class Croner(ExceptionManager):
             fields=result,
         )
 
-        now_iso = datetime.now().isoformat()
-
         # Cache sentiment label and update fetch timestamps
         try:
-            self.redis_client.setex(_REDIS_KEY_MARKET_SENTIMENT, sentiment)
-            self._save_last_fetch_times(
-                last_news_fetch=now_iso,
-                last_reddit_fetch=now_iso,
-            )
-        except Exception:
+            self.redis_client.set(_REDIS_KEY_MARKET_SENTIMENT, sentiment)
+        except Exception as e:
             logger.exception("Failed to update Redis after full analysis.")
+            self.handle_exception(
+                e,
+                context_description="Failed to update Redis after full analysis",
+            )
 
         return result
 
