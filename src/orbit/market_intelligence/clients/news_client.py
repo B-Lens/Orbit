@@ -20,7 +20,7 @@ _seen_article_ids: set = set()
 _last_fetch_time: Optional[datetime] = None
 
 
-def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, list[str], Optional[datetime]]:
+def fetch_news_articles_since(since_aware: Optional[datetime] = None) -> tuple[str, list[str], Optional[datetime]]:
     """
     Fetch recent news articles, returning only articles not seen before.
 
@@ -67,18 +67,6 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
 
     articles = []
     new_ids = []
-
-    # Normalise `since` to offset-aware UTC so comparisons are always
-    # between two aware datetimes regardless of what the caller passes in.
-    since_aware: Optional[datetime] = None
-    if since is not None:
-        if since.tzinfo is None:
-            since_aware = since.replace(tzinfo=timezone.utc)
-        else:
-            since_aware = since
-
-    since_aware = to_ist(since_aware) if since_aware else None
-    _last_fetch_time = since_aware
 
     for article in news_data.get("results", []):
         article_id = article.get("article_id") or article.get("link") or ""
