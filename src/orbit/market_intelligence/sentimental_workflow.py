@@ -62,6 +62,22 @@ BATCH_SIZE = 100
 logger = logging.getLogger("Orbit")
 
 
+def _ensure_utc_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    Ensure a datetime is UTC-aware.
+
+    - If ``dt`` is ``None``, returns ``None``.
+    - If ``dt`` is already timezone-aware, converts it to UTC and returns it.
+    - If ``dt`` is naive (no tzinfo), assumes it is UTC and attaches
+      ``timezone.utc``.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc)
+    return dt.replace(tzinfo=timezone.utc)
+
+
 class NewsSentiment(BaseModel):
     """
     Structured representation of LLM-evaluated news sentiment.
@@ -312,6 +328,10 @@ class SentimentWorkflow(ExceptionManager):
             total = sum(len(v.get("posts", [])) for v in raw_data.values())
             return raw_data, total
 
+        # Normalise the threshold to UTC-aware so comparisons are always
+        # between two aware datetimes regardless of how *since* was created.
+        since_utc: datetime = _ensure_utc_aware(since)
+
         filtered: Dict[str, Dict[str, Any]] = {}
         total_new = 0
 
@@ -321,8 +341,12 @@ class SentimentWorkflow(ExceptionManager):
                 # Reddit posts carry a UTC unix timestamp in "created_utc"
                 created_utc = post.get("created_utc")
                 if created_utc is not None:
-                    post_dt = datetime.fromtimestamp(float(created_utc))
-                    if post_dt <= since:
+                    # fromtimestamp without tz returns a naive local datetime;
+                    # use utcfromtimestamp + replace to get a UTC-aware datetime.
+                    post_dt = datetime.fromtimestamp(
+                        float(created_utc), tz=timezone.utc
+                    )
+                    if post_dt <= since_utc:
                         continue
                 new_posts.append(post)
 
@@ -372,9 +396,14 @@ class SentimentWorkflow(ExceptionManager):
                 ``timestamp`` (str),
                 ``success`` (bool).
         """
-        # Resolve timestamps — prefer caller-supplied (from Redis) over in-process cache
-        effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
-        effective_reddit_since: Optional[datetime] = last_reddit_fetch or self._last_reddit_fetch
+        # Resolve timestamps — prefer caller-supplied (from Redis) over in-process cache.
+        # Normalise both to UTC-aware to avoid naive/aware comparison errors downstream.
+        effective_news_since: Optional[datetime] = _ensure_utc_aware(
+            last_news_fetch or self._last_news_fetch
+        )
+        effective_reddit_since: Optional[datetime] = _ensure_utc_aware(
+            last_reddit_fetch or self._last_reddit_fetch
+        )
 
         now = get_indian_time()
 
