@@ -387,7 +387,7 @@ class SentimentWorkflow(ExceptionManager):
 
         try:
             # ---- News ----
-            news_text, new_ids, self._last_news_fetch = fetch_news_articles_since(since=effective_news_since)
+            news_text, new_ids, self._last_news_fetch = fetch_news_articles_since(since_aware=effective_news_since)
             has_new_articles = bool(news_text)
             new_article_count = len(new_ids)
 
