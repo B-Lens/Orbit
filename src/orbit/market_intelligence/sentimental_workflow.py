@@ -51,7 +51,7 @@ from orbit.market_intelligence.utils.utils import (
     SentimentType,
     MarketIndicators,
 )
-from orbit.utils.utils import require_env, get_indian_time
+from orbit.utils.utils import require_env, get_indian_time, to_ist
 
 
 # ---- LangSmith env ----
@@ -322,6 +322,7 @@ class SentimentWorkflow(ExceptionManager):
                 created_utc = post.get("created_utc")
                 if created_utc is not None:
                     post_dt = datetime.fromtimestamp(float(created_utc))
+                    post_dt = to_ist(post_dt)
                     if post_dt <= since:
                         continue
                 new_posts.append(post)
