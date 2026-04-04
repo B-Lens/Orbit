@@ -323,6 +323,7 @@ class SentimentWorkflow(ExceptionManager):
                 if created_utc is not None:
                     post_dt = datetime.fromtimestamp(float(created_utc))
                     post_dt = to_ist(post_dt)
+                    logger.info(f"Post '{post.get('title', '')}' created at {post_dt.isoformat()} (since={since.isoformat()})")
                     if post_dt <= since:
                         continue
                 new_posts.append(post)

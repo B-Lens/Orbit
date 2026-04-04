@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 from dotenv import load_dotenv
 
-from orbit.utils.utils import get_indian_time
+from orbit.utils.utils import get_indian_time, to_ist
 
 load_dotenv()
 
@@ -77,6 +77,8 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
         else:
             since_aware = since
 
+    since_aware = to_ist(since_aware) if since_aware else None
+
     for article in news_data.get("results", []):
         article_id = article.get("article_id") or article.get("link") or ""
 
@@ -92,6 +94,8 @@ def fetch_news_articles_since(since: Optional[datetime] = None) -> tuple[str, li
                     pub_dt = datetime.strptime(pub_date_str, "%Y-%m-%d %H:%M:%S").replace(
                         tzinfo=timezone.utc
                     )
+                    pub_dt = to_ist(pub_dt)
+                    logger.info(f"Article '{article.get('title', '')}' published at {pub_dt.isoformat()} (since={since_aware.isoformat()})")
                     if pub_dt <= since_aware:
                         continue
                 except ValueError:
