@@ -75,24 +75,22 @@ def fetch_news_articles_since(since_aware: Optional[datetime] = None) -> tuple[s
         if article_id and article_id in _seen_article_ids:
             continue
 
-        # Skip articles older than `since` if provided
-        if since_aware is not None:
+        try:
             pub_date_str = article.get("pubDate") or ""
-            if pub_date_str:
-                try:
-                    pub_dt = datetime.strptime(pub_date_str, "%Y-%m-%d %H:%M:%S").replace(
-                        tzinfo=timezone.utc
-                    )
-                    pub_dt = to_ist(pub_dt)
-                    logger.info(f"Article '{article.get('title', '')}' published at {pub_dt.isoformat()} (since={since_aware.isoformat()})")
-                    if pub_dt <= since_aware:
-                        continue
+            pub_dt = datetime.strptime(pub_date_str, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+            pub_dt = to_ist(pub_dt)
+            if since_aware is not None and pub_dt <= since_aware:
+                continue    # Skip articles older than `since` if provided
+        except ValueError:
+            continue  # If we can't parse, exclude the article
 
-                    if _last_fetch_time is None or pub_dt > _last_fetch_time:
-                        _last_fetch_time = pub_dt
 
-                except ValueError:
-                    pass  # If we can't parse, include the article
+        logger.info(f"Article '{article.get('title', '')}' published at {pub_dt.isoformat()} (since={since_aware.isoformat()})")
+                    
+        if _last_fetch_time is None or pub_dt > _last_fetch_time:
+            _last_fetch_time = pub_dt
 
         title = article.get("title") or ""
         description = article.get("description") or ""
