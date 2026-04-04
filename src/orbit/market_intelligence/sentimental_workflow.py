@@ -11,9 +11,12 @@ This module orchestrates the full market sentiment analysis pipeline by:
 - Persisting results to MongoDB
 - Producing trading signals and trends
 
-Also provides a lightweight `run_news_update()` path that only fetches
-*new* articles since the last call and re-scores news sentiment without
-re-running the full Reddit / indicator pipeline — keeping LLM token usage low.
+Also provides a lightweight `run_news_update()` path that:
+- Fetches only *new* news articles since the last call.
+- Fetches Reddit posts and checks for *new* posts since the last call.
+- Re-scores sentiment when either new news OR new Reddit posts are found.
+- Falls back to running full sentiment if both sources have new data.
+- Keeps LLM token usage low by skipping the call when nothing is new.
 
 Designed for traceability using LangSmith.
 """
@@ -85,10 +88,13 @@ class SentimentWorkflow:
     - Persist analysis results to MongoDB
     - Generate trends and trading signals
 
-    Lightweight path:
-    - ``run_news_update()`` fetches only *new* articles since the last call,
-      re-scores news sentiment, and patches the latest MongoDB record.
-      No Reddit or indicator calls are made, keeping LLM token usage low.
+    Lightweight path (run_news_update):
+    - Fetches only *new* news articles since the last call.
+    - Fetches Reddit posts and detects *new* posts since the last call.
+    - Runs LLM sentiment when either source has new data.
+    - Skips LLM entirely when nothing new is found, keeping token usage low.
+    - Last-fetch timestamps are managed externally via Redis by Croner so
+      they survive process restarts.
     """
 
     def __init__(self, llm: LLM) -> None:
@@ -103,8 +109,10 @@ class SentimentWorkflow:
         self.reddit_analyzer: WeightedRedditAnalyzer = WeightedRedditAnalyzer(llm)
         self.mongodb: MongoDBManager = MongoDBManager()
 
-        # Timestamp of the last news fetch — used by run_news_update()
+        # Timestamps managed here as in-process fallback.
+        # Croner is responsible for persisting these to Redis across restarts.
         self._last_news_fetch: Optional[datetime] = None
+        self._last_reddit_fetch: Optional[datetime] = None
 
         # Last news sentiment produced by any run — used for drift detection
         self.last_news_sentiment: Optional[NewsSentiment] = None
@@ -180,7 +188,7 @@ class SentimentWorkflow:
             Combined news text.
         """
         news_article: str = fetch_news_articles.invoke(topic)
-        self._last_news_fetch = datetime.now(timezone.utc)
+        self._last_news_fetch = datetime.now()
         return news_article
 
     @traceable(name="fetch_indicators")
@@ -272,52 +280,172 @@ class SentimentWorkflow:
             return "Market reasoning unavailable."
 
     # ------------------------------------------------------------------
-    # LIGHTWEIGHT NEWS-ONLY UPDATE
+    # REDDIT NEW-POST DETECTION
     # ------------------------------------------------------------------
 
-    async def run_news_update(self) -> Dict[str, Any]:
+    def _fetch_new_reddit_posts(
+        self,
+        since: Optional[datetime],
+        hours_back: int = 1,
+        posts_per_subreddit: int = 15,
+    ) -> tuple[Dict[str, Dict[str, Any]], int]:
         """
-        Lightweight update: fetch only *new* news articles and re-score
-        news sentiment without touching Reddit or macro indicators.
+        Fetch Reddit posts and filter to only those created after *since*.
+
+        Args:
+            since: Datetime threshold. Posts at or before this time are dropped.
+                   When ``None`` all fetched posts are treated as new.
+            hours_back: Look-back window passed to the Reddit client.
+            posts_per_subreddit: Max posts per subreddit.
+
+        Returns:
+            Tuple of (filtered_reddit_posts_data, total_new_post_count).
+            filtered_reddit_posts_data has the same shape as the raw fetch
+            result but with only new posts inside each subreddit entry.
+        """
+        raw_data = self.fetch_reddit(
+            hours_back=hours_back,
+            posts_per_subreddit=posts_per_subreddit,
+        )
+
+        if since is None:
+            total = sum(len(v.get("posts", [])) for v in raw_data.values())
+            return raw_data, total
+
+        filtered: Dict[str, Dict[str, Any]] = {}
+        total_new = 0
+
+        for subreddit, data in raw_data.items():
+            new_posts = []
+            for post in data.get("posts", []):
+                # Reddit posts carry a UTC unix timestamp in "created_utc"
+                created_utc = post.get("created_utc")
+                if created_utc is not None:
+                    post_dt = datetime.fromtimestamp(float(created_utc))
+                    if post_dt <= since:
+                        continue
+                new_posts.append(post)
+
+            if new_posts:
+                filtered[subreddit] = {**data, "posts": new_posts}
+                total_new += len(new_posts)
+
+        return filtered, total_new
+
+    # ------------------------------------------------------------------
+    # LIGHTWEIGHT NEWS + REDDIT UPDATE
+    # ------------------------------------------------------------------
+
+    async def run_news_update(
+        self,
+        last_news_fetch: Optional[datetime] = None,
+        last_reddit_fetch: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """
+        Lightweight update: check both news and Reddit for new content and
+        re-score sentiment only when something new is found.
 
         This is designed to be called every 10 minutes.  It returns a
         minimal result dict so the caller can decide whether a full
         ``run_analysis()`` is warranted.
 
         Token usage is kept low because:
-        - No Reddit batch analysis is performed.
-        - The LLM prompt is only sent when new articles are actually found.
+        - The LLM prompt is only sent when new articles or posts are found.
+        - No macro indicator calls are made.
+
+        Args:
+            last_news_fetch: Timestamp of the last news fetch (from Redis).
+                             Falls back to ``self._last_news_fetch`` when ``None``.
+            last_reddit_fetch: Timestamp of the last Reddit fetch (from Redis).
+                               Falls back to ``self._last_reddit_fetch`` when ``None``.
 
         Returns:
             Dict with keys:
+                ``has_new_data`` (bool),
                 ``has_new_articles`` (bool),
+                ``has_new_reddit_posts`` (bool),
                 ``news_sentiment`` (NewsSentiment | None),
                 ``new_article_count`` (int),
+                ``new_reddit_post_count`` (int),
+                ``last_news_fetch`` (str ISO-8601),
+                ``last_reddit_fetch`` (str ISO-8601),
                 ``timestamp`` (str),
                 ``success`` (bool).
         """
-        try:
-            news_text, new_ids = fetch_news_articles_since(
-                since=self._last_news_fetch
-            )
-            self._last_news_fetch = datetime.now(timezone.utc)
+        # Resolve timestamps — prefer caller-supplied (from Redis) over in-process cache
+        effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
+        effective_reddit_since: Optional[datetime] = last_reddit_fetch or self._last_reddit_fetch
 
-            if not news_text:
+        now = datetime.now()
+
+        try:
+            # ---- News ----
+            news_text, new_ids = fetch_news_articles_since(since=effective_news_since)
+            self._last_news_fetch = now
+            has_new_articles = bool(news_text)
+            new_article_count = len(new_ids)
+
+            if not has_new_articles:
                 logger.info("News update: no new articles found.")
+
+            # ---- Reddit ----
+            new_reddit_data, new_reddit_post_count = self._fetch_new_reddit_posts(
+                since=effective_reddit_since,
+                hours_back=1,
+                posts_per_subreddit=15,
+            )
+            self._last_reddit_fetch = now
+            has_new_reddit_posts = new_reddit_post_count > 0
+
+            if not has_new_reddit_posts:
+                logger.info("News update: no new Reddit posts found.")
+
+            has_new_data = has_new_articles or has_new_reddit_posts
+
+            if not has_new_data:
+                logger.info("News update: nothing new from news or Reddit — skipping LLM.")
                 return {
                     "success": True,
+                    "has_new_data": False,
                     "has_new_articles": False,
+                    "has_new_reddit_posts": False,
                     "news_sentiment": None,
                     "new_article_count": 0,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "new_reddit_post_count": 0,
+                    "last_news_fetch": now.isoformat(),
+                    "last_reddit_fetch": now.isoformat(),
+                    "timestamp": now.isoformat(),
                 }
 
             logger.info(
-                f"News update: {len(new_ids)} new articles — running LLM sentiment."
+                f"News update: {new_article_count} new articles, "
+                f"{new_reddit_post_count} new Reddit posts — running LLM sentiment."
             )
-            news_sentiment = self.get_market_sentiments(news_text)
 
-            # Patch the most recent MongoDB record with the refreshed news sentiment
+            # ---- Build combined text for LLM ----
+            combined_text_parts: List[str] = []
+
+            if has_new_articles:
+                combined_text_parts.append(f"[NEWS]\n{news_text}")
+
+            if has_new_reddit_posts:
+                reddit_snippets: List[str] = []
+                for subreddit, data in new_reddit_data.items():
+                    for post in data.get("posts", []):
+                        title = post.get("title", "")
+                        selftext = post.get("selftext", "")
+                        snippet = f"{title}. {selftext}".strip()
+                        if snippet:
+                            reddit_snippets.append(snippet)
+                if reddit_snippets:
+                    combined_text_parts.append(
+                        f"[REDDIT]\n" + "\n\n".join(reddit_snippets)
+                    )
+
+            combined_text = "\n\n".join(combined_text_parts)
+            news_sentiment = self.get_market_sentiments(combined_text)
+
+            # ---- Patch the most recent MongoDB record ----
             try:
                 recent = self.mongodb.get_recent_sentiments(hours=1)
                 if recent:
@@ -332,37 +460,46 @@ class SentimentWorkflow:
                                         "sentiment": news_sentiment.sentiment,
                                         "confidence": news_sentiment.confidence,
                                         "explanation": news_sentiment.explanation,
-                                        "updated_at": datetime.now(
-                                            timezone.utc
-                                        ).isoformat(),
-                                        "new_articles": len(new_ids),
+                                        "updated_at": now.isoformat(),
+                                        "new_articles": new_article_count,
+                                        "new_reddit_posts": new_reddit_post_count,
                                     }
                                 }
                             },
                         )
                         logger.info(
-                            f"Patched MongoDB record {record_id} with fresh news sentiment."
+                            f"Patched MongoDB record {record_id} with fresh sentiment."
                         )
             except Exception:
                 logger.exception("Failed to patch MongoDB record with news update.")
 
             return {
                 "success": True,
-                "has_new_articles": True,
+                "has_new_data": True,
+                "has_new_articles": has_new_articles,
+                "has_new_reddit_posts": has_new_reddit_posts,
                 "news_sentiment": news_sentiment,
-                "new_article_count": len(new_ids),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "new_article_count": new_article_count,
+                "new_reddit_post_count": new_reddit_post_count,
+                "last_news_fetch": now.isoformat(),
+                "last_reddit_fetch": now.isoformat(),
+                "timestamp": now.isoformat(),
             }
 
         except Exception as e:
             logger.exception("run_news_update failed")
             return {
                 "success": False,
+                "has_new_data": False,
                 "has_new_articles": False,
+                "has_new_reddit_posts": False,
                 "news_sentiment": None,
                 "new_article_count": 0,
+                "new_reddit_post_count": 0,
                 "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "last_news_fetch": (last_news_fetch or self._last_news_fetch or now).isoformat(),
+                "last_reddit_fetch": (last_reddit_fetch or self._last_reddit_fetch or now).isoformat(),
+                "timestamp": now.isoformat(),
             }
 
     # ------------------------------------------------------------------
@@ -438,6 +575,11 @@ class SentimentWorkflow:
                 combined_result,
                 int((time.time() - start_time) * 1000),
             )
+
+            # Update in-process timestamps after a successful full run
+            now = datetime.now()
+            self._last_news_fetch = now
+            self._last_reddit_fetch = now
 
             trend = self.mongodb.calculate_trends(hours=24)
             signal = self.mongodb.get_trading_signals()
