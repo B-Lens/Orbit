@@ -5,10 +5,7 @@ from openai import OpenAI
 
 logger = logging.getLogger("Orbit")
 
-OPENROUTER_MODEL = "qwen/qwen3-235b-a22b:free"
-SITE_URL = os.getenv("OPENROUTER_SITE_URL", "https://orbit.local")
-SITE_NAME = os.getenv("OPENROUTER_SITE_NAME", "Orbit")
-
+OPENROUTER_MODEL = "openrouter/free"
 
 class OpenRouterClient:
     """Thin wrapper around the OpenRouter chat-completions endpoint via the OpenAI SDK.
@@ -28,12 +25,7 @@ class OpenRouterClient:
         self.timeout = timeout
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=self.api_key,
-            timeout=timeout,
-            default_headers={
-                "HTTP-Referer": SITE_URL,
-                "X-Title": SITE_NAME,
-            },
+            api_key=self.api_key
         )
 
     # ------------------------------------------------------------------
