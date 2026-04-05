@@ -19,8 +19,8 @@ load_dotenv()  # Load environment variables from .env file
 # ---------------------------------------------------------------------------
 # Model configuration
 # ---------------------------------------------------------------------------
-OPENROUTER_MODEL = "qwen/qwen3-235b-a22b:free"
-GROQ_FALLBACK_MODELS = ["llama-3.1-8b-instant", "gemma2-9b-it"]
+OPENROUTER_MODEL = "qwen/qwen3.6-plus:free"
+GROQ_FALLBACK_MODELS = ["openai/gpt-oss-120b", "llama-3.1-8b-instant", "gemma2-9b-it"]
 
 logger = logging.getLogger("Orbit")
 
