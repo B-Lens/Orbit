@@ -41,60 +41,51 @@ class LLM(ExceptionManager):
         # ------------------------------------------------------------------
         # 1. Initialize Groq (PRIMARY)
         # ------------------------------------------------------------------
-        groq_key = os.getenv("GROQ_API_KEY")
-        if groq_key:
-            os.environ["GROQ_API_KEY"] = groq_key
+        os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 
-            for model_name in GROQ_MODELS:
-                try:
-                    logger.info(f"Trying Groq model: {model_name}")
-                    candidate = ChatGroq(
-                        model=model_name,
-                        temperature=0,
-                        timeout=30,
-                    )
-                    candidate.invoke("Test")
-                    logger.info(f"Groq model '{model_name}' initialized successfully")
-                    self.groq_llm = candidate
-                    break
-                except Exception as e:
-                    logger.error(f"Failed Groq model '{model_name}': {e}")
-        else:
-            logger.warning("GROQ_API_KEY not set")
+        for model_name in GROQ_MODELS:
+            try:
+                logger.info(f"Trying Groq model: {model_name}")
+                candidate = ChatGroq(
+                    model=model_name,
+                    temperature=0,
+                    timeout=30,
+                )
+                candidate.invoke("Test")
+                logger.info(f"Groq model '{model_name}' initialized successfully")
+                self.groq_llm = candidate
+                break
+            except Exception as e:
+                logger.error(f"Failed Groq model '{model_name}': {e}")
 
         # ------------------------------------------------------------------
         # 2. Initialize OpenRouter (FALLBACK)
         # ------------------------------------------------------------------
-        openrouter_key = os.getenv("OPENROUTER_API_KEY")
-        if openrouter_key:
-            try:
-                client = OpenRouterClient(
-                    api_key=openrouter_key,
-                    model=OPENROUTER_MODEL,
-                )
+        try:
+            client = OpenRouterClient(
+                api_key=os.getenv("OPENROUTER_API_KEY"),
+                model=OPENROUTER_MODEL,
+            )
 
-                client.invoke("Test")
+            client.invoke("Test")
 
-                logger.info(
-                    f"OpenRouter model '{OPENROUTER_MODEL}' initialized successfully"
-                )
+            logger.info(
+                f"OpenRouter model '{OPENROUTER_MODEL}' initialized successfully"
+            )
 
-                self.openrouter_llm = client
+            self.openrouter_llm = client
 
-            except Exception as e:
-                logger.error(f"OpenRouter initialization failed: {e}")
-        else:
-            logger.warning("OPENROUTER_API_KEY not set")
-
+        except Exception as e:
+            logger.error(f"OpenRouter initialization failed: {e}")
+            self.handle_exception(
+                e,
+                context_description="OpenRouter LLM init failure",
+            )
         # ------------------------------------------------------------------
         # 3. fail if both missing
         # ------------------------------------------------------------------
-        if not self.groq_llm and not self.openrouter_llm:
-            self.handle_exception(
-                Exception("No LLM backend available"),
-                context_description="LLM init failure",
-            )
-
+        assert self.groq_llm or self.openrouter_llm, "No LLM backend available"
+    
     # -----------------------------------------------------------------------
     # invoke
     # -----------------------------------------------------------------------
