@@ -12,6 +12,7 @@ from orbit.utils.utils import require_env
 from dotenv import load_dotenv
 import redis
 from datetime import datetime
+from orbit.core.exception_manager import ExceptionManager
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -20,7 +21,7 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 
 logger = logging.getLogger("Orbit")
 
-class LLM:
+class LLM(ExceptionManager):
     def __init__(self) -> Optional[BaseChatModel]:
         self.redis_client = redis.StrictRedis(host="localhost", port=6379, db=0, decode_responses=True)
         llm = None
@@ -48,6 +49,10 @@ class LLM:
             
             # If all Groq models fail, return None
             logger.error("All Groq models failed to initialize")
+            self.handle_exception(
+                Exception("All Groq models failed to initialize"),
+                context_description="LLM initialization failure"
+            )
         
     def invoke(self, prompt: str) -> Optional[str]:
         """Invoke the LLM with a prompt."""
@@ -72,10 +77,18 @@ class LLM:
             logger.info(f"Cumulative token count in 24 hrs: {cumulative}")
         except Exception as e:
             logger.exception(f"Failed to update API token count in redis: {e}")
+            self.handle_exception(
+                e,
+                context_description="Failed to update API token count in redis"
+            )
         
         try:
             response = self.llm.invoke(prompt)
             return response.content
         except Exception as e:
             logger.error(f"LLM invocation failed: {e}")
+            self.handle_exception(
+                e,
+                context_description="LLM invocation failure"
+            )
             return None
