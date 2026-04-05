@@ -81,20 +81,15 @@ class LLM(ExceptionManager):
                 e,
                 context_description="OpenRouter LLM init failure",
             )
-        # ------------------------------------------------------------------
-        # 3. fail if both missing
-        # ------------------------------------------------------------------
-        assert self.groq_llm or self.openrouter_llm, "No LLM backend available"
     
     # -----------------------------------------------------------------------
     # invoke
     # -----------------------------------------------------------------------
 
     def invoke(self, prompt: str) -> Optional[str]:
-        if not self.groq_llm and not self.openrouter_llm:
-            logger.error("No LLM available")
-            return None
 
+        assert self.groq_llm or self.openrouter_llm, "No LLM backend available"
+    
         prompt_token_length = len(prompt.split())
         logger.info(f"Invoking LLM token length: {prompt_token_length}")
         self._track_token_usage(prompt_token_length)
