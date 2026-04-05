@@ -140,7 +140,7 @@ def main():
     logging.info("Base SHA: %s", base)
     logging.info("Head SHA: %s", head)
 
-    ai = GitHubModelClient()
+    ai = FallbackClient()
 
     files = get_changed_files(base, head)
 
