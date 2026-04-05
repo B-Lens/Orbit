@@ -458,38 +458,6 @@ class SentimentWorkflow(ExceptionManager):
             combined_text = "\n\n".join(combined_text_parts)
             news_sentiment = self.get_market_sentiments(combined_text)
 
-            # ---- Patch the most recent MongoDB record ----
-            try:
-                recent = self.mongodb.get_recent_sentiments(hours=1)
-                if recent:
-                    latest = recent[0]
-                    record_id = latest.get("_id")
-                    if record_id:
-                        self.mongodb.sentiment_history.update_one(
-                            {"_id": record_id},
-                            {
-                                "$set": {
-                                    "news_sentiment.latest_update": {
-                                        "sentiment": news_sentiment.sentiment,
-                                        "confidence": news_sentiment.confidence,
-                                        "explanation": news_sentiment.explanation,
-                                        "updated_at": now.isoformat(),
-                                        "new_articles": new_article_count,
-                                        "new_reddit_posts": new_reddit_post_count,
-                                    }
-                                }
-                            },
-                        )
-                        logger.info(
-                            f"Patched MongoDB record {record_id} with fresh sentiment."
-                        )
-            except Exception as e:
-                logger.exception("Failed to patch MongoDB record with news update.")
-                self.handle_exception(
-                    exception=e,
-                    context_description="Failed to patch MongoDB record with news update",
-                )
-
             return {
                 "success": True,
                 "has_new_data": True,

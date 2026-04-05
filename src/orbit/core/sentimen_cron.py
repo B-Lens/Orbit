@@ -191,8 +191,6 @@ class Croner(ExceptionManager):
         1. Load last-fetch timestamps from Redis (survives restarts).
         2. Pass them to :meth:`SentimentWorkflow.run_news_update`.
         3. Persist the updated timestamps back to Redis.
-        4. If new data was found and sentiment drifted from the cached value,
-           trigger an immediate full ``run_once()``.
 
         Returns:
             The result dict from :meth:`SentimentWorkflow.run_news_update`.
@@ -286,18 +284,13 @@ class Croner(ExceptionManager):
         Run :meth:`run_news_update_once` every :attr:`news_poll_interval`
         seconds, forever.
 
-        This blocking method is designed to be executed inside a dedicated
-        daemon thread alongside :meth:`sentiment_croner`.
-
         Design notes
         ------------
-        * Runs independently of the hourly full-analysis loop.
+        * Runs hourly full-analysis loop and incremental news updates independently.
         * Loads and saves last-fetch timestamps from/to Redis on every cycle
           so the correct deduplication window is maintained across restarts.
         * Only calls the LLM when new news articles or Reddit posts are found,
           keeping token usage low.
-        * Triggers a full analysis automatically on significant sentiment
-          drift so the Redis cache and MongoDB record stay fresh.
         """
         while True:
             try:
