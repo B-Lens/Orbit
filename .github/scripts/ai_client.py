@@ -72,7 +72,6 @@ class OpenRouterClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=1.0,
-            max_tokens=1000,
         )
 
         return response.choices[0].message.content.strip()
