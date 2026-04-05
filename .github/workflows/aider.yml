@@ -79,10 +79,10 @@ jobs:
           - Do not explain or propose a plan. Directly make the necessary file changes.
           EOF
 
-      - name: Repo Map
-        continue-on-error: true
-        run: |
-          aider --show-repo-map --exit --yes > aider_repo_map.txt
+      # - name: Repo Map
+      #   continue-on-error: true
+      #   run: |
+      #     aider --show-repo-map --exit --yes > aider_repo_map.txt
 
       - name: Run Aider
         env:
