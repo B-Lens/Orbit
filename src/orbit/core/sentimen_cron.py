@@ -294,9 +294,18 @@ class Croner(ExceptionManager):
         """
         while True:
             try:
-                current_time = get_indian_time()
-                if current_time.minute == 0:
+                current_hour = get_indian_time().hour
+
+                last_run = self.redis_client.get("ms_hourly_last_run")
+                last_run = int(last_run) if last_run else None
+
+                if last_run != current_hour:
                     asyncio.run(self.run_once())
+
+                    self.redis_client.set(
+                        "ms_hourly_last_run",
+                        current_hour
+                    )
                     time.sleep(self.news_poll_interval)
                 asyncio.run(self.run_news_update_once())
                 time.sleep(self.news_poll_interval)
