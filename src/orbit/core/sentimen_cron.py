@@ -273,10 +273,10 @@ class Croner(ExceptionManager):
                 try:
                     self.redis_client.set(_REDIS_KEY_MARKET_SENTIMENT, news_sentiment.sentiment)
                 except Exception as e:
-                    logger.exception("Failed to update Redis after full analysis.")
+                    logger.exception("Failed to update Redis after incremental analysis.")
                     self.handle_exception(
                         e,
-                        context_description="Failed to update Redis after full analysis",
+                        context_description="Failed to update Redis after incremental analysis",
                     )
 
                 # await self.run_once()
