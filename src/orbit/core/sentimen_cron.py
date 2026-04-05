@@ -179,25 +179,6 @@ class Croner(ExceptionManager):
 
         return result
 
-    def sentiment_croner(self) -> None:
-        """Run :meth:`run_once` at the top of every hour, forever.
-
-        This blocking method is designed to be executed inside a dedicated
-        daemon thread.
-        """
-        while True:
-            try:
-                current_time = get_indian_time()
-                if current_time.minute == 0:
-                    asyncio.run(self.run_once())
-                    time.sleep(90)
-                time.sleep(30)
-            except Exception as e:
-                self.handle_exception(
-                    e, context_description="Exception in Sentiment Croner"
-                )
-                time.sleep(90)
-
     # ------------------------------------------------------------------
     # LIGHTWEIGHT NEWS + REDDIT UPDATE
     # ------------------------------------------------------------------
@@ -250,7 +231,7 @@ class Croner(ExceptionManager):
             f"confidence={news_sentiment.confidence if news_sentiment else 'N/A'}"
         )
 
-        if news_sentiment:
+        if news_sentiment: # news_sentiment is combined sentiment
             # Notify Discord about the incremental update
             self.send_market_sentiment(
                 data=(
@@ -288,7 +269,17 @@ class Croner(ExceptionManager):
                     f"{self.sentiment_drift_threshold}). "
                     "Triggering immediate full analysis."
                 )
-                await self.run_once()
+                # Cache sentiment label and update fetch timestamps
+                try:
+                    self.redis_client.set(_REDIS_KEY_MARKET_SENTIMENT, news_sentiment.sentiment)
+                except Exception as e:
+                    logger.exception("Failed to update Redis after incremental analysis.")
+                    self.handle_exception(
+                        e,
+                        context_description="Failed to update Redis after incremental analysis",
+                    )
+
+                # await self.run_once()
 
         return result
 
