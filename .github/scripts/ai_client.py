@@ -1,6 +1,6 @@
 import os
 from openai import OpenAI
-
+import logging
 
 class AIClient:
     def __init__(self, model="o3-mini"):
@@ -76,3 +76,18 @@ class OpenRouterClient:
         )
 
         return response.choices[0].message.content.strip()
+
+class FallbackClient:
+    def __init__(self):
+        self.primary = GitHubModelClient()
+        self.fallback = OpenRouterClient()
+
+    def chat(self, system_prompt: str, user_prompt: str) -> str:
+        try:
+            logging.info("Using primary model (GitHub)")
+            return self.primary.chat(system_prompt, user_prompt)
+        except Exception as e:
+            logging.warning("Primary failed → OpenRouter fallback: %s", e)
+
+        logging.info("Using fallback model (OpenRouter)")
+        return self.fallback.chat(system_prompt, user_prompt)
