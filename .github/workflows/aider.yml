@@ -120,6 +120,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MODEL_TOKEN: ${{ secrets.MODEL_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          OPENROUTR_API_KEY: ${{ secrets.OPENROUTR_API_KEY }}
         run: |
           python .github/scripts/generate_pr_summary.py
 
