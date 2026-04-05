@@ -3,7 +3,7 @@ import subprocess
 import logging
 
 # pylint: disable=import-error
-from ai_client import GitHubModelClient
+from ai_client import FallbackClient
 from supermemory import Supermemory
 
 
@@ -88,7 +88,7 @@ def main():
         )
 
     log.info("Initializing AI client")
-    ai = GitHubModelClient()
+    ai = FallbackClient()
 
     files = get_changed_files(base, head)
 
