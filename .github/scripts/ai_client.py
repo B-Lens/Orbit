@@ -49,3 +49,30 @@ class GitHubModelClient:
         )
 
         return response.choices[0].message.content.strip()
+
+
+class OpenRouterClient:
+    def __init__(self, model="openrouter/free"):
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY not set")
+
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+
+        self.model = model
+
+    def chat(self, system_prompt: str, user_prompt: str) -> str:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=1.0,
+            max_tokens=1000,
+        )
+
+        return response.choices[0].message.content.strip()
