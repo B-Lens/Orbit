@@ -3,7 +3,7 @@ import subprocess
 import requests
 import logging
 # pylint: disable=import-error
-from ai_client import GitHubModelClient
+from ai_client import FallbackClient 
 
 
 logging.basicConfig(
