@@ -1,18 +1,17 @@
 import logging
 import os
-import requests
 from typing import Optional
+from openai import OpenAI
 
 logger = logging.getLogger("Orbit")
 
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+OPENROUTER_MODEL = "qwen/qwen3-235b-a22b:free"
 SITE_URL = os.getenv("OPENROUTER_SITE_URL", "https://orbit.local")
 SITE_NAME = os.getenv("OPENROUTER_SITE_NAME", "Orbit")
 
 
 class OpenRouterClient:
-    """Thin HTTP wrapper around the OpenRouter chat-completions endpoint.
+    """Thin wrapper around the OpenRouter chat-completions endpoint via the OpenAI SDK.
 
     Mimics the minimal interface used by the rest of the codebase:
         client.invoke(prompt: str) -> str | None
@@ -20,19 +19,22 @@ class OpenRouterClient:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         model: str = OPENROUTER_MODEL,
         timeout: int = 60,
     ) -> None:
-        self.api_key = api_key
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
         self.model = model
         self.timeout = timeout
-        self._headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": SITE_URL,
-            "X-OpenRouter-Title": SITE_NAME,
-            "Content-Type": "application/json",
-        }
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=self.api_key,
+            timeout=timeout,
+            default_headers={
+                "HTTP-Referer": SITE_URL,
+                "X-Title": SITE_NAME,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Public interface
@@ -40,30 +42,14 @@ class OpenRouterClient:
 
     def invoke(self, prompt: str) -> Optional[str]:
         """Send *prompt* to OpenRouter and return the assistant reply text."""
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-
         try:
-            response = requests.post(
-                OPENROUTER_API_URL,
-                headers=self._headers,
-                json=payload,
-                timeout=self.timeout,
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
             )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            return content
-        except requests.HTTPError as http_err:
-            logger.error(
-                f"OpenRouter HTTP error {http_err.response.status_code}: "
-                f"{http_err.response.text}"
-            )
-            raise
-        except (KeyError, IndexError) as parse_err:
-            logger.error(f"OpenRouter response parse error: {parse_err}")
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"OpenRouter error: {e}")
             raise
 
     # ------------------------------------------------------------------
