@@ -6,7 +6,7 @@ from typing import Optional
 logger = logging.getLogger("Orbit")
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "qwen/qwen3-235b-a22b:free"
+OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 SITE_URL = os.getenv("OPENROUTER_SITE_URL", "https://orbit.local")
 SITE_NAME = os.getenv("OPENROUTER_SITE_NAME", "Orbit")
 
