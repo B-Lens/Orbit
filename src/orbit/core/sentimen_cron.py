@@ -279,8 +279,6 @@ class Croner(ExceptionManager):
                         context_description="Failed to update Redis after incremental analysis",
                     )
 
-                # await self.run_once()
-
         return result
 
     def news_croner(self) -> None:
@@ -303,6 +301,10 @@ class Croner(ExceptionManager):
         """
         while True:
             try:
+                current_time = get_indian_time()
+                if current_time.minute == 0:
+                    asyncio.run(self.run_once())
+                    time.sleep(self.news_poll_interval)
                 asyncio.run(self.run_news_update_once())
                 time.sleep(self.news_poll_interval)
             except Exception as e:
