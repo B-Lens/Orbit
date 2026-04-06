@@ -19,7 +19,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Model configuration
 # ---------------------------------------------------------------------------
-OPENROUTER_MODEL = "qwen/qwen3.6-plus:free"
+OPENROUTER_MODEL = "openrouter/free"
 GROQ_MODELS = ["openai/gpt-oss-120b", "llama-3.1-8b-instant", "gemma2-9b-it"]
 
 logger = logging.getLogger("Orbit")
