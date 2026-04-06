@@ -126,7 +126,14 @@ def fetch_news_articles(query: str) -> str:
         logger.error("NEWSDATA_API_KEY not configured")
         return "No valid news content found."
 
-    query = "bitcoin OR crypto OR stock market"
+    query = (
+                "bitcoin OR crypto OR stock market OR"
+                "gold OR xau OR"
+                "federal reserve OR fed OR interest rate OR"
+                "inflation OR cpi OR"
+                "central bank OR monetary policy OR liquidity OR"
+                "geopolitics OR war OR sanctions"
+             )
     url = (
         f"https://newsdata.io/api/1/news"
         f"?apikey={NEWSDATA_API_KEY}"

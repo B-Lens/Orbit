@@ -124,7 +124,7 @@ class SentimentWorkflow(ExceptionManager):
     @traceable(name="fetch_reddit_posts")
     def fetch_reddit(
         self,
-        hours_back: int = 6,
+        hours_back: int = 1,
         posts_per_subreddit: int = 15,
     ) -> Dict[str, Dict[str, Any]]:
         """
@@ -205,7 +205,7 @@ class SentimentWorkflow(ExceptionManager):
     # LLM SENTIMENT
     # ------------------------------------------------------------------
 
-    def get_market_sentiments(self, news_text: str, prompt: str = None) -> NewsSentiment:
+    def get_market_sentiments(self, news_text: str, prompt: Optional[str] = None) -> NewsSentiment:
         """
         Use LLM to classify overall market sentiment from news articles.
 
