@@ -230,23 +230,6 @@ class Croner(ExceptionManager):
         )
 
         if news_sentiment: # news_sentiment is combined sentiment
-            # Notify Discord about the incremental update
-            self.send_market_sentiment(
-                data=(
-                    f"[Incremental Update] {new_article_count} new articles, "
-                    f"{new_reddit_post_count} new Reddit posts — "
-                    f"Sentiment={news_sentiment.sentiment}, "
-                    f"Confidence={news_sentiment.confidence:.2f}"
-                ),
-                description="Incremental news + Reddit sentiment update",
-                fields={
-                    "sentiment": news_sentiment.sentiment,
-                    "confidence": news_sentiment.confidence,
-                    "explanation": news_sentiment.explanation,
-                    "new_articles": new_article_count,
-                    "new_reddit_posts": new_reddit_post_count,
-                },
-            )
 
             # Check for sentiment drift vs cached value
             cached_sentiment: Optional[str] = self.redis_client.get(
@@ -256,8 +239,28 @@ class Croner(ExceptionManager):
                 cached_sentiment is None or (
                     news_sentiment.sentiment != cached_sentiment
                     and news_sentiment.confidence >= self.sentiment_drift_threshold
+                    and news_sentiment.sentiment in {"BULLISH", "BEARISH"}  # Only trigger on clear directional shifts
                 )
             )
+
+            # Notify Discord about the incremental update
+            self.send_market_sentiment(
+                data=(
+                    f"[Incremental Update] {new_article_count} new articles, "
+                    f"{new_reddit_post_count} new Reddit posts — "
+                    f"Sentiment={news_sentiment.sentiment}, "
+                    f"Confidence={news_sentiment.confidence:.2f}"
+                ),
+                description=f"Sentiment drift detected: {sentiment_drifted} ::== {cached_sentiment} → {news_sentiment.sentiment}",
+                fields={
+                    "sentiment": news_sentiment.sentiment,
+                    "confidence": news_sentiment.confidence,
+                    "explanation": news_sentiment.explanation,
+                    "new_articles": new_article_count,
+                    "new_reddit_posts": new_reddit_post_count,
+                },
+            )
+
 
             if sentiment_drifted:
                 logger.warning(
