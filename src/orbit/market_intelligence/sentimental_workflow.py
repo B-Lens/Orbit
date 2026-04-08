@@ -124,7 +124,7 @@ class SentimentWorkflow(ExceptionManager):
     @traceable(name="fetch_reddit_posts")
     def fetch_reddit(
         self,
-        hours_back: int = 1,
+        hours_back: int = 5,
         posts_per_subreddit: int = 15,
     ) -> Dict[str, Dict[str, Any]]:
         """
