@@ -446,14 +446,9 @@ class SentimentWorkflow(ExceptionManager):
 
             # Filter to articles newer than the last fetch timestamp
             if effective_news_since is not None:
-                # Normalise since to naive UTC for comparison
-                since_naive: Optional[datetime] = effective_news_since
-                if hasattr(since_naive, "tzinfo") and since_naive.tzinfo is not None:
-                    since_naive = since_naive.astimezone(timezone.utc).replace(tzinfo=None)
-
                 new_articles = [
                     a for a in all_rss
-                    if a["published"] is not None and a["published"] > since_naive
+                    if a["published"] is not None and a["published"] > effective_news_since
                 ]
             else:
                 # First run — treat everything within the last hour as new
@@ -466,8 +461,7 @@ class SentimentWorkflow(ExceptionManager):
             if new_articles and new_articles[0]["published"] is not None:
                 # new_articles is sorted newest-first
                 latest_pub = new_articles[0]["published"]
-                # Convert back to IST-aware if needed; store as naive UTC for simplicity
-                self._last_news_fetch = get_indian_time()
+                self._last_news_fetch = new_articles[0]["published"]
 
             if not has_new_articles:
                 logger.info("run_news_update: no new RSS articles found.")
