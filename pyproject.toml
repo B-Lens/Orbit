@@ -70,6 +70,7 @@ langgraph = "*"
 langsmith = "*"
 pycryptodome = "^3.23.0"
 python-binance = "^1.0.35"
+feedparser = "^6.0.12"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
