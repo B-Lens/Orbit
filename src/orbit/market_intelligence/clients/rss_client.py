@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional
 import feedparser
 from datetime import datetime, timezone, timedelta
 from dateutil import parser as dateparser
-from orbit.utils.utils import to_ist
+from orbit.utils.utils import to_ist, get_indian_time
 
 News = Dict[str, Any]
 
@@ -62,10 +62,14 @@ def fetch_all_rss_news() -> List[News]:
                 for entry in feed.entries:
                     parsed = parse_entry(entry, category)
 
-                    if parsed["title"]:
-                        parsed["published"] = (
-                            to_ist(parsed["published"]) if parsed["published"] else None
-                        )
+                    if parsed["title"] and parsed["published"]:
+                        dt = parsed["published"]
+
+                        # make timezone-aware first
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+
+                        parsed["published"] = to_ist(dt)
                         news.append(parsed)
 
             except Exception as e:
@@ -97,7 +101,7 @@ def sort_latest(news: List[News]) -> List[News]:
 
 
 def filter_recent(news: List[News], hours: int = 6) -> List[News]:
-    now = datetime.utcnow()
+    now = get_indian_time()
     filtered: List[News] = []
 
     for n in news:
