@@ -30,7 +30,7 @@ jobs:
           mkdir -p output
           twitter search "stock market OR fed OR inflation OR gold OR crypto" \
             -n 50 \
-            --json > output/tweets.json
+            --json | tee output/tweets.json
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
