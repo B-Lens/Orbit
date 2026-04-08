@@ -70,6 +70,7 @@ def fetch_all_rss_news() -> List[News]:
                             dt = dt.replace(tzinfo=timezone.utc)
 
                         parsed["published"] = to_ist(dt)
+                        news.append(parsed)
 
             except Exception as e:
                 print(f"Failed feed: {url} -> {e}")
