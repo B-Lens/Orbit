@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 import feedparser
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dateutil import parser as dateparser
 from orbit.utils.utils import to_ist
 
@@ -62,11 +62,14 @@ def fetch_all_rss_news() -> List[News]:
                 for entry in feed.entries:
                     parsed = parse_entry(entry, category)
 
-                    if parsed["title"]:
-                        parsed["published"] = (
-                            to_ist(parsed["published"]) if parsed["published"] else None
-                        )
-                        news.append(parsed)
+                    if parsed["title"] and parsed["published"]:
+                        dt = parsed["published"]
+
+                        # make timezone-aware first
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+
+                        parsed["published"] = to_ist(dt)
 
             except Exception as e:
                 print(f"Failed feed: {url} -> {e}")
