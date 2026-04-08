@@ -553,6 +553,9 @@ class SentimentWorkflow(ExceptionManager):
             - minor commentary
             - speculation
             - duplicate news
+
+            News and Reddit posts:
+            {combined_text}
             """
 
             news_sentiment = self.get_market_sentiments(combined_text, prompt=prompt)
