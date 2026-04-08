@@ -4,7 +4,7 @@ Sentiment Workflow Module
 This module orchestrates the full market sentiment analysis pipeline by:
 - Fetching Reddit posts
 - Applying weighted Reddit sentiment analysis
-- Fetching crypto/market news
+- Fetching crypto/market news via RSS feeds (macro, crypto, global, finance)
 - Running LLM-based news sentiment classification
 - Fetching macro indicators (VIX, Fear & Greed)
 - Combining all signals into a unified market sentiment score
@@ -12,7 +12,7 @@ This module orchestrates the full market sentiment analysis pipeline by:
 - Producing trading signals and trends
 
 Also provides a lightweight `run_news_update()` path that:
-- Fetches only *new* news articles since the last call.
+- Fetches only *new* RSS articles since the last call.
 - Fetches Reddit posts and checks for *new* posts since the last call.
 - Re-scores sentiment when either new news OR new Reddit posts are found.
 - Falls back to running full sentiment if both sources have new data.
@@ -32,9 +32,12 @@ from typing import Dict, Any, List, Literal, Optional
 from langsmith import traceable
 from orbit.core.exception_manager import ExceptionManager
 from orbit.market_intelligence.clients.reddit_client import RedditClient
-from orbit.market_intelligence.clients.news_client import (
-    fetch_news_articles,
-    fetch_news_articles_since,
+from orbit.market_intelligence.clients.rss_client import (
+    fetch_all_rss_news,
+    deduplicate,
+    sort_latest,
+    filter_recent,
+    format_for_llm,
 )
 from orbit.market_intelligence.analysis.reddit_sentiment import (
     RedditSentimentEntry,
@@ -82,19 +85,25 @@ class SentimentWorkflow(ExceptionManager):
 
     Responsibilities:
     - Fetch and analyze Reddit sentiment
-    - Fetch and classify news sentiment using LLM
+    - Fetch and classify news sentiment using LLM (sourced from RSS feeds)
     - Retrieve macro market indicators
     - Combine multiple sentiment signals into a unified score
     - Persist analysis results to MongoDB
     - Generate trends and trading signals
 
     Lightweight path (run_news_update):
-    - Fetches only *new* news articles since the last call.
+    - Fetches only *new* RSS articles since the last call.
     - Fetches Reddit posts and detects *new* posts since the last call.
     - Runs LLM sentiment when either source has new data.
     - Skips LLM entirely when nothing new is found, keeping token usage low.
     - Last-fetch timestamps are managed externally via Redis by Croner so
       they survive process restarts.
+
+    RSS feed categories covered:
+    - macro  : Investing.com (most popular, stock market, forex)
+    - crypto : CoinDesk, CoinTelegraph
+    - global : BBC World, CNN World
+    - finance: Yahoo Finance Gold (GC=F), Yahoo Finance USD Index (DX-Y.NYB)
     """
 
     def __init__(self, llm: LLM) -> None:
@@ -176,20 +185,30 @@ class SentimentWorkflow(ExceptionManager):
         """
         return self.reddit_analyzer.aggregate_weighted_sentiment(sentiments)
 
-    @traceable(name="fetch_news")
-    def fetch_news(self, topic: str = "crypto market") -> str:
+    @traceable(name="fetch_rss_news")
+    def fetch_news(self, hours_back: int = 8, limit: int = 30) -> str:
         """
-        Fetch news articles related to a given topic.
+        Fetch recent news articles from all configured RSS feeds.
+
+        Covers macro (Investing.com), crypto (CoinDesk, CoinTelegraph),
+        global (BBC, CNN) and finance (Yahoo Finance Gold/USD) feeds.
 
         Args:
-            topic: Topic to search news for.
+            hours_back: Only include articles published within this many hours.
+            limit: Maximum number of articles to include in the formatted output.
 
         Returns:
-            Combined news text.
+            Combined news text formatted for LLM consumption.
         """
-        news_article: str = fetch_news_articles.invoke(topic)
+        news = fetch_all_rss_news()
+        news = deduplicate(news)
+        news = sort_latest(news)
+        news = filter_recent(news, hours=hours_back)
+        news_text = format_for_llm(news, limit=limit)
+
         self._last_news_fetch = get_indian_time()
-        return news_article
+        logger.info(f"RSS news fetch: {len(news)} articles after dedup/filter (limit={limit})")
+        return news_text
 
     @traceable(name="fetch_indicators")
     def fetch_indicators(self) -> MarketIndicators:
@@ -211,11 +230,12 @@ class SentimentWorkflow(ExceptionManager):
 
         Args:
             news_text: Combined news article text.
+            prompt: Optional custom prompt override.
 
         Returns:
             Structured NewsSentiment object.
         """
-        
+
         PROMPT = """
             Analyze overall market sentiment from the following news.
 
@@ -229,7 +249,7 @@ class SentimentWorkflow(ExceptionManager):
             News:
             {news_text}
             """ if prompt is None else prompt
-        
+
         RETURN_FORMAT = """
             Respond ONLY in JSON:
             {
@@ -238,11 +258,11 @@ class SentimentWorkflow(ExceptionManager):
                 "explanation": "brief explanation"
             }
             """
-        
-        prompt = PROMPT.format(news_text=news_text) + "\n" + RETURN_FORMAT
+
+        full_prompt = PROMPT.format(news_text=news_text) + "\n" + RETURN_FORMAT
 
         try:
-            raw_content = self.llm.invoke(prompt)
+            raw_content = self.llm.invoke(full_prompt)
             raw_content = str(raw_content)
             data = extract_json(raw_content)
             result = NewsSentiment(**data)
@@ -340,12 +360,14 @@ class SentimentWorkflow(ExceptionManager):
         for subreddit, data in raw_data.items():
             new_posts = []
             for post in data.get("posts", []):
-                # Reddit posts carry a UTC unix timestamp in "created_utc"
                 created_utc = post.get("created_utc")
                 if created_utc is not None:
                     post_dt = datetime.fromtimestamp(float(created_utc))
                     post_dt = to_ist(post_dt)
-                    logger.info(f"Post '{post.get('title', '')}' created at {post_dt.isoformat()} (since={since.isoformat()})")
+                    logger.info(
+                        f"Post '{post.get('title', '')}' created at "
+                        f"{post_dt.isoformat()} (since={since.isoformat()})"
+                    )
                     if post_dt <= since:
                         continue
 
@@ -369,7 +391,7 @@ class SentimentWorkflow(ExceptionManager):
         last_reddit_fetch: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
-        Lightweight update: check both news and Reddit for new content and
+        Lightweight update: check both RSS news and Reddit for new content and
         re-score sentiment only when something new is found.
 
         This is designed to be called every 10 minutes.  It returns a
@@ -379,6 +401,12 @@ class SentimentWorkflow(ExceptionManager):
         Token usage is kept low because:
         - The LLM prompt is only sent when new articles or posts are found.
         - No macro indicator calls are made.
+
+        RSS feeds polled:
+        - macro  : Investing.com (most popular, stock market, forex)
+        - crypto : CoinDesk, CoinTelegraph
+        - global : BBC World, CNN World
+        - finance: Yahoo Finance Gold (GC=F), Yahoo Finance USD Index (DX-Y.NYB)
 
         Args:
             last_news_fetch: Timestamp of the last news fetch (from Redis).
@@ -405,16 +433,44 @@ class SentimentWorkflow(ExceptionManager):
 
         now = get_indian_time()
 
-        logger.info(f"Last news fetch: {effective_news_since}, last Reddit fetch: {effective_reddit_since}")
+        logger.info(
+            f"run_news_update: last_news_fetch={effective_news_since}, "
+            f"last_reddit_fetch={effective_reddit_since}"
+        )
 
         try:
-            # ---- News ----
-            news_text, new_ids, self._last_news_fetch = fetch_news_articles_since(since_aware=effective_news_since)
-            has_new_articles = bool(news_text)
-            new_article_count = len(new_ids)
+            # ---- RSS News ----
+            all_rss = fetch_all_rss_news()
+            all_rss = deduplicate(all_rss)
+            all_rss = sort_latest(all_rss)
+
+            # Filter to articles newer than the last fetch timestamp
+            if effective_news_since is not None:
+                # Normalise since to naive UTC for comparison
+                since_naive: Optional[datetime] = effective_news_since
+                if hasattr(since_naive, "tzinfo") and since_naive.tzinfo is not None:
+                    since_naive = since_naive.astimezone(timezone.utc).replace(tzinfo=None)
+
+                new_articles = [
+                    a for a in all_rss
+                    if a["published"] is not None and a["published"] > since_naive
+                ]
+            else:
+                # First run — treat everything within the last hour as new
+                new_articles = filter_recent(all_rss, hours=1)
+
+            has_new_articles = bool(new_articles)
+            new_article_count = len(new_articles)
+
+            # Update in-process timestamp to the most recent article seen
+            if new_articles and new_articles[0]["published"] is not None:
+                # new_articles is sorted newest-first
+                latest_pub = new_articles[0]["published"]
+                # Convert back to IST-aware if needed; store as naive UTC for simplicity
+                self._last_news_fetch = get_indian_time()
 
             if not has_new_articles:
-                logger.info("News update: no new articles found.")
+                logger.info("run_news_update: no new RSS articles found.")
 
             # ---- Reddit ----
             new_reddit_data, new_reddit_post_count = self._fetch_new_reddit_posts(
@@ -425,12 +481,12 @@ class SentimentWorkflow(ExceptionManager):
             has_new_reddit_posts = new_reddit_post_count > 0
 
             if not has_new_reddit_posts:
-                logger.info("News update: no new Reddit posts found.")
+                logger.info("run_news_update: no new Reddit posts found.")
 
             has_new_data = has_new_articles or has_new_reddit_posts
 
             if not has_new_data:
-                logger.info("News update: nothing new from news or Reddit — skipping LLM.")
+                logger.info("run_news_update: nothing new from RSS or Reddit — skipping LLM.")
                 return {
                     "success": True,
                     "has_new_data": False,
@@ -445,7 +501,7 @@ class SentimentWorkflow(ExceptionManager):
                 }
 
             logger.info(
-                f"News update: {new_article_count} new articles, "
+                f"run_news_update: {new_article_count} new RSS articles, "
                 f"{new_reddit_post_count} new Reddit posts — running LLM sentiment."
             )
 
@@ -453,6 +509,7 @@ class SentimentWorkflow(ExceptionManager):
             combined_text_parts: List[str] = []
 
             if has_new_articles:
+                news_text = format_for_llm(new_articles, limit=25)
                 combined_text_parts.append(f"[NEWS]\n{news_text}")
 
             if has_new_reddit_posts:
@@ -466,10 +523,9 @@ class SentimentWorkflow(ExceptionManager):
                             reddit_snippets.append(snippet)
                 if reddit_snippets:
                     combined_text_parts.append(
-                        f"[REDDIT]\n" + "\n\n".join(reddit_snippets)
+                        "[REDDIT]\n" + "\n\n".join(reddit_snippets)
                     )
 
-            combined_text = "\n\n".join(combined_text_parts)
             combined_text = "\n\n".join(combined_text_parts)
 
             prompt = f"""
@@ -524,7 +580,8 @@ class SentimentWorkflow(ExceptionManager):
             logger.exception("run_news_update failed")
             self.handle_exception(
                 exception=e,
-                context_description="run_news_update",)
+                context_description="run_news_update",
+            )
             return {
                 "success": False,
                 "has_new_data": False,
@@ -550,7 +607,7 @@ class SentimentWorkflow(ExceptionManager):
         Steps:
         1. Fetch Reddit posts
         2. Analyze and aggregate Reddit sentiment
-        3. Fetch news and indicators
+        3. Fetch RSS news (macro, crypto, global, finance feeds) and indicators
         4. Compute combined sentiment score
         5. Persist results
         6. Return structured result
@@ -584,7 +641,8 @@ class SentimentWorkflow(ExceptionManager):
                 all_sentiments
             )
 
-            news_text = self.fetch_news()
+            # Fetch news from RSS feeds (replaces the old newsdata.io client)
+            news_text = self.fetch_news(hours_back=8, limit=30)
             indicators = self.fetch_indicators()
             news_sentiment = self.get_market_sentiments(news_text)
 
@@ -638,7 +696,8 @@ class SentimentWorkflow(ExceptionManager):
             logger.exception("Workflow failed")
             self.handle_exception(
                 exception=e,
-                context_description="run_analysis",)    
+                context_description="run_analysis",
+            )
             return {
                 "success": False,
                 "error": str(e),
@@ -734,7 +793,7 @@ class SentimentWorkflow(ExceptionManager):
             top_influential_posts=top_posts,
             news_sentiment={
                 "summary": news_text[:500] if news_text else "",
-                "source": "newsdata.io",
+                "source": "rss_feeds",
             },
             market_indicators={
                 "vix": indicators.vix,
