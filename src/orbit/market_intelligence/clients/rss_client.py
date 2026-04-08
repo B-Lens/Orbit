@@ -1,8 +1,10 @@
+from typing import List, Dict, Any, Optional
 import feedparser
 from datetime import datetime, timezone, timedelta
 from dateutil import parser as dateparser
 from orbit.utils.utils import to_ist
 
+News = Dict[str, Any]
 
 RSS_FEEDS = {
     "macro": [
@@ -27,18 +29,13 @@ RSS_FEEDS = {
     ]
 }
 
-
-# -----------------------------
-# Parse RSS entry (timezone safe)
-# -----------------------------
-def parse_entry(entry, source):
+def parse_entry(entry: Any, source: str) -> News:
     published = None
 
     if hasattr(entry, "published"):
         try:
             published = dateparser.parse(entry.published)
 
-            # normalize timezone → avoid sorting error
             if published and published.tzinfo is not None:
                 published = published.astimezone(timezone.utc).replace(tzinfo=None)
 
@@ -54,11 +51,8 @@ def parse_entry(entry, source):
     }
 
 
-# -----------------------------
-# Fetch all news
-# -----------------------------
-def fetch_all_rss_news():
-    news = []
+def fetch_all_rss_news() -> List[News]:
+    news: List[News] = []
 
     for category, feeds in RSS_FEEDS.items():
         for url in feeds:
@@ -69,8 +63,10 @@ def fetch_all_rss_news():
                     parsed = parse_entry(entry, category)
 
                     if parsed["title"]:
+                        parsed["published"] = (
+                            to_ist(parsed["published"]) if parsed["published"] else None
+                        )
                         news.append(parsed)
-                        parsed["published"] = to_ist(parsed["published"]) if parsed["published"] else None
 
             except Exception as e:
                 print(f"Failed feed: {url} -> {e}")
@@ -78,12 +74,9 @@ def fetch_all_rss_news():
     return news
 
 
-# -----------------------------
-# Remove duplicates
-# -----------------------------
-def deduplicate(news):
+def deduplicate(news: List[News]) -> List[News]:
     seen = set()
-    unique = []
+    unique: List[News] = []
 
     for n in news:
         key = n["title"].lower().strip()
@@ -95,10 +88,7 @@ def deduplicate(news):
     return unique
 
 
-# -----------------------------
-# Sort latest first
-# -----------------------------
-def sort_latest(news):
+def sort_latest(news: List[News]) -> List[News]:
     return sorted(
         news,
         key=lambda x: x["published"] or datetime.min,
@@ -106,13 +96,9 @@ def sort_latest(news):
     )
 
 
-# -----------------------------
-# Filter recent news
-# -----------------------------
-def filter_recent(news, hours=6):
+def filter_recent(news: List[News], hours: int = 6) -> List[News]:
     now = datetime.utcnow()
-
-    filtered = []
+    filtered: List[News] = []
 
     for n in news:
         if n["published"]:
@@ -123,20 +109,17 @@ def filter_recent(news, hours=6):
     return filtered
 
 
-# -----------------------------
-# Format for LLM
-# -----------------------------
-def format_for_llm(news, limit=20):
-    parts = []
+def format_for_llm(news: List[News], limit: int = 20) -> str:
+    parts: List[str] = []
 
     for n in news[:limit]:
         text = f"""
-Source: {n['source']}
-Time: {n['published']}
-Title: {n['title']}
-Summary: {n['summary']}
-Link: {n['link']}
-"""
+        Source: {n['source']}
+        Time: {n['published']}
+        Title: {n['title']}
+        Summary: {n['summary']}
+        Link: {n['link']}
+        """
         parts.append(text.strip())
 
     return "\n\n".join(parts)
