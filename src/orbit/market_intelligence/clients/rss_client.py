@@ -57,7 +57,7 @@ def parse_entry(entry, source):
 # -----------------------------
 # Fetch all news
 # -----------------------------
-def fetch_all_news():
+def fetch_all_rss_news():
     news = []
 
     for category, feeds in RSS_FEEDS.items():
