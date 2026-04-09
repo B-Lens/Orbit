@@ -286,7 +286,7 @@ class MongoHandler(ExceptionManager):
         historical_data_db = new_data.copy().reset_index()
         historical_data_db["timestamp"] = (
             historical_data_db["timestamp"]
-            .astype("int64") // 1_000_000
+            .astype("int64") // 1000
         )
 
         self.store_historical_data(symbol, historical_data_db)
