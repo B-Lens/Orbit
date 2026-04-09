@@ -8,6 +8,7 @@ import pandas as pd
 import tempfile
 import mplfinance as mpf
 from zoneinfo import ZoneInfo
+import subprocess
 
 import logging
 logger = logging.getLogger("Orbit")
@@ -28,6 +29,21 @@ def get_indian_time() -> datetime.datetime:
     india_timezone = pytz.timezone("Asia/Kolkata")
     india_time = utc_now.replace(tzinfo=pytz.utc).astimezone(india_timezone)
     return india_time
+
+
+def get_commit_id() -> str:
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
+    except Exception as e:
+        logger.error(f"Error fetching commit ID: {e}")
+        return "unknown"
 
 def get_symbol_price(symbol: str):
     url = "https://api.binance.com/api/v3/ticker/price"

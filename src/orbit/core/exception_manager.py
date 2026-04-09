@@ -14,6 +14,7 @@ import logging
 from typing import Any, Dict, Optional, Union
 
 from orbit.core.discord_manager import DiscordManager
+from orbit.utils.utils import get_commit_id
 
 logger = logging.getLogger("Orbit")
 
@@ -54,6 +55,8 @@ class ExceptionManager(DiscordManager):
             traceback.format_exception(type(error), error, error.__traceback__)
         )
 
+        commit_id: str = get_commit_id()
+        logger.error(f"Exception in commit {commit_id}")
         logger.error(
             "Found Exception. symbol: %s, status: %s, error code: %s, error message: %s\nFull traceback:\n%s",
             symbol,
@@ -67,8 +70,9 @@ class ExceptionManager(DiscordManager):
         origin_file = tb[-1].filename if tb else "unknown"
         origin_line = tb[-1].lineno if tb else -1
 
+        commit_id = commit_id[:7] if commit_id != "unknown" else commit_id
         self.exception_trigger(
-            data=None,
+            data=f"Commit ID: {commit_id}",
             description=(
                 f"Found error. Symbol: {symbol}, [{msg}] "
                 f"File Location: {origin_file}, File Line: {origin_line}, "
@@ -115,10 +119,13 @@ class ExceptionManager(DiscordManager):
             f"(File: {origin_file}, Line: {origin_line})"
         )
 
+        commit_id: str = get_commit_id()
+        logger.error(f"Exception in commit {commit_id}")
         logger.error(exception_message)
 
+        commit_id = commit_id[:7] if commit_id != "unknown" else commit_id
         self.exception_trigger(
-            data=None,
+            data=f"Commit ID: {commit_id}",
             description=(
                 f"Exception message: {exception_message} \n"
                 f"File Location: {origin_file}, File Line: {origin_line}, "
