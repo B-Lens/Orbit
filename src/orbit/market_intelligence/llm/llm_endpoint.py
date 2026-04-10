@@ -38,28 +38,10 @@ class LLM(ExceptionManager):
         self.groq_llm = None
         self.openrouter_llm = None
 
-        # ------------------------------------------------------------------
-        # 1. Initialize Groq (PRIMARY)
-        # ------------------------------------------------------------------
         os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 
-        for model_name in GROQ_MODELS:
-            try:
-                logger.info(f"Trying Groq model: {model_name}")
-                candidate = ChatGroq(
-                    model=model_name,
-                    temperature=0,
-                    timeout=30,
-                )
-                candidate.invoke("Test")
-                logger.info(f"Groq model '{model_name}' initialized successfully")
-                self.groq_llm = candidate
-                break
-            except Exception as e:
-                logger.error(f"Failed Groq model '{model_name}': {e}")
-
         # ------------------------------------------------------------------
-        # 2. Initialize OpenRouter (FALLBACK)
+        # 1. Initialize OpenRouter (PRIMARY) 
         # ------------------------------------------------------------------
         try:
             client = OpenRouterClient(
@@ -81,6 +63,25 @@ class LLM(ExceptionManager):
                 e,
                 context_description="OpenRouter LLM init failure",
             )
+
+        # ------------------------------------------------------------------
+        # 2. Initialize Groq (FALLBACK)
+        # ------------------------------------------------------------------
+        for model_name in GROQ_MODELS:
+            try:
+                logger.info(f"Trying Groq model: {model_name}")
+                candidate = ChatGroq(
+                    model=model_name,
+                    temperature=0,
+                    timeout=30,
+                )
+                candidate.invoke("Test")
+                logger.info(f"Groq model '{model_name}' initialized successfully")
+                self.groq_llm = candidate
+                break
+            except Exception as e:
+                logger.error(f"Failed Groq model '{model_name}': {e}")
+
     
     # -----------------------------------------------------------------------
     # invoke
@@ -95,26 +96,28 @@ class LLM(ExceptionManager):
         self._track_token_usage(prompt_token_length)
 
         # ----------------------------------------------------------
-        # 1. Try GROQ first
+        # 1. Try OpenRouter first
+        # ----------------------------------------------------------
+        if self.openrouter_llm:
+            try:
+                return self.openrouter_llm.invoke(prompt)
+            except Exception as e:
+                logger.error(f"OpenRouter failed, falling back to Groq: {e}")
+
+        
+        # ----------------------------------------------------------
+        # 2. Fallback → GROQ
         # ----------------------------------------------------------
         if self.groq_llm:
             try:
                 response = self.groq_llm.invoke(prompt)
                 return response.content
             except Exception as e:
-                logger.error(f"Groq failed, falling back to OpenRouter: {e}")
-
-        # ----------------------------------------------------------
-        # 2. Fallback → OpenRouter
-        # ----------------------------------------------------------
-        try:
-            return self.openrouter_llm.invoke(prompt)
-        except Exception as e:
-            logger.error(f"OpenRouter fallback failed: {e}")
-            self.handle_exception(
-                e,
-                context_description="LLM fallback failure",
-            )
+                logger.error(f"Groq fallback failed : {e}")
+                self.handle_exception(
+                    e,
+                    context_description="Groq LLM fallback failure",
+                )
 
         return None
 
