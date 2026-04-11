@@ -119,6 +119,13 @@ class TwitterSentimentAnalyzer:
             Classify the market sentiment of EACH tweet with respect to tradable assets
             (crypto, stocks, gold, forex, macro, interest rates, risk sentiment).
 
+            Ignore:
+            - opinions
+            - technical analysis
+            - minor commentary
+            - speculation
+            - duplicate news
+
             Rules:
             - BULLISH → positive for risk assets / price likely up
             - BEARISH → negative for risk assets / price likely down
