@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from tqdm import tqdm
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Literal, Optional
+from zoneinfo import ZoneInfo
 
 from langsmith import traceable
 from orbit.core.exception_manager import ExceptionManager
@@ -224,7 +225,6 @@ class SentimentWorkflow(ExceptionManager):
             Deduplicated list of enriched tweet dicts.
         """
         tweets = self.twitter_client.fetch_tweets()
-        self._last_twitter_fetch = get_indian_time()
         logger.info(f"Twitter: fetched {len(tweets)} tweets (full run)")
         return tweets
 
@@ -482,13 +482,14 @@ class SentimentWorkflow(ExceptionManager):
                     tweet_dt = datetime.fromisoformat(created_iso)
                     # Normalise to naive for comparison
                     if tweet_dt.tzinfo is not None:
-                        tweet_dt = tweet_dt.replace(tzinfo=None)
+                        tweet_dt = tweet_dt.astimezone(ZoneInfo("Asia/Kolkata"))
                     if (
                         self._last_twitter_fetch is None
                         or tweet_dt > self._last_twitter_fetch
                     ):
                         self._last_twitter_fetch = tweet_dt
-                except ValueError:
+                except ValueError as e:
+                    logger.exception(f"Failed to parse tweet timestamp: {created_iso}")
                     pass
 
         logger.info(
@@ -911,7 +912,6 @@ class SentimentWorkflow(ExceptionManager):
             now = get_indian_time()
             self._last_news_fetch = now
             self._last_reddit_fetch = now
-            self._last_twitter_fetch = now
 
             trend = self.mongodb.calculate_trends(hours=24)
             signal = self.mongodb.get_trading_signals()
