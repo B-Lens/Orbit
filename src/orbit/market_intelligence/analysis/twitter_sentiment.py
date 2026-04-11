@@ -113,19 +113,44 @@ class TwitterSentimentAnalyzer:
         tweets_block = "\n".join(tweet_lines)
 
         prompt = f"""
-You are a financial market analyst. Analyze the sentiment of each tweet below
-regarding financial markets (crypto, gold, stocks, forex, macro).
+            You are an institutional financial sentiment classifier.
 
-For EACH tweet return a JSON object with:
-  "index"      : tweet number (1-based)
-  "sentiment"  : "BULLISH" | "BEARISH" | "NEUTRAL"
-  "confidence" : float 0.0-1.0
+            Task:
+            Classify the market sentiment of EACH tweet with respect to tradable assets
+            (crypto, stocks, gold, forex, macro, interest rates, risk sentiment).
 
-Respond ONLY with a JSON array, no extra text.
+            Rules:
+            - BULLISH → positive for risk assets / price likely up
+            - BEARISH → negative for risk assets / price likely down
+            - NEUTRAL → informational, unclear, mixed, or no market impact
+            - Ignore jokes, memes, emojis unless they imply direction
+            - If tweet is not market-related → NEUTRAL with low confidence (<=0.4)
+            - If mixed signals → NEUTRAL
+            - High conviction language → higher confidence
+            - Speculation words ("maybe", "could") → reduce confidence
+            - News headlines without opinion → NEUTRAL unless clearly directional
 
-Tweets:
-{tweets_block}
-"""
+            Confidence Guidelines:
+            0.9-1.0  : explicit strong directional claim
+            0.7-0.89 : clear directional bias
+            0.4-0.69 : weak / implied direction
+            0.0-0.39 : unclear / irrelevant
+
+            Output format:
+            Return ONLY a valid JSON array. No markdown. No explanation.
+
+            Schema:
+            [
+            {{
+                "index": int,
+                "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+                "confidence": float
+            }}
+            ]
+
+            Tweets:
+            {tweets_block}
+        """
 
         try:
             raw = self.llm.invoke(prompt)
@@ -143,7 +168,7 @@ Tweets:
                 items = []
 
         except Exception as exc:
-            logger.warning(f"Twitter batch LLM call failed: {exc}")
+            logger.error(f"Twitter batch LLM call failed: {exc}")
             items = []
 
         entries: List[TweetSentimentEntry] = []
