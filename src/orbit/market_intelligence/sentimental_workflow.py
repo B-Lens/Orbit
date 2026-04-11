@@ -95,7 +95,7 @@ class NewsSentiment(BaseModel):
         confidence: Confidence score between 0 and 1
         explanation: Brief textual explanation of reasoning
     """
-    sentiment: Literal["BULLISH", "BEARISH", "NEUTRAL"]
+    sentiment: SentimentType
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str
 
