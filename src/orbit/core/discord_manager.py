@@ -172,7 +172,7 @@ class DiscordManager:
                 response = requests.post(url, json=payload)
 
             if response.status_code != 204:
-                logger.error(
+                logger.exception(
                     f"Failed webhook | Status: {response.status_code} | Response: {response.text}"
                 )
 

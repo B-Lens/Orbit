@@ -101,18 +101,18 @@ class TwitterClient:
             return payload.get("data", [])
 
         except subprocess.TimeoutExpired:
-            logger.error(f"twitter CLI timed out for query='{query}'")
+            logger.exception(f"twitter CLI timed out for query='{query}'")
             return []
         except json.JSONDecodeError as exc:
-            logger.error(f"twitter CLI JSON parse error for query='{query}': {exc}")
+            logger.exception(f"twitter CLI JSON parse error for query='{query}'")
             return []
         except FileNotFoundError:
-            logger.error(
+            logger.exception(
                 "twitter CLI not found. Install it with: pip install twitter-search"
             )
             return []
         except Exception as exc:
-            logger.exception(f"Unexpected error fetching tweets for query='{query}': {exc}")
+            logger.exception(f"Unexpected error fetching tweets for query='{query}'")
             return []
 
     # ------------------------------------------------------------------

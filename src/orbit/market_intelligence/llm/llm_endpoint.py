@@ -58,7 +58,7 @@ class LLM(ExceptionManager):
             self.openrouter_llm = client
 
         except Exception as e:
-            logger.error(f"OpenRouter initialization failed: {e}")
+            logger.exception(f"OpenRouter initialization failed")
             self.handle_exception(
                 e,
                 context_description="OpenRouter LLM init failure",
@@ -102,7 +102,7 @@ class LLM(ExceptionManager):
             try:
                 return self.openrouter_llm.invoke(prompt)
             except Exception as e:
-                logger.error(f"OpenRouter failed, falling back to Groq: {e}")
+                logger.exception(f"OpenRouter failed, falling back to Groq")
 
         
         # ----------------------------------------------------------
