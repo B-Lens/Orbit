@@ -85,7 +85,7 @@ class TwitterClient:
                 timeout=self.cli_timeout,
             )
             if result.returncode != 0:
-                logger.warning(
+                logger.error(
                     f"twitter CLI non-zero exit ({result.returncode}) "
                     f"for query='{query}': {result.stderr.strip()}"
                 )
@@ -93,7 +93,7 @@ class TwitterClient:
 
             payload = json.loads(result.stdout)
             if not payload.get("ok"):
-                logger.warning(
+                logger.error(
                     f"twitter CLI returned ok=false for query='{query}'"
                 )
                 return []
@@ -101,10 +101,10 @@ class TwitterClient:
             return payload.get("data", [])
 
         except subprocess.TimeoutExpired:
-            logger.warning(f"twitter CLI timed out for query='{query}'")
+            logger.error(f"twitter CLI timed out for query='{query}'")
             return []
         except json.JSONDecodeError as exc:
-            logger.warning(f"twitter CLI JSON parse error for query='{query}': {exc}")
+            logger.error(f"twitter CLI JSON parse error for query='{query}': {exc}")
             return []
         except FileNotFoundError:
             logger.error(
