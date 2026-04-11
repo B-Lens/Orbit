@@ -340,7 +340,7 @@ class SentimentWorkflow(ExceptionManager):
                 context_description="News sentiment analysis failed",
             )
             fallback = NewsSentiment(
-                sentiment="NEUTRAL",
+                sentiment=SentimentType.NEUTRAL,
                 confidence=0.3,
                 explanation="Analysis failed",
             )
@@ -812,11 +812,11 @@ class SentimentWorkflow(ExceptionManager):
         conf = round(min(1.0, weighted_conf / total_w), 3)
 
         if score > 0.1:
-            label: Literal["BULLISH", "BEARISH", "NEUTRAL"] = "BULLISH"
+            label = SentimentType.BULLISH
         elif score < -0.1:
-            label = "BEARISH"
+            label = SentimentType.BULLISH
         else:
-            label = "NEUTRAL"
+            label = SentimentType.NEUTRAL
 
         return NewsSentiment(
             sentiment=label,

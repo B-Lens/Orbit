@@ -19,7 +19,8 @@ import logging
 import subprocess
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-
+from dotenv import load_dotenv
+load_dotenv()
 logger = logging.getLogger("Orbit")
 
 # ---------------------------------------------------------------------------
