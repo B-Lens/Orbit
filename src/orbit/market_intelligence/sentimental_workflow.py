@@ -4,6 +4,8 @@ Sentiment Workflow Module
 This module orchestrates the full market sentiment analysis pipeline by:
 - Fetching Reddit posts
 - Applying weighted Reddit sentiment analysis
+- Fetching financial tweets via the twitter CLI tool
+- Applying LLM-based Twitter sentiment analysis
 - Fetching crypto/market news via RSS feeds (macro, crypto, global, finance)
 - Running LLM-based news sentiment classification
 - Fetching macro indicators (VIX, Fear & Greed)
@@ -11,11 +13,14 @@ This module orchestrates the full market sentiment analysis pipeline by:
 - Persisting results to MongoDB
 - Producing trading signals and trends
 
+Signal weight priority (highest → lowest):
+    Twitter  > News RSS  > Reddit  > Historical  > Indicators
+
 Also provides a lightweight `run_news_update()` path that:
 - Fetches only *new* RSS articles since the last call.
 - Fetches Reddit posts and checks for *new* posts since the last call.
-- Re-scores sentiment when either new news OR new Reddit posts are found.
-- Falls back to running full sentiment if both sources have new data.
+- Fetches only *new* tweets since the last call.
+- Re-scores sentiment when any source has new data.
 - Keeps LLM token usage low by skipping the call when nothing is new.
 
 Designed for traceability using LangSmith.
@@ -32,6 +37,7 @@ from typing import Dict, Any, List, Literal, Optional
 from langsmith import traceable
 from orbit.core.exception_manager import ExceptionManager
 from orbit.market_intelligence.clients.reddit_client import RedditClient
+from orbit.market_intelligence.clients.twitter_client import TwitterClient
 from orbit.market_intelligence.clients.rss_client import (
     fetch_all_rss_news,
     deduplicate,
@@ -43,6 +49,10 @@ from orbit.market_intelligence.analysis.reddit_sentiment import (
     RedditSentimentEntry,
     WeightedRedditAnalyzer,
     extract_json,
+)
+from orbit.market_intelligence.analysis.twitter_sentiment import (
+    TwitterSentimentAnalyzer,
+    TwitterSentimentResult,
 )
 from orbit.market_intelligence.models.mongodb_models import (
     MongoDBManager,
@@ -64,6 +74,17 @@ os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
 BATCH_SIZE = 100
 logger = logging.getLogger("Orbit")
 
+# ---------------------------------------------------------------------------
+# Sentiment combination weights
+# ---------------------------------------------------------------------------
+# Twitter is the highest-priority signal; Reddit is kept but de-prioritised.
+_W_TWITTER: float = 0.35
+_W_NEWS: float = 0.30
+_W_REDDIT: float = 0.20
+_W_HISTORICAL: float = 0.10
+_W_VIX: float = 0.025
+_W_FEAR_GREED: float = 0.025
+
 
 class NewsSentiment(BaseModel):
     """
@@ -74,7 +95,7 @@ class NewsSentiment(BaseModel):
         confidence: Confidence score between 0 and 1
         explanation: Brief textual explanation of reasoning
     """
-    sentiment: Literal["BULLISH", "BEARISH", "NEUTRAL"]
+    sentiment: SentimentType
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str
 
@@ -85,16 +106,22 @@ class SentimentWorkflow(ExceptionManager):
 
     Responsibilities:
     - Fetch and analyze Reddit sentiment
+    - Fetch and analyze Twitter/X financial tweets (highest weight)
     - Fetch and classify news sentiment using LLM (sourced from RSS feeds)
     - Retrieve macro market indicators
     - Combine multiple sentiment signals into a unified score
     - Persist analysis results to MongoDB
     - Generate trends and trading signals
 
+    Signal weight priority (highest → lowest):
+        Twitter (0.35) > News RSS (0.30) > Reddit (0.20) >
+        Historical (0.10) > VIX + Fear&Greed (0.05 combined)
+
     Lightweight path (run_news_update):
     - Fetches only *new* RSS articles since the last call.
     - Fetches Reddit posts and detects *new* posts since the last call.
-    - Runs LLM sentiment when either source has new data.
+    - Fetches only *new* tweets since the last call.
+    - Runs LLM sentiment when any source has new data.
     - Skips LLM entirely when nothing new is found, keeping token usage low.
     - Last-fetch timestamps are managed externally via Redis by Croner so
       they survive process restarts.
@@ -116,12 +143,15 @@ class SentimentWorkflow(ExceptionManager):
         self.llm: LLM = llm
         self.reddit_client: RedditClient = RedditClient()
         self.reddit_analyzer: WeightedRedditAnalyzer = WeightedRedditAnalyzer(llm)
+        self.twitter_client: TwitterClient = TwitterClient()
+        self.twitter_analyzer: TwitterSentimentAnalyzer = TwitterSentimentAnalyzer(llm)
         self.mongodb: MongoDBManager = MongoDBManager()
 
         # Timestamps managed here as in-process fallback.
         # Croner is responsible for persisting these to Redis across restarts.
         self._last_news_fetch: Optional[datetime] = None
         self._last_reddit_fetch: Optional[datetime] = None
+        self._last_twitter_fetch: Optional[datetime] = None
 
         # Last news sentiment produced by any run — used for drift detection
         self.last_news_sentiment: Optional[NewsSentiment] = None
@@ -184,6 +214,40 @@ class SentimentWorkflow(ExceptionManager):
             Aggregated sentiment dictionary including score, label, confidence.
         """
         return self.reddit_analyzer.aggregate_weighted_sentiment(sentiments)
+
+    @traceable(name="fetch_twitter_tweets")
+    def fetch_twitter(self) -> List[Dict[str, Any]]:
+        """
+        Fetch financial tweets from all configured Twitter search queries.
+
+        Returns:
+            Deduplicated list of enriched tweet dicts.
+        """
+        tweets = self.twitter_client.fetch_tweets()
+        self._last_twitter_fetch = get_indian_time()
+        logger.info(f"Twitter: fetched {len(tweets)} tweets (full run)")
+        return tweets
+
+    @traceable(name="analyze_twitter_sentiment")
+    def analyze_twitter(
+        self, tweets: List[Dict[str, Any]]
+    ) -> TwitterSentimentResult:
+        """
+        Run LLM-based sentiment analysis on a list of tweets and aggregate.
+
+        Args:
+            tweets: Enriched tweet dicts from :meth:`fetch_twitter`.
+
+        Returns:
+            :class:`TwitterSentimentResult` with aggregated sentiment.
+        """
+        entries = self.twitter_analyzer.analyze_tweets(tweets)
+        result = self.twitter_analyzer.aggregate(entries)
+        logger.info(
+            f"Twitter sentiment: {result.sentiment} "
+            f"(confidence={result.confidence}, score={result.overall_score})"
+        )
+        return result
 
     @traceable(name="fetch_rss_news")
     def fetch_news(self, hours_back: int = 8, limit: int = 30) -> str:
@@ -276,7 +340,7 @@ class SentimentWorkflow(ExceptionManager):
                 context_description="News sentiment analysis failed",
             )
             fallback = NewsSentiment(
-                sentiment="NEUTRAL",
+                sentiment=SentimentType.NEUTRAL,
                 confidence=0.3,
                 explanation="Analysis failed",
             )
@@ -287,6 +351,7 @@ class SentimentWorkflow(ExceptionManager):
         self,
         posts: List[Dict[str, Any]],
         news_sentiment: NewsSentiment,
+        twitter_result: Optional[TwitterSentimentResult] = None,
     ) -> str:
         """
         Generate LLM-based reasoning for final market sentiment.
@@ -294,15 +359,24 @@ class SentimentWorkflow(ExceptionManager):
         Args:
             posts: Top influential Reddit posts.
             news_sentiment: Structured news sentiment result.
+            twitter_result: Optional Twitter sentiment result.
 
         Returns:
             Human-readable reasoning string.
         """
         posts_summary = "\n".join(p["explanation"] for p in posts)
 
+        twitter_section = ""
+        if twitter_result:
+            twitter_section = f"""
+        Twitter/X Sentiment:
+        {twitter_result.explanation}
+        (score={twitter_result.overall_score}, confidence={twitter_result.confidence})
+        """
+
         prompt = f"""
         Provide reasoning for overall market sentiment:
-
+        {twitter_section}
         Reddit Analysis:
         {posts_summary}
 
@@ -382,24 +456,67 @@ class SentimentWorkflow(ExceptionManager):
         return filtered, total_new
 
     # ------------------------------------------------------------------
-    # LIGHTWEIGHT NEWS + REDDIT UPDATE
+    # TWITTER NEW-TWEET DETECTION
+    # ------------------------------------------------------------------
+
+    def _fetch_new_tweets(
+        self, since: Optional[datetime]
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """
+        Fetch tweets and filter to only those created after *since*.
+
+        Args:
+            since: Datetime threshold. Tweets at or before this time are
+                   dropped. When ``None`` all fetched tweets are treated as new.
+
+        Returns:
+            Tuple of (new_tweets, new_tweet_count).
+        """
+        new_tweets = self.twitter_client.fetch_tweets_since(since=since)
+
+        # Update in-process timestamp to the most recent tweet seen
+        for tweet in new_tweets:
+            created_iso: Optional[str] = tweet.get("createdAtISO")
+            if created_iso:
+                try:
+                    tweet_dt = datetime.fromisoformat(created_iso)
+                    # Normalise to naive for comparison
+                    if tweet_dt.tzinfo is not None:
+                        tweet_dt = tweet_dt.replace(tzinfo=None)
+                    if (
+                        self._last_twitter_fetch is None
+                        or tweet_dt > self._last_twitter_fetch
+                    ):
+                        self._last_twitter_fetch = tweet_dt
+                except ValueError:
+                    pass
+
+        logger.info(
+            f"Twitter: {len(new_tweets)} new tweets since {since}"
+        )
+        return new_tweets, len(new_tweets)
+
+    # ------------------------------------------------------------------
+    # LIGHTWEIGHT NEWS + REDDIT + TWITTER UPDATE
     # ------------------------------------------------------------------
 
     async def run_news_update(
         self,
         last_news_fetch: Optional[datetime] = None,
         last_reddit_fetch: Optional[datetime] = None,
+        last_twitter_fetch: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
-        Lightweight update: check both RSS news and Reddit for new content and
-        re-score sentiment only when something new is found.
+        Lightweight update: check RSS news, Reddit, and Twitter for new
+        content and re-score sentiment only when something new is found.
 
         This is designed to be called every 10 minutes.  It returns a
         minimal result dict so the caller can decide whether a full
         ``run_analysis()`` is warranted.
 
         Token usage is kept low because:
-        - The LLM prompt is only sent when new articles or posts are found.
+        - The LLM prompt is only sent when new articles, posts, or tweets
+          are found.
         - No macro indicator calls are made.
 
         RSS feeds polled:
@@ -413,29 +530,37 @@ class SentimentWorkflow(ExceptionManager):
                              Falls back to ``self._last_news_fetch`` when ``None``.
             last_reddit_fetch: Timestamp of the last Reddit fetch (from Redis).
                                Falls back to ``self._last_reddit_fetch`` when ``None``.
+            last_twitter_fetch: Timestamp of the last Twitter fetch (from Redis).
+                                Falls back to ``self._last_twitter_fetch`` when ``None``.
 
         Returns:
             Dict with keys:
                 ``has_new_data`` (bool),
                 ``has_new_articles`` (bool),
                 ``has_new_reddit_posts`` (bool),
+                ``has_new_tweets`` (bool),
                 ``news_sentiment`` (NewsSentiment | None),
+                ``twitter_sentiment`` (TwitterSentimentResult | None),
                 ``new_article_count`` (int),
                 ``new_reddit_post_count`` (int),
+                ``new_tweet_count`` (int),
                 ``last_news_fetch`` (str ISO-8601),
                 ``last_reddit_fetch`` (str ISO-8601),
+                ``last_twitter_fetch`` (str ISO-8601),
                 ``timestamp`` (str),
                 ``success`` (bool).
         """
         # Resolve timestamps — prefer caller-supplied (from Redis) over in-process cache
         effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
         effective_reddit_since: Optional[datetime] = last_reddit_fetch or self._last_reddit_fetch
+        effective_twitter_since: Optional[datetime] = last_twitter_fetch or self._last_twitter_fetch
 
         now = get_indian_time()
 
         logger.info(
             f"run_news_update: last_news_fetch={effective_news_since}, "
-            f"last_reddit_fetch={effective_reddit_since}"
+            f"last_reddit_fetch={effective_reddit_since}, "
+            f"last_twitter_fetch={effective_twitter_since}"
         )
 
         try:
@@ -444,23 +569,18 @@ class SentimentWorkflow(ExceptionManager):
             all_rss = deduplicate(all_rss)
             all_rss = sort_latest(all_rss)
 
-            # Filter to articles newer than the last fetch timestamp
             if effective_news_since is not None:
                 new_articles = [
                     a for a in all_rss
                     if a["published"] is not None and a["published"] > effective_news_since
                 ]
             else:
-                # First run — treat everything within the last hour as new
                 new_articles = filter_recent(all_rss, hours=1)
 
             has_new_articles = bool(new_articles)
             new_article_count = len(new_articles)
 
-            # Update in-process timestamp to the most recent article seen
             if new_articles and new_articles[0]["published"] is not None:
-                # new_articles is sorted newest-first
-                latest_pub = new_articles[0]["published"]
                 self._last_news_fetch = new_articles[0]["published"]
 
             if not has_new_articles:
@@ -477,29 +597,50 @@ class SentimentWorkflow(ExceptionManager):
             if not has_new_reddit_posts:
                 logger.info("run_news_update: no new Reddit posts found.")
 
-            has_new_data = has_new_articles or has_new_reddit_posts
+            # ---- Twitter ----
+            new_tweets, new_tweet_count = self._fetch_new_tweets(
+                since=effective_twitter_since
+            )
+            has_new_tweets = new_tweet_count > 0
+
+            if not has_new_tweets:
+                logger.info("run_news_update: no new tweets found.")
+
+            has_new_data = has_new_articles or has_new_reddit_posts or has_new_tweets
 
             if not has_new_data:
-                logger.info("run_news_update: nothing new from RSS or Reddit — skipping LLM.")
+                logger.info(
+                    "run_news_update: nothing new from RSS, Reddit, or Twitter — skipping LLM."
+                )
                 return {
                     "success": True,
                     "has_new_data": False,
                     "has_new_articles": False,
                     "has_new_reddit_posts": False,
+                    "has_new_tweets": False,
                     "news_sentiment": None,
+                    "twitter_sentiment": None,
                     "new_article_count": 0,
                     "new_reddit_post_count": 0,
+                    "new_tweet_count": 0,
                     "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                     "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
+                    "last_twitter_fetch": self._last_twitter_fetch.isoformat() if self._last_twitter_fetch else None,
                     "timestamp": now.isoformat(),
                 }
 
             logger.info(
                 f"run_news_update: {new_article_count} new RSS articles, "
-                f"{new_reddit_post_count} new Reddit posts — running LLM sentiment."
+                f"{new_reddit_post_count} new Reddit posts, "
+                f"{new_tweet_count} new tweets — running LLM sentiment."
             )
 
-            # ---- Build combined text for LLM ----
+            # ---- Twitter sentiment (highest priority) ----
+            twitter_sentiment: Optional[TwitterSentimentResult] = None
+            if has_new_tweets:
+                twitter_sentiment = self.analyze_twitter(new_tweets)
+
+            # ---- Build combined text for news+reddit LLM call ----
             combined_text_parts: List[str] = []
 
             if has_new_articles:
@@ -520,9 +661,11 @@ class SentimentWorkflow(ExceptionManager):
                         "[REDDIT]\n" + "\n\n".join(reddit_snippets)
                     )
 
-            combined_text = "\n\n".join(combined_text_parts)
+            news_sentiment: Optional[NewsSentiment] = None
+            if combined_text_parts:
+                combined_text = "\n\n".join(combined_text_parts)
 
-            prompt = f"""
+                prompt = f"""
             Analyze overall market sentiment from the following news and Reddit posts.
 
             Focus ONLY on MAJOR RECENT EVENTS that can move:
@@ -558,18 +701,31 @@ class SentimentWorkflow(ExceptionManager):
             {combined_text}
             """
 
-            news_sentiment = self.get_market_sentiments(combined_text, prompt=prompt)
+                news_sentiment = self.get_market_sentiments(combined_text, prompt=prompt)
+
+            # ---- Combine Twitter + News/Reddit into a single incremental sentiment ----
+            # For the incremental update we produce a blended NewsSentiment so
+            # the Croner drift-detection logic (which expects a NewsSentiment)
+            # continues to work unchanged.
+            blended_sentiment: Optional[NewsSentiment] = self._blend_incremental_sentiment(
+                twitter_result=twitter_sentiment,
+                news_result=news_sentiment,
+            )
 
             return {
                 "success": True,
                 "has_new_data": True,
                 "has_new_articles": has_new_articles,
                 "has_new_reddit_posts": has_new_reddit_posts,
-                "news_sentiment": news_sentiment,
+                "has_new_tweets": has_new_tweets,
+                "news_sentiment": blended_sentiment,
+                "twitter_sentiment": twitter_sentiment,
                 "new_article_count": new_article_count,
                 "new_reddit_post_count": new_reddit_post_count,
+                "new_tweet_count": new_tweet_count,
                 "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                 "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
+                "last_twitter_fetch": self._last_twitter_fetch.isoformat() if self._last_twitter_fetch else None,
                 "timestamp": now.isoformat(),
             }
 
@@ -584,14 +740,89 @@ class SentimentWorkflow(ExceptionManager):
                 "has_new_data": False,
                 "has_new_articles": False,
                 "has_new_reddit_posts": False,
+                "has_new_tweets": False,
                 "news_sentiment": None,
+                "twitter_sentiment": None,
                 "new_article_count": 0,
                 "new_reddit_post_count": 0,
+                "new_tweet_count": 0,
                 "error": str(e),
                 "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                 "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
+                "last_twitter_fetch": self._last_twitter_fetch.isoformat() if self._last_twitter_fetch else None,
                 "timestamp": now.isoformat(),
             }
+
+    # ------------------------------------------------------------------
+    # INCREMENTAL BLEND HELPER
+    # ------------------------------------------------------------------
+
+    def _blend_incremental_sentiment(
+        self,
+        twitter_result: Optional[TwitterSentimentResult],
+        news_result: Optional[NewsSentiment],
+    ) -> Optional[NewsSentiment]:
+        """
+        Blend Twitter and News/Reddit incremental sentiments into a single
+        :class:`NewsSentiment` for the Croner drift-detection path.
+
+        Twitter carries higher weight (_W_TWITTER vs _W_NEWS).
+
+        Args:
+            twitter_result: Aggregated Twitter sentiment (may be None).
+            news_result: LLM news+reddit sentiment (may be None).
+
+        Returns:
+            Blended :class:`NewsSentiment`, or ``None`` when both inputs are None.
+        """
+        if twitter_result is None and news_result is None:
+            return None
+
+        direction_map = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
+
+        total_w = 0.0
+        weighted_score = 0.0
+        weighted_conf = 0.0
+        explanations: List[str] = []
+
+        if twitter_result is not None:
+            w = _W_TWITTER
+            d = direction_map.get(twitter_result.sentiment, 0.0)
+            weighted_score += d * twitter_result.confidence * w
+            weighted_conf += twitter_result.confidence * w
+            total_w += w
+            explanations.append(
+                f"Twitter({twitter_result.sentiment}, conf={twitter_result.confidence:.2f})"
+            )
+
+        if news_result is not None:
+            w = _W_NEWS
+            d = direction_map.get(news_result.sentiment, 0.0)
+            weighted_score += d * news_result.confidence * w
+            weighted_conf += news_result.confidence * w
+            total_w += w
+            explanations.append(
+                f"News({news_result.sentiment}, conf={news_result.confidence:.2f})"
+            )
+
+        if total_w == 0:
+            return None
+
+        score = weighted_score / total_w
+        conf = round(min(1.0, weighted_conf / total_w), 3)
+
+        if score > 0.1:
+            label = SentimentType.BULLISH
+        elif score < -0.1:
+            label = SentimentType.BULLISH
+        else:
+            label = SentimentType.NEUTRAL
+
+        return NewsSentiment(
+            sentiment=label,
+            confidence=conf,
+            explanation=" | ".join(explanations),
+        )
 
     # ------------------------------------------------------------------
     # MAIN WORKFLOW
@@ -604,10 +835,11 @@ class SentimentWorkflow(ExceptionManager):
         Steps:
         1. Fetch Reddit posts
         2. Analyze and aggregate Reddit sentiment
-        3. Fetch RSS news (macro, crypto, global, finance feeds) and indicators
-        4. Compute combined sentiment score
-        5. Persist results
-        6. Return structured result
+        3. Fetch financial tweets and analyze Twitter sentiment
+        4. Fetch RSS news (macro, crypto, global, finance feeds) and indicators
+        5. Compute combined sentiment score (Twitter weighted highest)
+        6. Persist results
+        7. Return structured result
 
         Returns:
             Dictionary containing final sentiment analysis results.
@@ -615,6 +847,7 @@ class SentimentWorkflow(ExceptionManager):
         start_time = time.time()
 
         try:
+            # ---- Reddit ----
             reddit_posts_data = self.fetch_reddit()
             dynamic_weights = self.calculate_weights(reddit_posts_data)
 
@@ -638,7 +871,11 @@ class SentimentWorkflow(ExceptionManager):
                 all_sentiments
             )
 
-            # Fetch news from RSS feeds (replaces the old newsdata.io client)
+            # ---- Twitter ----
+            tweets = self.fetch_twitter()
+            twitter_result: TwitterSentimentResult = self.analyze_twitter(tweets)
+
+            # ---- News + Indicators ----
             news_text = self.fetch_news(hours_back=8, limit=30)
             indicators = self.fetch_indicators()
             news_sentiment = self.get_market_sentiments(news_text)
@@ -650,12 +887,13 @@ class SentimentWorkflow(ExceptionManager):
                 else 0
             )
 
-            reasoning: str = self.get_reasoning(top_posts, news_sentiment)
+            reasoning: str = self.get_reasoning(top_posts, news_sentiment, twitter_result)
 
             combined_result = self._combine_results(
                 reddit_result,
                 news_sentiment,
                 indicators,
+                twitter_result=twitter_result,
                 historical_score=historical_score,
             )
 
@@ -666,12 +904,14 @@ class SentimentWorkflow(ExceptionManager):
                 indicators,
                 combined_result,
                 int((time.time() - start_time) * 1000),
+                twitter_result=twitter_result,
             )
 
             # Update in-process timestamps after a successful full run
             now = get_indian_time()
             self._last_news_fetch = now
             self._last_reddit_fetch = now
+            self._last_twitter_fetch = now
 
             trend = self.mongodb.calculate_trends(hours=24)
             signal = self.mongodb.get_trading_signals()
@@ -682,6 +922,13 @@ class SentimentWorkflow(ExceptionManager):
                 "database_id": record_id,
                 **combined_result,
                 "reasoning": reasoning,
+                "twitter_sentiment": {
+                    "sentiment": twitter_result.sentiment,
+                    "confidence": twitter_result.confidence,
+                    "overall_score": twitter_result.overall_score,
+                    "total_tweets_analyzed": twitter_result.total_tweets_analyzed,
+                    "explanation": twitter_result.explanation,
+                },
                 "trends": trend.dict() if trend else None,
                 "trading_signal": signal,
                 "processing_time_ms": int(
@@ -710,42 +957,71 @@ class SentimentWorkflow(ExceptionManager):
         reddit_result: Dict[str, Any],
         news_sentiment: NewsSentiment,
         indicators: MarketIndicators,
+        twitter_result: Optional[TwitterSentimentResult] = None,
         historical_score: float = 0.0,
     ) -> Dict[str, Any]:
         """
-        Combine Reddit, News, Indicator signals and historical score into a
-        final sentiment score.
+        Combine Twitter, Reddit, News, Indicator signals and historical score
+        into a final sentiment score.
+
+        Weight priority:
+            Twitter (0.35) > News (0.30) > Reddit (0.20) >
+            Historical (0.10) > VIX (0.025) + Fear&Greed (0.025)
+
+        Args:
+            reddit_result: Aggregated Reddit sentiment dict.
+            news_sentiment: LLM news sentiment result.
+            indicators: Macro market indicators.
+            twitter_result: Aggregated Twitter sentiment (optional).
+            historical_score: Average score from the last 24 h of DB records.
 
         Returns:
             Dictionary with combined score, label, and confidence.
         """
-        news_weight = 0.4
-        reddit_weight = 0.3
-        historical_weight = 0.2
-        vix_weight = 0.05
-        fear_greed_weight = 0.05
+        direction_map = {
+            SentimentType.BULLISH: 1.0,
+            SentimentType.BEARISH: -1.0,
+        }
 
+        # ---- Twitter component ----
+        twitter_component = 0.0
+        twitter_conf_contribution = 0.0
+        if twitter_result is not None:
+            t_dir = (
+                1.0 if twitter_result.sentiment == "BULLISH"
+                else -1.0 if twitter_result.sentiment == "BEARISH"
+                else 0.0
+            )
+            twitter_component = twitter_result.confidence * _W_TWITTER * t_dir
+            twitter_conf_contribution = twitter_result.confidence * _W_TWITTER
+
+        # ---- News component ----
+        news_dir = direction_map.get(news_sentiment.sentiment, 0.0)
+        news_component = news_sentiment.confidence * _W_NEWS * news_dir
+        news_conf_contribution = news_sentiment.confidence * _W_NEWS
+
+        # ---- Reddit component ----
+        reddit_component = reddit_result["overall_score"] * _W_REDDIT
+
+        # ---- Historical component ----
+        historical_component = historical_score * _W_HISTORICAL
+
+        # ---- Indicator components ----
         fear_greed = indicators.fear_greed_index
-        fear_greed_score: float = 0
-
+        fear_greed_component: float = 0.0
         if fear_greed is not None:
             direction = 1 if fear_greed < 50 else -1
-            fear_greed_score = fear_greed * fear_greed_weight * direction
+            fear_greed_component = fear_greed * _W_FEAR_GREED * direction
+
+        vix_component = (indicators.vix or 0) * _W_VIX * -1
 
         combined_score = (
-            reddit_result["overall_score"] * reddit_weight
-            + news_sentiment.confidence
-            * news_weight
-            * (
-                1
-                if news_sentiment.sentiment == SentimentType.BULLISH
-                else -1
-                if news_sentiment.sentiment == SentimentType.BEARISH
-                else 0
-            )
-            + historical_score * historical_weight
-            + (indicators.vix or 0) * vix_weight * -1
-            + fear_greed_score
+            twitter_component
+            + news_component
+            + reddit_component
+            + historical_component
+            + vix_component
+            + fear_greed_component
         )
 
         if combined_score > 0.2:
@@ -755,14 +1031,16 @@ class SentimentWorkflow(ExceptionManager):
         else:
             label = "NEUTRAL"
 
+        # Confidence blends Twitter + News weighted contributions
+        confidence = round(
+            twitter_conf_contribution + news_conf_contribution,
+            2,
+        )
+
         return {
             "score": round(combined_score, 3),
             "sentiment": label,
-            "confidence": round(
-                reddit_result["confidence"] * reddit_weight
-                + news_sentiment.confidence * news_weight,
-                2,
-            ),
+            "confidence": min(1.0, confidence),
         }
 
     def _save_to_database(
@@ -773,13 +1051,33 @@ class SentimentWorkflow(ExceptionManager):
         indicators: MarketIndicators,
         combined: Dict[str, Any],
         processing_time: int,
+        twitter_result: Optional[TwitterSentimentResult] = None,
     ) -> str:
         """
         Persist sentiment analysis record to MongoDB.
 
+        Args:
+            reddit_result: Aggregated Reddit sentiment dict.
+            top_posts: Top influential Reddit posts.
+            news_text: Raw news text (truncated for storage).
+            indicators: Macro market indicators.
+            combined: Combined sentiment result dict.
+            processing_time: Processing time in milliseconds.
+            twitter_result: Optional Twitter sentiment result.
+
         Returns:
             Inserted record ID.
         """
+        twitter_data: Dict[str, Any] = {}
+        if twitter_result is not None:
+            twitter_data = {
+                "sentiment": twitter_result.sentiment,
+                "confidence": twitter_result.confidence,
+                "overall_score": twitter_result.overall_score,
+                "total_tweets_analyzed": twitter_result.total_tweets_analyzed,
+                "explanation": twitter_result.explanation,
+            }
+
         record = SentimentRecord(
             overall_score=combined["score"],
             sentiment_label=combined["sentiment"],
@@ -796,6 +1094,7 @@ class SentimentWorkflow(ExceptionManager):
                 "vix": indicators.vix,
                 "fear_greed_index": indicators.fear_greed_index,
             },
+            twitter_sentiment=twitter_data,
             processing_time_ms=processing_time,
         )
 

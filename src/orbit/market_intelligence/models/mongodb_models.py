@@ -49,6 +49,7 @@ class SentimentRecord(BaseModel):
     # Legacy Sources
     news_sentiment: Dict[str, Any]
     market_indicators: Dict[str, Any]
+    twitter_sentiment: Dict[str, Any]
     
     # Market Context
     prices: Dict[str, float] = Field(default_factory=dict)

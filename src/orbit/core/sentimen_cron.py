@@ -6,12 +6,13 @@ Provides :class:`Croner`, a simple scheduler that runs the
 :class:`SentimentWorkflow` on two cadences:
 
 1. **Full analysis** — once per hour (top of the hour).  Runs the complete
-   Reddit + news + indicator pipeline and caches the result in Redis.
+   Reddit + Twitter + news + indicator pipeline and caches the result in Redis.
 
-2. **News + Reddit update** — every ``NEWS_POLL_INTERVAL_SECONDS`` seconds
-   (default 10 minutes).  Fetches only *new* articles since the last call
-   AND checks Reddit for new posts since the last call.  Re-scores sentiment
-   with the LLM only when something new is found, keeping token usage low.
+2. **News + Reddit + Twitter update** — every ``NEWS_POLL_INTERVAL_SECONDS``
+   seconds (default 10 minutes).  Fetches only *new* articles since the last
+   call, checks Reddit for new posts, and checks Twitter for new tweets.
+   Re-scores sentiment with the LLM only when something new is found, keeping
+   token usage low.
    A full analysis is also triggered immediately when the new sentiment
    diverges from the cached value by more than ``SENTIMENT_DRIFT_THRESHOLD``.
 
@@ -35,7 +36,7 @@ from orbit.utils.utils import get_indian_time
 
 logger = logging.getLogger("Orbit")
 
-# How often the lightweight news+reddit poller runs (seconds)
+# How often the lightweight news+reddit+twitter poller runs (seconds)
 NEWS_POLL_INTERVAL_SECONDS: int = 600  # 10 minutes
 
 # If the new sentiment label differs from the cached Redis label AND
@@ -46,11 +47,12 @@ SENTIMENT_DRIFT_THRESHOLD: float = 0.55
 # Redis keys
 _REDIS_KEY_LAST_NEWS_FETCH: str = "sentiment:last_news_fetch"
 _REDIS_KEY_LAST_REDDIT_FETCH: str = "sentiment:last_reddit_fetch"
+_REDIS_KEY_LAST_TWITTER_FETCH: str = "sentiment:last_twitter_fetch"
 _REDIS_KEY_MARKET_SENTIMENT: str = "market_sentiments"
 
 
 class Croner(ExceptionManager):
-    """Hourly full-analysis + 10-minute news+Reddit update scheduler.
+    """Hourly full-analysis + 10-minute news+Reddit+Twitter update scheduler.
 
     Args:
         sentiment_workflow: Pre-built :class:`SentimentWorkflow`.  When
@@ -90,16 +92,19 @@ class Croner(ExceptionManager):
     # REDIS TIMESTAMP HELPERS
     # ------------------------------------------------------------------
 
-    def _load_last_fetch_times(self) -> tuple[Optional[datetime], Optional[datetime]]:
+    def _load_last_fetch_times(
+        self,
+    ) -> tuple[Optional[datetime], Optional[datetime], Optional[datetime]]:
         """
         Load last-fetch timestamps from Redis.
 
         Returns:
-            Tuple of (last_news_fetch, last_reddit_fetch).
-            Either value is ``None`` when not yet stored in Redis.
+            Tuple of (last_news_fetch, last_reddit_fetch, last_twitter_fetch).
+            Any value is ``None`` when not yet stored in Redis.
         """
         last_news_fetch: Optional[datetime] = None
         last_reddit_fetch: Optional[datetime] = None
+        last_twitter_fetch: Optional[datetime] = None
 
         try:
             raw_news = self.redis_client.get(_REDIS_KEY_LAST_NEWS_FETCH)
@@ -109,15 +114,21 @@ class Croner(ExceptionManager):
             raw_reddit = self.redis_client.get(_REDIS_KEY_LAST_REDDIT_FETCH)
             if raw_reddit:
                 last_reddit_fetch = datetime.fromisoformat(raw_reddit)
+
+            raw_twitter = self.redis_client.get(_REDIS_KEY_LAST_TWITTER_FETCH)
+            if raw_twitter:
+                last_twitter_fetch = datetime.fromisoformat(raw_twitter)
+
         except Exception:
             logger.exception("Failed to load last-fetch timestamps from Redis.")
 
-        return last_news_fetch, last_reddit_fetch
+        return last_news_fetch, last_reddit_fetch, last_twitter_fetch
 
     def _save_last_fetch_times(
         self,
         last_news_fetch: Optional[str],
         last_reddit_fetch: Optional[str],
+        last_twitter_fetch: Optional[str],
     ) -> None:
         """
         Persist last-fetch timestamps to Redis.
@@ -125,16 +136,20 @@ class Croner(ExceptionManager):
         Args:
             last_news_fetch: ISO-8601 string for the last news fetch time.
             last_reddit_fetch: ISO-8601 string for the last Reddit fetch time.
+            last_twitter_fetch: ISO-8601 string for the last Twitter fetch time.
         """
         try:
             if last_news_fetch:
-                # Keep for 48 hours — well beyond any polling window
                 self.redis_client.setex(
                     _REDIS_KEY_LAST_NEWS_FETCH, 172800, last_news_fetch
                 )
             if last_reddit_fetch:
                 self.redis_client.setex(
                     _REDIS_KEY_LAST_REDDIT_FETCH, 172800, last_reddit_fetch
+                )
+            if last_twitter_fetch:
+                self.redis_client.setex(
+                    _REDIS_KEY_LAST_TWITTER_FETCH, 172800, last_twitter_fetch
                 )
         except Exception:
             logger.exception("Failed to save last-fetch timestamps to Redis.")
@@ -151,17 +166,23 @@ class Croner(ExceptionManager):
 
         Returns:
             The analysis result dict (keys typically include ``sentiment``,
-            ``confidence``, ``reasoning``).
+            ``confidence``, ``reasoning``, ``twitter_sentiment``).
         """
         result = await self.sentimental_workflow.run_analysis()
         logger.info(f"Sentiment Analysis Result: {result}")
         sentiment = result.get("sentiment")
         sentiment_confidence = result.get("confidence")
         sentiment_reasoning = result.get("reasoning")
+
+        twitter_info = result.get("twitter_sentiment", {})
+        twitter_label = twitter_info.get("sentiment", "N/A") if twitter_info else "N/A"
+        twitter_conf = twitter_info.get("confidence", "N/A") if twitter_info else "N/A"
+
         self.send_market_sentiment(
             data=(
                 f"Market Sentiment = {sentiment}, Confidence : {sentiment_confidence}, "
-                f"Reasoning : {sentiment_reasoning}"
+                f"Reasoning : {sentiment_reasoning} | "
+                f"Twitter: {twitter_label} (conf={twitter_conf})"
             ),
             description=None,
             fields=result,
@@ -180,12 +201,12 @@ class Croner(ExceptionManager):
         return result
 
     # ------------------------------------------------------------------
-    # LIGHTWEIGHT NEWS + REDDIT UPDATE
+    # LIGHTWEIGHT NEWS + REDDIT + TWITTER UPDATE
     # ------------------------------------------------------------------
 
     async def run_news_update_once(self) -> Dict[str, Any]:
         """
-        Execute a single lightweight news + Reddit update cycle.
+        Execute a single lightweight news + Reddit + Twitter update cycle.
 
         Steps:
         1. Load last-fetch timestamps from Redis (survives restarts).
@@ -196,11 +217,14 @@ class Croner(ExceptionManager):
             The result dict from :meth:`SentimentWorkflow.run_news_update`.
         """
         # Load persisted timestamps so we don't re-process old data after restart
-        last_news_fetch, last_reddit_fetch = self._load_last_fetch_times()
+        last_news_fetch, last_reddit_fetch, last_twitter_fetch = (
+            self._load_last_fetch_times()
+        )
 
         result = await self.sentimental_workflow.run_news_update(
             last_news_fetch=last_news_fetch,
             last_reddit_fetch=last_reddit_fetch,
+            last_twitter_fetch=last_twitter_fetch,
         )
 
         # Persist updated timestamps regardless of success so the next call
@@ -208,6 +232,7 @@ class Croner(ExceptionManager):
         self._save_last_fetch_times(
             last_news_fetch=result.get("last_news_fetch"),
             last_reddit_fetch=result.get("last_reddit_fetch"),
+            last_twitter_fetch=result.get("last_twitter_fetch"),
         )
 
         if not result.get("success"):
@@ -215,22 +240,29 @@ class Croner(ExceptionManager):
             return result
 
         if not result.get("has_new_data"):
-            logger.info("News update: no new data from news or Reddit — skipping LLM call.")
+            logger.info(
+                "News update: no new data from news, Reddit, or Twitter — skipping LLM call."
+            )
             return result
 
         news_sentiment: Optional[NewsSentiment] = result.get("news_sentiment")
         new_article_count: int = result.get("new_article_count", 0)
         new_reddit_post_count: int = result.get("new_reddit_post_count", 0)
+        new_tweet_count: int = result.get("new_tweet_count", 0)
+
+        twitter_sentiment = result.get("twitter_sentiment")
+        twitter_label = twitter_sentiment.sentiment if twitter_sentiment else "N/A"
+        twitter_conf = twitter_sentiment.confidence if twitter_sentiment else "N/A"
 
         logger.info(
             f"News update: {new_article_count} new articles, "
             f"{new_reddit_post_count} new Reddit posts, "
-            f"sentiment={news_sentiment.sentiment if news_sentiment else 'N/A'}, "
-            f"confidence={news_sentiment.confidence if news_sentiment else 'N/A'}"
+            f"{new_tweet_count} new tweets, "
+            f"blended sentiment={news_sentiment.sentiment if news_sentiment else 'N/A'}, "
+            f"twitter={twitter_label}"
         )
 
-        if news_sentiment: # news_sentiment is combined sentiment
-
+        if news_sentiment:
             # Check for sentiment drift vs cached value
             cached_sentiment: Optional[str] = self.redis_client.get(
                 _REDIS_KEY_MARKET_SENTIMENT
@@ -239,7 +271,7 @@ class Croner(ExceptionManager):
                 cached_sentiment is None or (
                     news_sentiment.sentiment != cached_sentiment
                     and news_sentiment.confidence >= self.sentiment_drift_threshold
-                    and news_sentiment.sentiment in {"BULLISH", "BEARISH"}  # Only trigger on clear directional shifts
+                    and news_sentiment.sentiment in {"BULLISH", "BEARISH"}
                 )
             )
 
@@ -247,20 +279,27 @@ class Croner(ExceptionManager):
             self.send_market_sentiment(
                 data=(
                     f"[Incremental Update] {new_article_count} new articles, "
-                    f"{new_reddit_post_count} new Reddit posts — "
-                    f"Sentiment={news_sentiment.sentiment}, "
-                    f"Confidence={news_sentiment.confidence:.2f}"
+                    f"{new_reddit_post_count} new Reddit posts, "
+                    f"{new_tweet_count} new tweets — "
+                    f"Blended Sentiment={news_sentiment.sentiment}, "
+                    f"Confidence={news_sentiment.confidence:.2f} | "
+                    f"Twitter={twitter_label} (conf={twitter_conf})"
                 ),
-                description=f"Sentiment drift detected: {sentiment_drifted} ::== {cached_sentiment} → {news_sentiment.sentiment}",
+                description=(
+                    f"Sentiment drift detected: {sentiment_drifted} "
+                    f"::== {cached_sentiment} → {news_sentiment.sentiment}"
+                ),
                 fields={
                     "sentiment": news_sentiment.sentiment,
                     "confidence": news_sentiment.confidence,
                     "explanation": news_sentiment.explanation,
+                    "twitter_sentiment": twitter_label,
+                    "twitter_confidence": twitter_conf,
                     "new_articles": new_article_count,
                     "new_reddit_posts": new_reddit_post_count,
+                    "new_tweets": new_tweet_count,
                 },
             )
-
 
             if sentiment_drifted:
                 logger.warning(
@@ -270,9 +309,10 @@ class Croner(ExceptionManager):
                     f"{self.sentiment_drift_threshold}). "
                     "Triggering immediate full analysis."
                 )
-                # Cache sentiment label and update fetch timestamps
                 try:
-                    self.redis_client.set(_REDIS_KEY_MARKET_SENTIMENT, news_sentiment.sentiment)
+                    self.redis_client.set(
+                        _REDIS_KEY_MARKET_SENTIMENT, news_sentiment.sentiment
+                    )
                 except Exception as e:
                     logger.exception("Failed to update Redis after incremental analysis.")
                     self.handle_exception(
@@ -289,11 +329,12 @@ class Croner(ExceptionManager):
 
         Design notes
         ------------
-        * Runs hourly full-analysis loop and incremental news updates independently.
+        * Runs hourly full-analysis loop and incremental news+Reddit+Twitter
+          updates independently.
         * Loads and saves last-fetch timestamps from/to Redis on every cycle
           so the correct deduplication window is maintained across restarts.
-        * Only calls the LLM when new news articles or Reddit posts are found,
-          keeping token usage low.
+        * Only calls the LLM when new news articles, Reddit posts, or tweets
+          are found, keeping token usage low.
         """
         while True:
             try:
@@ -307,9 +348,10 @@ class Croner(ExceptionManager):
 
                     self.redis_client.set(
                         "ms_hourly_last_run",
-                        current_hour
+                        current_hour,
                     )
                     time.sleep(self.news_poll_interval)
+
                 asyncio.run(self.run_news_update_once())
                 time.sleep(self.news_poll_interval)
             except Exception as e:
