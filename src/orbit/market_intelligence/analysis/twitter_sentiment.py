@@ -175,7 +175,7 @@ class TwitterSentimentAnalyzer:
                 items = []
 
         except Exception as exc:
-            logger.error(f"Twitter batch LLM call failed: {exc}")
+            logger.exception(f"Twitter batch LLM call failed: {exc}")
             items = []
 
         entries: List[TweetSentimentEntry] = []

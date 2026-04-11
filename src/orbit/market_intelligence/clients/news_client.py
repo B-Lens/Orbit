@@ -52,7 +52,7 @@ def fetch_news_articles_since(since_aware: Optional[datetime] = None) -> tuple[s
         response = requests.get(url, timeout=30)
         response.raise_for_status()
     except requests.RequestException as e:
-        logger.error(f"Failed to fetch news: {e}")
+        logger.exception(f"Failed to fetch news: {e}")
         return "", [], _last_fetch_time
 
     try:
@@ -142,7 +142,7 @@ def fetch_news_articles(query: str) -> str:
         response = requests.get(url, timeout=30)
         response.raise_for_status()
     except requests.RequestException as e:
-        logger.error(f"Failed to fetch news: {e}")
+        logger.error(f"Failed to fetch news")
         return "No valid news content found."
 
     try:

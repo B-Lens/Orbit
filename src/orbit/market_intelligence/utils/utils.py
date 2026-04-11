@@ -98,13 +98,13 @@ def fetch_market_indicators() -> MarketIndicators:
         # Fetch VIX index
         indicators.vix = fetch_vix_index(current_hour)
     except Exception as e:
-        logger.error(f"Error fetching VIX: {e}")
+        logger.exception(f"Error fetching VIX: {e}")
 
     try:
         # Fetch Fear & Greed Index
         indicators.fear_greed_index = fetch_crypto_fear_greed(current_hour)
     except Exception as e:
-        logger.error(f"Error fetching Fear & Greed Index: {e}")
+        logger.exception(f"Error fetching Fear & Greed Index: {e}")
 
     return indicators
 

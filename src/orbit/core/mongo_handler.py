@@ -90,7 +90,7 @@ class MongoHandler(ExceptionManager):
                 [("symbol", ASCENDING), ("trade_timestamp", ASCENDING)]
             )
         except Exception as exc:
-            logger.error(f"Error initializing MongoDB: {exc}")
+            logger.exception(f"Error initializing MongoDB: {exc}")
             self.collection = None
 
     # ------------------------------------------------------------------

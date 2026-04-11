@@ -42,7 +42,7 @@ def get_commit_id() -> str:
             .strip()
         )
     except Exception as e:
-        logger.error(f"Error fetching commit ID: {e}")
+        logger.exception(f"Error fetching commit ID: {e}")
         return "unknown"
 
 def get_symbol_price(symbol: str):

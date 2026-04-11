@@ -88,7 +88,7 @@ class RedditClient:
                     posts.append(post_data)
                         
             except Exception as e:
-                logger.error(f"Error fetching from r/{subreddit_name}: {e}")
+                logger.exception(f"Error fetching from r/{subreddit_name}")
             
             return posts
         
