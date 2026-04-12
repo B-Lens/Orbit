@@ -4,9 +4,10 @@ twitter_sentiment
 
 LLM-based sentiment analysis for a batch of financial tweets.
 
-The analyser scores each tweet individually (BULLISH / BEARISH / NEUTRAL)
-and then aggregates them into a single :class:`TwitterSentimentResult` using
-engagement-weighted voting.
+The analyser sends all tweets to the LLM in chunks (respecting token limits),
+collects per-chunk overall sentiments, then produces a single final
+:class:`TwitterSentimentResult` by asking the LLM to reason across all
+chunk summaries.
 """
 
 import logging
@@ -25,19 +26,16 @@ logger = logging.getLogger("Orbit")
 # ---------------------------------------------------------------------------
 
 
-class TweetSentimentEntry(BaseModel):
-    """Sentiment for a single tweet."""
+class ChunkSentimentSummary(BaseModel):
+    """Intermediate sentiment summary for one chunk of tweets."""
 
-    tweet_id: str
-    text: str
     sentiment: str  # BULLISH | BEARISH | NEUTRAL
     confidence: float = Field(ge=0.0, le=1.0)
-    engagement_score: float = 0.0
-    weight: float = 1.0
+    reasoning: str
 
 
 class TwitterSentimentResult(BaseModel):
-    """Aggregated sentiment across all analysed tweets."""
+    """Final aggregated sentiment across all analysed tweets."""
 
     sentiment: str  # BULLISH | BEARISH | NEUTRAL
     confidence: float = Field(ge=0.0, le=1.0)
@@ -50,258 +48,263 @@ class TwitterSentimentResult(BaseModel):
 # Analyser
 # ---------------------------------------------------------------------------
 
+# Maximum number of tweets per LLM chunk call.
+# Keeps each prompt well within typical 4 k-token context windows.
+_CHUNK_SIZE = 40
+
 
 class TwitterSentimentAnalyzer:
-    """Analyse financial tweets with an LLM and aggregate results.
+    """Analyse financial tweets with an LLM using a chunk-then-synthesise approach.
+
+    Instead of scoring tweets individually and aggregating scores, this
+    analyser:
+
+    1. Splits tweets into chunks of ``chunk_size``.
+    2. Asks the LLM for an **overall** sentiment + reasoning for each chunk.
+    3. Feeds all chunk summaries back to the LLM for a **final synthesis**
+       that produces one :class:`TwitterSentimentResult`.
 
     Args:
         llm: LLM wrapper that exposes ``invoke(prompt: str) -> str | None``.
-        batch_size: Number of tweets sent to the LLM in a single prompt.
+        chunk_size: Number of tweets sent to the LLM in a single chunk prompt.
     """
 
-    def __init__(self, llm: LLM, batch_size: int = 30) -> None:
+    def __init__(self, llm: LLM, chunk_size: int = _CHUNK_SIZE) -> None:
         self.llm = llm
-        self.batch_size = batch_size
+        self.chunk_size = chunk_size
 
     # ------------------------------------------------------------------
-    # BATCH ANALYSIS
+    # PUBLIC ENTRY POINT
     # ------------------------------------------------------------------
 
     def analyze_tweets(
         self, tweets: List[Dict[str, Any]]
-    ) -> List[TweetSentimentEntry]:
+    ) -> List[ChunkSentimentSummary]:
         """
-        Analyse tweets in batches and return per-tweet sentiment entries.
+        Analyse all tweets in chunks and return per-chunk summaries.
 
         Args:
-            tweets: Enriched tweet dicts (must contain ``id``, ``text``,
-                    ``_weight``, ``_engagement_score``).
+            tweets: Enriched tweet dicts (must contain at least ``text``).
 
         Returns:
-            List of :class:`TweetSentimentEntry` objects.
+            List of :class:`ChunkSentimentSummary` objects — one per chunk.
         """
-        entries: List[TweetSentimentEntry] = []
+        summaries: List[ChunkSentimentSummary] = []
 
-        for i in range(0, len(tweets), self.batch_size):
-            batch = tweets[i : i + self.batch_size]
-            batch_entries = self._analyze_batch(batch)
-            entries.extend(batch_entries)
+        for i in range(0, len(tweets), self.chunk_size):
+            chunk = tweets[i : i + self.chunk_size]
+            summary = self._analyze_chunk(chunk, chunk_index=i // self.chunk_size + 1)
+            summaries.append(summary)
 
-        return entries
+        return summaries
 
-    def _analyze_batch(
-        self, tweets: List[Dict[str, Any]]
-    ) -> List[TweetSentimentEntry]:
+    # ------------------------------------------------------------------
+    # CHUNK ANALYSIS
+    # ------------------------------------------------------------------
+
+    def _analyze_chunk(
+        self, tweets: List[Dict[str, Any]], chunk_index: int = 1
+    ) -> ChunkSentimentSummary:
         """
-        Send one batch of tweets to the LLM and parse the response.
+        Send one chunk of tweets to the LLM and return an overall sentiment
+        summary for that chunk.
 
         Args:
             tweets: Subset of enriched tweet dicts.
+            chunk_index: 1-based chunk number (used for logging only).
 
         Returns:
-            List of :class:`TweetSentimentEntry` objects for this batch.
+            :class:`ChunkSentimentSummary` for this chunk.
         """
         if not tweets:
-            return []
+            return ChunkSentimentSummary(
+                sentiment="NEUTRAL",
+                confidence=0.3,
+                reasoning="Empty chunk.",
+            )
 
-        # Build numbered tweet list for the prompt
         tweet_lines: List[str] = []
         for idx, t in enumerate(tweets, start=1):
             text = t.get("text", "").replace("\n", " ").strip()
             tweet_lines.append(f"{idx}. {text}")
 
         tweets_block = "\n".join(tweet_lines)
-        logger.info(f"Analyzing Tweets batch with LLM \n {tweets_block}")
+        logger.info(
+            f"Analyzing tweet chunk {chunk_index} ({len(tweets)} tweets) with LLM"
+        )
 
         prompt = f"""
-            You are an institutional financial sentiment classifier.
+            You are an institutional financial sentiment analyst.
 
-            Task:
-            Classify the market sentiment of EACH tweet with respect to tradable assets
-            (crypto, stocks, gold, forex, macro, interest rates, risk sentiment).
-
-            Ignore:
-            - opinions
-            - technical analysis
-            - minor commentary
-            - speculation
-            - duplicate news
+            Below is a batch of financial tweets. Read ALL of them and determine the
+            OVERALL market sentiment they collectively express with respect to tradable
+            assets (crypto, stocks, gold, forex, macro, interest rates, risk sentiment).
 
             Rules:
-            - BULLISH → positive for risk assets / price likely up
-            - BEARISH → negative for risk assets / price likely down
-            - NEUTRAL → informational, unclear, mixed, or no market impact
-            - Ignore jokes, memes, emojis unless they imply direction
-            - If tweet is not market-related → NEUTRAL with low confidence (<=0.4)
-            - If mixed signals → NEUTRAL
-            - High conviction language → higher confidence
-            - Speculation words ("maybe", "could") → reduce confidence
-            - News headlines without opinion → NEUTRAL unless clearly directional
+            - BULLISH  → net positive for risk assets / prices likely up
+            - BEARISH  → net negative for risk assets / prices likely down
+            - NEUTRAL  → mixed, unclear, or no meaningful market signal
+            - Base your judgment on the WEIGHT OF EVIDENCE across all tweets, not on
+            any single tweet.
+            - Ignore jokes, memes, and off-topic content.
+            - High-conviction directional language raises confidence.
+            - Speculation words ("maybe", "could") lower confidence.
 
-            Confidence Guidelines:
-            0.9-1.0  : explicit strong directional claim
-            0.7-0.89 : clear directional bias
-            0.4-0.69 : weak / implied direction
-            0.0-0.39 : unclear / irrelevant
+            Confidence guidelines:
+            0.9-1.0  : strong, consistent directional signal across most tweets
+            0.7-0.89 : clear directional bias in the majority of tweets
+            0.4-0.69 : weak or mixed directional signal
+            0.0-0.39 : mostly noise / irrelevant
 
-            Output format:
-            Return ONLY a valid JSON array. No markdown. No explanation.
-
-            Schema:
-            [
+            Respond ONLY with valid JSON (no markdown, no extra text):
             {{
-                "index": int,
-                "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-                "confidence": float
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "reasoning": "<concise explanation referencing key themes in the tweets>"
             }}
-            ]
 
             Tweets:
             {tweets_block}
-        """
+            """
 
         try:
             raw = self.llm.invoke(prompt)
             raw = str(raw).strip()
-            logger.info(f"LLM raw output for Twitter sentiment batch: {raw}")
-            # parsed = extract_json(raw)
-            parsed = raw # For debugging: use raw output if parsing fails
-
-            # extract_json returns a dict; if the LLM returned a list it will
-            # be wrapped — handle both cases.
-            if isinstance(parsed, list):
-                items = parsed
-            elif isinstance(parsed, dict):
-                # Try common wrapper keys
-                items = parsed.get("results") or parsed.get("data") or []
-            else:
-                items = []
-
+            logger.info(
+                f"LLM raw output for tweet chunk {chunk_index}: {raw}"
+            )
+            data = extract_json(raw)
+            return ChunkSentimentSummary(
+                sentiment=str(data.get("sentiment", "NEUTRAL")).upper(),
+                confidence=float(data.get("confidence", 0.5)),
+                reasoning=str(data.get("reasoning", "")),
+            )
         except Exception as exc:
-            logger.exception(f"Twitter batch LLM call failed: {exc}")
-            items = []
-
-        entries: List[TweetSentimentEntry] = []
-        for item in items:
-            try:
-                idx = int(item.get("index", 0)) - 1
-                if idx < 0 or idx >= len(tweets):
-                    continue
-                tweet = tweets[idx]
-                entries.append(
-                    TweetSentimentEntry(
-                        tweet_id=str(tweet.get("id", "")),
-                        text=tweet.get("text", ""),
-                        sentiment=str(item.get("sentiment", "NEUTRAL")).upper(),
-                        confidence=float(item.get("confidence", 0.5)),
-                        engagement_score=float(
-                            tweet.get("_engagement_score", 0.0)
-                        ),
-                        weight=float(tweet.get("_weight", 1.0)),
-                    )
-                )
-            except Exception as exc:
-                logger.debug(f"Skipping malformed tweet sentiment item: {exc}")
-
-        # Fallback: if LLM returned nothing, mark all as NEUTRAL
-        if not entries:
-            for tweet in tweets:
-                entries.append(
-                    TweetSentimentEntry(
-                        tweet_id=str(tweet.get("id", "")),
-                        text=tweet.get("text", ""),
-                        sentiment="NEUTRAL",
-                        confidence=0.3,
-                        engagement_score=float(
-                            tweet.get("_engagement_score", 0.0)
-                        ),
-                        weight=float(tweet.get("_weight", 1.0)),
-                    )
-                )
-
-        return entries
+            logger.exception(
+                f"Tweet chunk {chunk_index} LLM call failed: {exc}"
+            )
+            return ChunkSentimentSummary(
+                sentiment="NEUTRAL",
+                confidence=0.3,
+                reasoning="LLM call failed for this chunk.",
+            )
 
     # ------------------------------------------------------------------
-    # AGGREGATION
+    # FINAL SYNTHESIS
     # ------------------------------------------------------------------
 
     def aggregate(
-        self, entries: List[TweetSentimentEntry]
+        self, summaries: List[ChunkSentimentSummary], total_tweets: int = 0
     ) -> TwitterSentimentResult:
         """
-        Aggregate per-tweet sentiment into a single result using
-        engagement-weighted voting.
+        Synthesise all chunk summaries into a single :class:`TwitterSentimentResult`.
 
-        Each tweet's vote is:
-            direction * confidence * engagement_weight * query_weight
-
-        where ``direction`` is +1 (BULLISH), -1 (BEARISH), or 0 (NEUTRAL)
-        and ``engagement_weight`` is a normalised engagement score.
+        If there is only one chunk summary the result is derived directly from
+        it without an extra LLM call.  For multiple chunks the LLM is asked to
+        reason across all summaries and produce a final verdict.
 
         Args:
-            entries: Per-tweet sentiment entries.
+            summaries: Per-chunk sentiment summaries from :meth:`analyze_tweets`.
+            total_tweets: Total number of tweets analysed (for the result field).
 
         Returns:
             :class:`TwitterSentimentResult`.
         """
-        if not entries:
+        if not summaries:
             return TwitterSentimentResult(
                 sentiment="NEUTRAL",
                 confidence=0.3,
                 overall_score=0.0,
-                total_tweets_analyzed=0,
+                total_tweets_analyzed=total_tweets,
                 explanation="No tweets available for analysis.",
             )
 
-        # Normalise engagement scores to [0.1, 1.0] so low-engagement tweets
-        # still contribute a little.
-        max_eng = max(e.engagement_score for e in entries) or 1.0
-        min_eng = min(e.engagement_score for e in entries)
-        eng_range = max_eng - min_eng or 1.0
+        if len(summaries) == 1:
+            s = summaries[0]
+            score = self._sentiment_to_score(s.sentiment, s.confidence)
+            return TwitterSentimentResult(
+                sentiment=s.sentiment,
+                confidence=s.confidence,
+                overall_score=round(score, 4),
+                total_tweets_analyzed=total_tweets,
+                explanation=s.reasoning,
+            )
 
-        direction_map = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
+        # Build a summary-of-summaries block for the synthesis prompt
+        summary_lines: List[str] = []
+        for i, s in enumerate(summaries, start=1):
+            summary_lines.append(
+                f"Chunk {i}: sentiment={s.sentiment}, "
+                f"confidence={s.confidence:.2f}, reasoning={s.reasoning}"
+            )
+        summaries_block = "\n".join(summary_lines)
 
-        weighted_score = 0.0
-        total_weight = 0.0
+        prompt = f"""
+            You are an institutional financial sentiment analyst.
 
-        for entry in entries:
-            norm_eng = 0.1 + 0.9 * (entry.engagement_score - min_eng) / eng_range
-            vote_weight = norm_eng * entry.weight * entry.confidence
-            direction = direction_map.get(entry.sentiment, 0.0)
-            weighted_score += direction * vote_weight
-            total_weight += vote_weight
+            Below are sentiment summaries produced from separate batches of financial
+            tweets. Each summary represents the collective sentiment of one batch.
 
-        overall_score = weighted_score / total_weight if total_weight > 0 else 0.0
-        overall_score = max(-1.0, min(1.0, overall_score))
+            Your task: synthesise ALL summaries into a single overall market sentiment.
 
-        if overall_score > 0.15:
-            label = "BULLISH"
-        elif overall_score < -0.15:
-            label = "BEARISH"
-        else:
-            label = "NEUTRAL"
+            Rules:
+            - focus on the strongest signals or valid analysis of the chunk.
+            - Weigh each chunk by its confidence score.
+            - BULLISH  → net positive for risk assets
+            - BEARISH  → net negative for risk assets
+            - NEUTRAL  → mixed or no clear signal
+            - Provide a concise explanation that references the key themes.
+            - Ignore failed analysis or No analysis of the chunk 
+            - Ignore irrelevant content in the chunk summaries.
 
-        # Confidence = average per-tweet confidence weighted by engagement
-        avg_confidence = (
-            sum(e.confidence * e.engagement_score for e in entries)
-            / sum(e.engagement_score or 1.0 for e in entries)
+            Respond ONLY with valid JSON (no markdown, no extra text):
+            {{
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "reasoning": "<concise synthesis explanation>"
+            }}
+
+            Chunk summaries:
+            {summaries_block}
+            """
+
+        try:
+            raw = self.llm.invoke(prompt)
+            raw = str(raw).strip()
+            logger.info(f"LLM synthesis output: {raw}")
+            data = extract_json(raw)
+            sentiment = str(data.get("sentiment", "NEUTRAL")).upper()
+            confidence = float(data.get("confidence", 0.5))
+            reasoning = str(data.get("reasoning", ""))
+            score = self._sentiment_to_score(sentiment, confidence)
+
+            return TwitterSentimentResult(
+                sentiment=sentiment,
+                confidence=round(confidence, 3),
+                overall_score=round(score, 4),
+                total_tweets_analyzed=total_tweets,
+                explanation=reasoning,
+            )
+
+        except Exception as exc:
+            logger.exception(f"Twitter synthesis LLM call failed: {exc}")
+
+            return TwitterSentimentResult(
+                sentiment="NEUTRAL",
+                confidence=0.0,
+                overall_score=0.0,
+                total_tweets_analyzed=0,
+                explanation="Tweets Analysis failed during final synthesis step. Fallback applied.",
+            )
+
+    # ------------------------------------------------------------------
+    # INTERNAL HELPERS
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sentiment_to_score(sentiment: str, confidence: float) -> float:
+        """Convert a sentiment label + confidence to a [-1, 1] score."""
+        direction = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}.get(
+            sentiment.upper(), 0.0
         )
-        avg_confidence = round(min(1.0, max(0.0, avg_confidence)), 3)
-
-        bullish_count = sum(1 for e in entries if e.sentiment == "BULLISH")
-        bearish_count = sum(1 for e in entries if e.sentiment == "BEARISH")
-        neutral_count = sum(1 for e in entries if e.sentiment == "NEUTRAL")
-
-        explanation = (
-            f"Analyzed {len(entries)} tweets: "
-            f"{bullish_count} BULLISH, {bearish_count} BEARISH, {neutral_count} NEUTRAL. "
-            f"Engagement-weighted score: {overall_score:.3f}."
-        )
-
-        return TwitterSentimentResult(
-            sentiment=label,
-            confidence=avg_confidence,
-            overall_score=round(overall_score, 4),
-            total_tweets_analyzed=len(entries),
-            explanation=explanation,
-        )
+        return max(-1.0, min(1.0, direction * confidence))
