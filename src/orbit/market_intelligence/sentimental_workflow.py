@@ -5,7 +5,7 @@ This module orchestrates the full market sentiment analysis pipeline by:
 - Fetching Reddit posts
 - Applying weighted Reddit sentiment analysis
 - Fetching financial tweets via the twitter CLI tool
-- Applying LLM-based Twitter sentiment analysis
+- Applying LLM-based Twitter sentiment analysis (chunk-then-synthesise)
 - Fetching crypto/market news via RSS feeds (macro, crypto, global, finance)
 - Running LLM-based news sentiment classification
 - Fetching macro indicators (VIX, Fear & Greed)
@@ -22,8 +22,6 @@ Also provides a lightweight `run_news_update()` path that:
 - Fetches only *new* tweets since the last call.
 - Re-scores sentiment when any source has new data.
 - Keeps LLM token usage low by skipping the call when nothing is new.
-
-Designed for traceability using LangSmith.
 """
 
 import os
@@ -35,7 +33,6 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Literal, Optional
 from zoneinfo import ZoneInfo
 
-from langsmith import traceable
 from orbit.core.exception_manager import ExceptionManager
 from orbit.market_intelligence.clients.reddit_client import RedditClient
 from orbit.market_intelligence.clients.twitter_client import TwitterClient
@@ -54,6 +51,7 @@ from orbit.market_intelligence.analysis.reddit_sentiment import (
 from orbit.market_intelligence.analysis.twitter_sentiment import (
     TwitterSentimentAnalyzer,
     TwitterSentimentResult,
+    ChunkSentimentSummary,
 )
 from orbit.market_intelligence.models.mongodb_models import (
     MongoDBManager,
@@ -68,17 +66,12 @@ from orbit.market_intelligence.utils.utils import (
 from orbit.utils.utils import require_env, get_indian_time, to_ist
 
 
-# ---- LangSmith env ----
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_API_KEY"] = require_env("LANGSMITH_API_KEY")
-
 BATCH_SIZE = 100
 logger = logging.getLogger("Orbit")
 
 # ---------------------------------------------------------------------------
 # Sentiment combination weights
 # ---------------------------------------------------------------------------
-# Twitter is the highest-priority signal; Reddit is kept but de-prioritised.
 _W_TWITTER: float = 0.35
 _W_NEWS: float = 0.30
 _W_REDDIT: float = 0.20
@@ -158,10 +151,9 @@ class SentimentWorkflow(ExceptionManager):
         self.last_news_sentiment: Optional[NewsSentiment] = None
 
     # ------------------------------------------------------------------
-    # TRACEABLE STEPS
+    # FETCH STEPS
     # ------------------------------------------------------------------
 
-    @traceable(name="fetch_reddit_posts")
     def fetch_reddit(
         self,
         hours_back: int = 5,
@@ -182,7 +174,6 @@ class SentimentWorkflow(ExceptionManager):
             posts_per_subreddit=posts_per_subreddit,
         )
 
-    @traceable(name="calculate_dynamic_weights")
     def calculate_weights(
         self,
         reddit_posts_data: Dict[str, Dict[str, Any]],
@@ -200,7 +191,6 @@ class SentimentWorkflow(ExceptionManager):
             reddit_posts_data
         )
 
-    @traceable(name="aggregate_reddit_sentiment")
     def aggregate_sentiment(
         self,
         sentiments: List[RedditSentimentEntry],
@@ -216,7 +206,6 @@ class SentimentWorkflow(ExceptionManager):
         """
         return self.reddit_analyzer.aggregate_weighted_sentiment(sentiments)
 
-    @traceable(name="fetch_twitter_tweets")
     def fetch_twitter(self) -> List[Dict[str, Any]]:
         """
         Fetch financial tweets from all configured Twitter search queries.
@@ -228,34 +217,33 @@ class SentimentWorkflow(ExceptionManager):
         logger.info(f"Twitter: fetched {len(tweets)} tweets (full run)")
         return tweets
 
-    @traceable(name="analyze_twitter_sentiment")
     def analyze_twitter(
         self, tweets: List[Dict[str, Any]]
     ) -> TwitterSentimentResult:
         """
-        Run LLM-based sentiment analysis on a list of tweets and aggregate.
+        Run LLM-based sentiment analysis on tweets using chunk-then-synthesise.
+
+        All tweets are split into chunks; each chunk gets an overall sentiment
+        summary from the LLM.  The summaries are then synthesised into a single
+        :class:`TwitterSentimentResult` by a final LLM call.
 
         Args:
             tweets: Enriched tweet dicts from :meth:`fetch_twitter`.
 
         Returns:
-            :class:`TwitterSentimentResult` with aggregated sentiment.
+            :class:`TwitterSentimentResult` with final synthesised sentiment.
         """
-        entries = self.twitter_analyzer.analyze_tweets(tweets)
-        result = self.twitter_analyzer.aggregate(entries)
+        summaries: List[ChunkSentimentSummary] = self.twitter_analyzer.analyze_tweets(tweets)
+        result = self.twitter_analyzer.aggregate(summaries, total_tweets=len(tweets))
         logger.info(
             f"Twitter sentiment: {result.sentiment} "
             f"(confidence={result.confidence}, score={result.overall_score})"
         )
         return result
 
-    @traceable(name="fetch_rss_news")
     def fetch_news(self, hours_back: int = 8, limit: int = 30) -> str:
         """
         Fetch recent news articles from all configured RSS feeds.
-
-        Covers macro (Investing.com), crypto (CoinDesk, CoinTelegraph),
-        global (BBC, CNN) and finance (Yahoo Finance Gold/USD) feeds.
 
         Args:
             hours_back: Only include articles published within this many hours.
@@ -274,7 +262,6 @@ class SentimentWorkflow(ExceptionManager):
         logger.info(f"RSS news fetch: {len(news)} articles after dedup/filter (limit={limit})")
         return news_text
 
-    @traceable(name="fetch_indicators")
     def fetch_indicators(self) -> MarketIndicators:
         """
         Fetch macro market indicators such as VIX and Fear & Greed index.
@@ -417,8 +404,6 @@ class SentimentWorkflow(ExceptionManager):
 
         Returns:
             Tuple of (filtered_reddit_posts_data, total_new_post_count).
-            filtered_reddit_posts_data has the same shape as the raw fetch
-            result but with only new posts inside each subreddit entry.
         """
         raw_data = self.fetch_reddit(
             hours_back=hours_back,
@@ -475,13 +460,11 @@ class SentimentWorkflow(ExceptionManager):
         """
         new_tweets = self.twitter_client.fetch_tweets_since(since=since)
 
-        # Update in-process timestamp to the most recent tweet seen
         for tweet in new_tweets:
             created_iso: Optional[str] = tweet.get("createdAtISO")
             if created_iso:
                 try:
                     tweet_dt = datetime.fromisoformat(created_iso)
-                    # Normalise to naive for comparison
                     if tweet_dt.tzinfo is not None:
                         tweet_dt = tweet_dt.astimezone(ZoneInfo("Asia/Kolkata"))
                     if (
@@ -489,13 +472,10 @@ class SentimentWorkflow(ExceptionManager):
                         or tweet_dt > self._last_twitter_fetch
                     ):
                         self._last_twitter_fetch = tweet_dt
-                except ValueError as e:
+                except ValueError:
                     logger.exception(f"Failed to parse tweet timestamp: {created_iso}")
-                    pass
 
-        logger.info(
-            f"Twitter: {len(new_tweets)} new tweets since {since}"
-        )
+        logger.info(f"Twitter: {len(new_tweets)} new tweets since {since}")
         return new_tweets, len(new_tweets)
 
     # ------------------------------------------------------------------
@@ -512,47 +492,21 @@ class SentimentWorkflow(ExceptionManager):
         Lightweight update: check RSS news, Reddit, and Twitter for new
         content and re-score sentiment only when something new is found.
 
-        This is designed to be called every 10 minutes.  It returns a
-        minimal result dict so the caller can decide whether a full
-        ``run_analysis()`` is warranted.
-
-        Token usage is kept low because:
-        - The LLM prompt is only sent when new articles, posts, or tweets
-          are found.
-        - No macro indicator calls are made.
-
-        RSS feeds polled:
-        - macro  : Investing.com (most popular, stock market, forex)
-        - crypto : CoinDesk, CoinTelegraph
-        - global : BBC World, CNN World
-        - finance: Yahoo Finance Gold (GC=F), Yahoo Finance USD Index (DX-Y.NYB)
+        This is designed to be called every 10 minutes.
 
         Args:
             last_news_fetch: Timestamp of the last news fetch (from Redis).
-                             Falls back to ``self._last_news_fetch`` when ``None``.
             last_reddit_fetch: Timestamp of the last Reddit fetch (from Redis).
-                               Falls back to ``self._last_reddit_fetch`` when ``None``.
             last_twitter_fetch: Timestamp of the last Twitter fetch (from Redis).
-                                Falls back to ``self._last_twitter_fetch`` when ``None``.
 
         Returns:
             Dict with keys:
-                ``has_new_data`` (bool),
-                ``has_new_articles`` (bool),
-                ``has_new_reddit_posts`` (bool),
-                ``has_new_tweets`` (bool),
-                ``news_sentiment`` (NewsSentiment | None),
-                ``twitter_sentiment`` (TwitterSentimentResult | None),
-                ``new_article_count`` (int),
-                ``new_reddit_post_count`` (int),
-                ``new_tweet_count`` (int),
-                ``last_news_fetch`` (str ISO-8601),
-                ``last_reddit_fetch`` (str ISO-8601),
-                ``last_twitter_fetch`` (str ISO-8601),
-                ``timestamp`` (str),
-                ``success`` (bool).
+                ``has_new_data``, ``has_new_articles``, ``has_new_reddit_posts``,
+                ``has_new_tweets``, ``news_sentiment``, ``twitter_sentiment``,
+                ``new_article_count``, ``new_reddit_post_count``,
+                ``new_tweet_count``, ``last_news_fetch``, ``last_reddit_fetch``,
+                ``last_twitter_fetch``, ``timestamp``, ``success``.
         """
-        # Resolve timestamps — prefer caller-supplied (from Redis) over in-process cache
         effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
         effective_reddit_since: Optional[datetime] = last_reddit_fetch or self._last_reddit_fetch
         effective_twitter_since: Optional[datetime] = last_twitter_fetch or self._last_twitter_fetch
@@ -705,10 +659,7 @@ class SentimentWorkflow(ExceptionManager):
 
                 news_sentiment = self.get_market_sentiments(combined_text, prompt=prompt)
 
-            # ---- Combine Twitter + News/Reddit into a single incremental sentiment ----
-            # For the incremental update we produce a blended NewsSentiment so
-            # the Croner drift-detection logic (which expects a NewsSentiment)
-            # continues to work unchanged.
+            # ---- Blend Twitter + News/Reddit into a single incremental sentiment ----
             blended_sentiment: Optional[NewsSentiment] = self._blend_incremental_sentiment(
                 twitter_result=twitter_sentiment,
                 news_result=news_sentiment,
@@ -768,8 +719,6 @@ class SentimentWorkflow(ExceptionManager):
         Blend Twitter and News/Reddit incremental sentiments into a single
         :class:`NewsSentiment` for the Croner drift-detection path.
 
-        Twitter carries higher weight (_W_TWITTER vs _W_NEWS).
-
         Args:
             twitter_result: Aggregated Twitter sentiment (may be None).
             news_result: LLM news+reddit sentiment (may be None).
@@ -816,7 +765,7 @@ class SentimentWorkflow(ExceptionManager):
         if score > 0.1:
             label = SentimentType.BULLISH
         elif score < -0.1:
-            label = SentimentType.BULLISH
+            label = SentimentType.BEARISH
         else:
             label = SentimentType.NEUTRAL
 
@@ -835,13 +784,12 @@ class SentimentWorkflow(ExceptionManager):
         Execute the complete sentiment analysis pipeline.
 
         Steps:
-        1. Fetch Reddit posts
-        2. Analyze and aggregate Reddit sentiment
-        3. Fetch financial tweets and analyze Twitter sentiment
-        4. Fetch RSS news (macro, crypto, global, finance feeds) and indicators
-        5. Compute combined sentiment score (Twitter weighted highest)
-        6. Persist results
-        7. Return structured result
+        1. Fetch Reddit posts and aggregate Reddit sentiment
+        2. Fetch financial tweets and analyse with chunk-then-synthesise LLM
+        3. Fetch RSS news and macro indicators
+        4. Compute combined sentiment score (Twitter weighted highest)
+        5. Persist results to MongoDB
+        6. Return structured result
 
         Returns:
             Dictionary containing final sentiment analysis results.
@@ -873,7 +821,7 @@ class SentimentWorkflow(ExceptionManager):
                 all_sentiments
             )
 
-            # ---- Twitter ----
+            # ---- Twitter (chunk-then-synthesise) ----
             tweets = self.fetch_twitter()
             twitter_result: TwitterSentimentResult = self.analyze_twitter(tweets)
 
@@ -909,7 +857,6 @@ class SentimentWorkflow(ExceptionManager):
                 twitter_result=twitter_result,
             )
 
-            # Update in-process timestamps after a successful full run
             now = get_indian_time()
             self._last_news_fetch = now
             self._last_reddit_fetch = now
@@ -1032,7 +979,6 @@ class SentimentWorkflow(ExceptionManager):
         else:
             label = "NEUTRAL"
 
-        # Confidence blends Twitter + News weighted contributions
         confidence = round(
             twitter_conf_contribution + news_conf_contribution,
             2,
