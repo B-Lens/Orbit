@@ -163,7 +163,8 @@ class TwitterSentimentAnalyzer:
             raw = self.llm.invoke(prompt)
             raw = str(raw).strip()
             logger.info(f"LLM raw output for Twitter sentiment batch: {raw}")
-            parsed = extract_json(raw)
+            # parsed = extract_json(raw)
+            parsed = raw # For debugging: use raw output if parsing fails
 
             # extract_json returns a dict; if the LLM returned a list it will
             # be wrapped — handle both cases.
