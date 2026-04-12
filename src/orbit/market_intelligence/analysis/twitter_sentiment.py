@@ -134,38 +134,38 @@ class TwitterSentimentAnalyzer:
         )
 
         prompt = f"""
-You are an institutional financial sentiment analyst.
+            You are an institutional financial sentiment analyst.
 
-Below is a batch of financial tweets. Read ALL of them and determine the
-OVERALL market sentiment they collectively express with respect to tradable
-assets (crypto, stocks, gold, forex, macro, interest rates, risk sentiment).
+            Below is a batch of financial tweets. Read ALL of them and determine the
+            OVERALL market sentiment they collectively express with respect to tradable
+            assets (crypto, stocks, gold, forex, macro, interest rates, risk sentiment).
 
-Rules:
-- BULLISH  → net positive for risk assets / prices likely up
-- BEARISH  → net negative for risk assets / prices likely down
-- NEUTRAL  → mixed, unclear, or no meaningful market signal
-- Base your judgment on the WEIGHT OF EVIDENCE across all tweets, not on
-  any single tweet.
-- Ignore jokes, memes, and off-topic content.
-- High-conviction directional language raises confidence.
-- Speculation words ("maybe", "could") lower confidence.
+            Rules:
+            - BULLISH  → net positive for risk assets / prices likely up
+            - BEARISH  → net negative for risk assets / prices likely down
+            - NEUTRAL  → mixed, unclear, or no meaningful market signal
+            - Base your judgment on the WEIGHT OF EVIDENCE across all tweets, not on
+            any single tweet.
+            - Ignore jokes, memes, and off-topic content.
+            - High-conviction directional language raises confidence.
+            - Speculation words ("maybe", "could") lower confidence.
 
-Confidence guidelines:
-  0.9-1.0  : strong, consistent directional signal across most tweets
-  0.7-0.89 : clear directional bias in the majority of tweets
-  0.4-0.69 : weak or mixed directional signal
-  0.0-0.39 : mostly noise / irrelevant
+            Confidence guidelines:
+            0.9-1.0  : strong, consistent directional signal across most tweets
+            0.7-0.89 : clear directional bias in the majority of tweets
+            0.4-0.69 : weak or mixed directional signal
+            0.0-0.39 : mostly noise / irrelevant
 
-Respond ONLY with valid JSON (no markdown, no extra text):
-{{
-  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "confidence": <float 0.0-1.0>,
-  "reasoning": "<concise explanation referencing key themes in the tweets>"
-}}
+            Respond ONLY with valid JSON (no markdown, no extra text):
+            {{
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "reasoning": "<concise explanation referencing key themes in the tweets>"
+            }}
 
-Tweets:
-{tweets_block}
-"""
+            Tweets:
+            {tweets_block}
+            """
 
         try:
             raw = self.llm.invoke(prompt)
@@ -240,30 +240,30 @@ Tweets:
         summaries_block = "\n".join(summary_lines)
 
         prompt = f"""
-You are an institutional financial sentiment analyst.
+            You are an institutional financial sentiment analyst.
 
-Below are sentiment summaries produced from separate batches of financial
-tweets. Each summary represents the collective sentiment of one batch.
+            Below are sentiment summaries produced from separate batches of financial
+            tweets. Each summary represents the collective sentiment of one batch.
 
-Your task: synthesise ALL summaries into a single overall market sentiment.
+            Your task: synthesise ALL summaries into a single overall market sentiment.
 
-Rules:
-- Weigh each chunk by its confidence score.
-- BULLISH  → net positive for risk assets
-- BEARISH  → net negative for risk assets
-- NEUTRAL  → mixed or no clear signal
-- Provide a concise explanation that references the key themes.
+            Rules:
+            - Weigh each chunk by its confidence score.
+            - BULLISH  → net positive for risk assets
+            - BEARISH  → net negative for risk assets
+            - NEUTRAL  → mixed or no clear signal
+            - Provide a concise explanation that references the key themes.
 
-Respond ONLY with valid JSON (no markdown, no extra text):
-{{
-  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "confidence": <float 0.0-1.0>,
-  "reasoning": "<concise synthesis explanation>"
-}}
+            Respond ONLY with valid JSON (no markdown, no extra text):
+            {{
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "reasoning": "<concise synthesis explanation>"
+            }}
 
-Chunk summaries:
-{summaries_block}
-"""
+            Chunk summaries:
+            {summaries_block}
+            """
 
         try:
             raw = self.llm.invoke(prompt)
@@ -285,8 +285,14 @@ Chunk summaries:
 
         except Exception as exc:
             logger.exception(f"Twitter synthesis LLM call failed: {exc}")
-            # Fallback: simple majority vote across chunk summaries
-            return self._fallback_aggregate(summaries, total_tweets)
+
+            return TwitterSentimentResult(
+                sentiment="NEUTRAL",
+                confidence=0.0,
+                overall_score=0.0,
+                total_tweets_analyzed=0,
+                explanation="Tweets Analysis failed during final synthesis step. Fallback applied.",
+            )
 
     # ------------------------------------------------------------------
     # INTERNAL HELPERS
@@ -299,51 +305,3 @@ Chunk summaries:
             sentiment.upper(), 0.0
         )
         return max(-1.0, min(1.0, direction * confidence))
-
-    def _fallback_aggregate(
-        self,
-        summaries: List[ChunkSentimentSummary],
-        total_tweets: int,
-    ) -> TwitterSentimentResult:
-        """
-        Simple confidence-weighted fallback when the synthesis LLM call fails.
-
-        Args:
-            summaries: Per-chunk summaries.
-            total_tweets: Total tweets analysed.
-
-        Returns:
-            :class:`TwitterSentimentResult`.
-        """
-        direction_map = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
-        weighted_score = 0.0
-        total_conf = 0.0
-
-        for s in summaries:
-            d = direction_map.get(s.sentiment, 0.0)
-            weighted_score += d * s.confidence
-            total_conf += s.confidence
-
-        overall = weighted_score / total_conf if total_conf > 0 else 0.0
-        overall = max(-1.0, min(1.0, overall))
-
-        if overall > 0.15:
-            label = "BULLISH"
-        elif overall < -0.15:
-            label = "BEARISH"
-        else:
-            label = "NEUTRAL"
-
-        avg_conf = round(total_conf / len(summaries), 3)
-        explanation = (
-            f"Fallback aggregation across {len(summaries)} chunks. "
-            f"Weighted score: {overall:.3f}."
-        )
-
-        return TwitterSentimentResult(
-            sentiment=label,
-            confidence=avg_conf,
-            overall_score=round(overall, 4),
-            total_tweets_analyzed=total_tweets,
-            explanation=explanation,
-        )
