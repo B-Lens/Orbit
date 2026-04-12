@@ -881,7 +881,7 @@ class TradeChecker(AuthenticationManager):
                 logger.exception("Error parsing websocket message")
 
         def on_error(ws, error):
-            logger.error(f"WebSocket error: {error}")
+            logger.warning(f"WebSocket error: {error}")
             self.send_websocket_logs(data='Websocket Error', description=f"{error}", fields=None)
             self.isWebSocketRunning = False
             try:

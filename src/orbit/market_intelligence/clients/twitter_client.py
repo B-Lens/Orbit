@@ -28,10 +28,10 @@ logger = logging.getLogger("Orbit")
 # ---------------------------------------------------------------------------
 
 TWITTER_SEARCH_QUERIES: List[Dict[str, Any]] = [
-    {"query": "crypto market", "count": 20, "weight": 1.0},
-    {"query": "bitcoin BTC", "count": 20, "weight": 1.0},
-    {"query": "gold XAUUSD market", "count": 15, "weight": 0.9},
-    {"query": "stock market economy", "count": 15, "weight": 0.8},
+    {"query": "crypto market", "count": 10, "weight": 1.0},
+    {"query": "bitcoin BTC", "count": 10, "weight": 1.0},
+    {"query": "gold XAUUSD market", "count": 10, "weight": 0.9},
+    {"query": "stock market economy", "count": 10, "weight": 0.8},
     {"query": "Federal Reserve interest rates", "count": 10, "weight": 0.9},
     {"query": "inflation CPI recession", "count": 10, "weight": 0.85},
     {"query": "ethereum ETH altcoin", "count": 10, "weight": 0.8},
