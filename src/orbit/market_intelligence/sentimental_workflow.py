@@ -328,6 +328,7 @@ class SentimentWorkflow(ExceptionManager):
         try:
             raw_content = self.llm.invoke(full_prompt)
             raw_content = str(raw_content)
+            logger.info(f"LLM raw output for news sentiment: {raw_content}")
             data = extract_json(raw_content)
             result = NewsSentiment(**data)
             self.last_news_sentiment = result
