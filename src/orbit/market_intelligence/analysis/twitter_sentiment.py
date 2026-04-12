@@ -111,6 +111,7 @@ class TwitterSentimentAnalyzer:
             tweet_lines.append(f"{idx}. {text}")
 
         tweets_block = "\n".join(tweet_lines)
+        logger.info(f"Analyzing Tweets batch with LLM \n {tweets_block}")
 
         prompt = f"""
             You are an institutional financial sentiment classifier.
