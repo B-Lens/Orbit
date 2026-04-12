@@ -248,11 +248,14 @@ class TwitterSentimentAnalyzer:
             Your task: synthesise ALL summaries into a single overall market sentiment.
 
             Rules:
+            - focus on the strongest signals or valid analysis of the chunk.
             - Weigh each chunk by its confidence score.
             - BULLISH  → net positive for risk assets
             - BEARISH  → net negative for risk assets
             - NEUTRAL  → mixed or no clear signal
             - Provide a concise explanation that references the key themes.
+            - Ignore failed analysis or No analysis of the chunk 
+            - Ignore irrelevant content in the chunk summaries.
 
             Respond ONLY with valid JSON (no markdown, no extra text):
             {{
