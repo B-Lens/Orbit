@@ -241,7 +241,7 @@ class SentimentWorkflow(ExceptionManager):
         )
         return result
 
-    def fetch_news(self, hours_back: int = 8, limit: int = 30) -> str:
+    def fetch_news(self, hours_back: int = 4, limit: int = 30) -> str:
         """
         Fetch recent news articles from all configured RSS feeds.
 
@@ -275,7 +275,7 @@ class SentimentWorkflow(ExceptionManager):
     # LLM SENTIMENT
     # ------------------------------------------------------------------
 
-    def get_market_sentiments(self, news_text: str, prompt: Optional[str] = None) -> NewsSentiment:
+    def get_market_sentiments(self, prompt: str) -> NewsSentiment:
         """
         Use LLM to classify overall market sentiment from news articles.
 
@@ -287,21 +287,7 @@ class SentimentWorkflow(ExceptionManager):
             Structured NewsSentiment object.
         """
 
-        PROMPT = """
-            Analyze overall market sentiment from the following news.
-
-            Consider:
-            - macroeconomic impact
-            - gold reaction
-            - crypto reaction
-            - risk-on / risk-off tone
-            - central bank signals
-
-            News:
-            {news_text}
-            """ if prompt is None else prompt
-
-        RETURN_FORMAT = """
+        RETURN_FORMAT = """\n
             Respond ONLY in valid JSON.
 
             Rules:
@@ -318,7 +304,7 @@ class SentimentWorkflow(ExceptionManager):
             }}
             """
 
-        full_prompt = PROMPT.format(news_text=news_text) + "\n" + RETURN_FORMAT
+        full_prompt = prompt + "\n" + RETURN_FORMAT
 
         try:
             raw_content = self.llm.invoke(full_prompt)
@@ -630,42 +616,42 @@ class SentimentWorkflow(ExceptionManager):
                 combined_text = "\n\n".join(combined_text_parts)
 
                 prompt = f"""
-            Analyze overall market sentiment from the following news and Reddit posts.
+                    Analyze overall market sentiment from the following news and Reddit posts.
 
-            Focus ONLY on MAJOR RECENT EVENTS that can move:
-            - Financial markets
-            - Gold (XAUUSD)
-            - Crypto markets
+                    Focus ONLY on MAJOR RECENT EVENTS that can move:
+                    - Financial markets
+                    - Gold (XAUUSD)
+                    - Crypto markets
 
-            Prioritize:
-            - Central bank decisions (Fed, ECB, BOJ, RBI)
-            - Inflation data (CPI, PPI)
-            - Interest rate changes
-            - Geopolitical conflicts / wars
-            - ETF approvals / regulations
-            - Large institutional flows
-            - USD strength / weakness
-            - Recession signals
-            - Liquidity changes
+                    Prioritize:
+                    - Central bank decisions (Fed, ECB, BOJ, RBI)
+                    - Inflation data (CPI, PPI)
+                    - Interest rate changes
+                    - Geopolitical conflicts / wars
+                    - ETF approvals / regulations
+                    - Large institutional flows
+                    - USD strength / weakness
+                    - Recession signals
+                    - Liquidity changes
 
-            Decision logic:
-            - No major event → NEUTRAL
-            - One strong major event → BULLISH or BEARISH
-            - Multiple major events same direction → high confidence
-            - Mixed major events → NEUTRAL
+                    Decision logic:
+                    - No major event → NEUTRAL
+                    - One strong major event → BULLISH or BEARISH
+                    - Multiple major events same direction → high confidence
+                    - Mixed major events → NEUTRAL
 
-            Ignore:
-            - opinions
-            - technical analysis
-            - minor commentary
-            - speculation
-            - duplicate news
+                    Ignore:
+                    - opinions
+                    - technical analysis
+                    - minor commentary
+                    - speculation
+                    - duplicate news
 
-            News and Reddit posts:
-            {combined_text}
-            """
+                    News and Reddit posts:
+                    {combined_text}
+                """
 
-                news_sentiment = self.get_market_sentiments(combined_text, prompt=prompt)
+                news_sentiment = self.get_market_sentiments(prompt=prompt)
 
             # ---- Blend Twitter + News/Reddit into a single incremental sentiment ----
             blended_sentiment: Optional[NewsSentiment] = self._blend_incremental_sentiment(
@@ -836,7 +822,21 @@ class SentimentWorkflow(ExceptionManager):
             # ---- News + Indicators ----
             news_text = self.fetch_news(hours_back=8, limit=30)
             indicators = self.fetch_indicators()
-            news_sentiment = self.get_market_sentiments(news_text)
+
+            PROMPT = f"""
+                Analyze overall market sentiment from the following news.
+
+                Consider:
+                - macroeconomic impact
+                - gold reaction
+                - crypto reaction
+                - risk-on / risk-off tone
+                - central bank signals
+
+                News:
+                {news_text}
+            """
+            news_sentiment = self.get_market_sentiments(prompt=PROMPT)
 
             historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
             historical_score: float = (
