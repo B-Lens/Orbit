@@ -302,12 +302,20 @@ class SentimentWorkflow(ExceptionManager):
             """ if prompt is None else prompt
 
         RETURN_FORMAT = """
-            Respond ONLY in JSON:
-            {
-                "sentiment": "BULLISH | BEARISH | NEUTRAL",
+            Respond ONLY in valid JSON.
+
+            Rules:
+            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+            - Do NOT return multiple values
+            - Do NOT include "|" symbol
+            - Do NOT explain inside sentiment
+
+            Respond in Json Format:
+            {{
+                "sentiment": "BULLISH",
                 "confidence": 0.0,
                 "explanation": "brief explanation"
-            }
+            }}
             """
 
         full_prompt = PROMPT.format(news_text=news_text) + "\n" + RETURN_FORMAT
