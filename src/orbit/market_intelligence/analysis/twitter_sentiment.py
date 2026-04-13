@@ -156,16 +156,28 @@ class TwitterSentimentAnalyzer:
             0.4-0.69 : weak or mixed directional signal
             0.0-0.39 : mostly noise / irrelevant
 
-            Respond ONLY with valid JSON (no markdown, no extra text):
-            {{
-            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-            "confidence": <float 0.0-1.0>,
-            "reasoning": "<concise explanation referencing key themes in the tweets>"
-            }}
-
             Tweets:
             {tweets_block}
             """
+        
+        RETURN_FORMAT = """
+            Respond ONLY in valid JSON.
+
+            Rules:
+            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+            - Do NOT return multiple values
+            - Do NOT include "|" symbol
+            - Do NOT explain inside sentiment
+
+            Respond in Json Format:
+            {{
+                "sentiment": "BULLISH",
+                "confidence": 0.0,
+                "explanation": "brief explanation"
+            }}
+            """
+        
+        prompt = prompt + "\n" + RETURN_FORMAT
 
         try:
             raw = self.llm.invoke(prompt)
