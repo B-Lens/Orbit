@@ -83,11 +83,10 @@ class WeightedRedditAnalyzer:
         
         Focus on the overall market/crypto sentiment, neither individual stocks nor specific assets.
 
-        Rules:
+            Rules:
             - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - Do NOT return multiple values
-            - Do NOT include "|" symbol
-            - Do NOT explain inside sentiment
+            - Give the confidence about the sentiment <0.0 - 1.0>
+            - Provide the explaination
         
         Respond in JSON format:
         {{
