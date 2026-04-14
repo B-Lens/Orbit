@@ -3,7 +3,7 @@ Sentiment Workflow Module
 
 This module orchestrates the full market sentiment analysis pipeline by:
 - Fetching Reddit posts
-- Applying weighted Reddit sentiment analysis
+- Applying chunk-then-synthesise Reddit sentiment analysis (no per-post aggregation)
 - Fetching financial tweets via the twitter CLI tool
 - Applying LLM-based Twitter sentiment analysis (chunk-then-synthesise)
 - Fetching crypto/market news via RSS feeds (macro, crypto, global, finance)
@@ -44,8 +44,8 @@ from orbit.market_intelligence.clients.rss_client import (
     format_for_llm,
 )
 from orbit.market_intelligence.analysis.reddit_sentiment import (
-    RedditSentimentEntry,
     WeightedRedditAnalyzer,
+    RedditOverallResult,
     extract_json,
 )
 from orbit.market_intelligence.analysis.twitter_sentiment import (
@@ -66,7 +66,6 @@ from orbit.market_intelligence.utils.utils import (
 from orbit.utils.utils import require_env, get_indian_time, to_ist
 
 
-BATCH_SIZE = 100
 logger = logging.getLogger("Orbit")
 
 # ---------------------------------------------------------------------------
@@ -99,7 +98,7 @@ class SentimentWorkflow(ExceptionManager):
     End-to-end market sentiment analysis workflow.
 
     Responsibilities:
-    - Fetch and analyze Reddit sentiment
+    - Fetch and analyze Reddit sentiment (chunk-then-synthesise, no per-post aggregation)
     - Fetch and analyze Twitter/X financial tweets (highest weight)
     - Fetch and classify news sentiment using LLM (sourced from RSS feeds)
     - Retrieve macro market indicators
@@ -174,37 +173,31 @@ class SentimentWorkflow(ExceptionManager):
             posts_per_subreddit=posts_per_subreddit,
         )
 
-    def calculate_weights(
+    def analyze_reddit(
         self,
         reddit_posts_data: Dict[str, Dict[str, Any]],
-    ) -> Dict[str, float]:
+    ) -> RedditOverallResult:
         """
-        Calculate dynamic weights for each subreddit.
+        Run chunk-then-synthesise LLM sentiment analysis over all Reddit posts.
+
+        All posts from all subreddits are flattened, split into token-safe
+        chunks, each chunk gets an overall sentiment from the LLM, and the
+        chunk summaries are synthesised into a single :class:`RedditOverallResult`.
 
         Args:
-            reddit_posts_data: Raw Reddit post data.
+            reddit_posts_data: Raw Reddit post data keyed by subreddit name.
 
         Returns:
-            Dictionary mapping subreddit to computed weight.
+            :class:`RedditOverallResult` with final synthesised sentiment.
         """
-        return self.reddit_client.calculate_dynamic_weights(
-            reddit_posts_data
+        result = self.reddit_analyzer.analyze(reddit_posts_data)
+        logger.info(
+            f"Reddit sentiment: {result.sentiment} "
+            f"(confidence={result.confidence}, "
+            f"posts={result.total_posts_analyzed}, "
+            f"chunks={result.chunks_analyzed})"
         )
-
-    def aggregate_sentiment(
-        self,
-        sentiments: List[RedditSentimentEntry],
-    ) -> Dict[str, Any]:
-        """
-        Aggregate weighted Reddit sentiment entries.
-
-        Args:
-            sentiments: List of analyzed Reddit sentiment entries.
-
-        Returns:
-            Aggregated sentiment dictionary including score, label, confidence.
-        """
-        return self.reddit_analyzer.aggregate_weighted_sentiment(sentiments)
+        return result
 
     def fetch_twitter(self) -> List[Dict[str, Any]]:
         """
@@ -222,10 +215,6 @@ class SentimentWorkflow(ExceptionManager):
     ) -> TwitterSentimentResult:
         """
         Run LLM-based sentiment analysis on tweets using chunk-then-synthesise.
-
-        All tweets are split into chunks; each chunk gets an overall sentiment
-        summary from the LLM.  The summaries are then synthesised into a single
-        :class:`TwitterSentimentResult` by a final LLM call.
 
         Args:
             tweets: Enriched tweet dicts from :meth:`fetch_twitter`.
@@ -280,8 +269,7 @@ class SentimentWorkflow(ExceptionManager):
         Use LLM to classify overall market sentiment from news articles.
 
         Args:
-            news_text: Combined news article text.
-            prompt: Optional custom prompt override.
+            prompt: Full prompt to send to the LLM.
 
         Returns:
             Structured NewsSentiment object.
@@ -331,7 +319,7 @@ class SentimentWorkflow(ExceptionManager):
 
     def get_reasoning(
         self,
-        posts: List[Dict[str, Any]],
+        reddit_result: RedditOverallResult,
         news_sentiment: NewsSentiment,
         twitter_result: Optional[TwitterSentimentResult] = None,
     ) -> str:
@@ -339,32 +327,30 @@ class SentimentWorkflow(ExceptionManager):
         Generate LLM-based reasoning for final market sentiment.
 
         Args:
-            posts: Top influential Reddit posts.
+            reddit_result: Overall Reddit sentiment result.
             news_sentiment: Structured news sentiment result.
             twitter_result: Optional Twitter sentiment result.
 
         Returns:
             Human-readable reasoning string.
         """
-        posts_summary = "\n".join(p["explanation"] for p in posts)
-
         twitter_section = ""
         if twitter_result:
             twitter_section = f"""
-        Twitter/X Sentiment:
-        {twitter_result.explanation}
-        (score={twitter_result.overall_score}, confidence={twitter_result.confidence})
-        """
+Twitter/X Sentiment:
+{twitter_result.explanation}
+(score={twitter_result.overall_score}, confidence={twitter_result.confidence})
+"""
 
         prompt = f"""
-        Provide reasoning for overall market sentiment:
-        {twitter_section}
-        Reddit Analysis:
-        {posts_summary}
+Provide reasoning for overall market sentiment:
+{twitter_section}
+Reddit Analysis ({reddit_result.total_posts_analyzed} posts):
+{reddit_result.explanation}
 
-        News Sentiment:
-        {news_sentiment.explanation}
-        """
+News Sentiment:
+{news_sentiment.explanation}
+"""
 
         try:
             content = self.llm.invoke(prompt)
@@ -590,33 +576,18 @@ class SentimentWorkflow(ExceptionManager):
             if has_new_tweets:
                 twitter_sentiment = self.analyze_twitter(new_tweets)
 
-            # ---- Build combined text for news+reddit LLM call ----
-            combined_text_parts: List[str] = []
+            # ---- Reddit sentiment (chunk-then-synthesise) ----
+            reddit_sentiment: Optional[RedditOverallResult] = None
+            if has_new_reddit_posts:
+                reddit_sentiment = self.analyze_reddit(new_reddit_data)
 
+            # ---- Build news text for LLM call ----
+            news_sentiment: Optional[NewsSentiment] = None
             if has_new_articles:
                 news_text = format_for_llm(new_articles, limit=25)
-                combined_text_parts.append(f"[NEWS]\n{news_text}")
-
-            if has_new_reddit_posts:
-                reddit_snippets: List[str] = []
-                for subreddit, data in new_reddit_data.items():
-                    for post in data.get("posts", []):
-                        title = post.get("title", "")
-                        selftext = post.get("selftext", "")
-                        snippet = f"{title}. {selftext}".strip()
-                        if snippet:
-                            reddit_snippets.append(snippet)
-                if reddit_snippets:
-                    combined_text_parts.append(
-                        "[REDDIT]\n" + "\n\n".join(reddit_snippets)
-                    )
-
-            news_sentiment: Optional[NewsSentiment] = None
-            if combined_text_parts:
-                combined_text = "\n\n".join(combined_text_parts)
 
                 prompt = f"""
-                    Analyze overall market sentiment from the following news and Reddit posts.
+                    Analyze overall market sentiment from the following news articles.
 
                     Focus ONLY on MAJOR RECENT EVENTS that can move:
                     - Financial markets
@@ -647,16 +618,17 @@ class SentimentWorkflow(ExceptionManager):
                     - speculation
                     - duplicate news
 
-                    News and Reddit posts:
-                    {combined_text}
+                    News articles:
+                    {news_text}
                 """
 
                 news_sentiment = self.get_market_sentiments(prompt=prompt)
 
-            # ---- Blend Twitter + News/Reddit into a single incremental sentiment ----
+            # ---- Blend Twitter + News + Reddit into a single incremental sentiment ----
             blended_sentiment: Optional[NewsSentiment] = self._blend_incremental_sentiment(
                 twitter_result=twitter_sentiment,
                 news_result=news_sentiment,
+                reddit_result=reddit_sentiment,
             )
 
             return {
@@ -708,19 +680,21 @@ class SentimentWorkflow(ExceptionManager):
         self,
         twitter_result: Optional[TwitterSentimentResult],
         news_result: Optional[NewsSentiment],
+        reddit_result: Optional[RedditOverallResult] = None,
     ) -> Optional[NewsSentiment]:
         """
-        Blend Twitter and News/Reddit incremental sentiments into a single
+        Blend Twitter, News, and Reddit incremental sentiments into a single
         :class:`NewsSentiment` for the Croner drift-detection path.
 
         Args:
             twitter_result: Aggregated Twitter sentiment (may be None).
-            news_result: LLM news+reddit sentiment (may be None).
+            news_result: LLM news sentiment (may be None).
+            reddit_result: Synthesised Reddit sentiment (may be None).
 
         Returns:
-            Blended :class:`NewsSentiment`, or ``None`` when both inputs are None.
+            Blended :class:`NewsSentiment`, or ``None`` when all inputs are None.
         """
-        if twitter_result is None and news_result is None:
+        if twitter_result is None and news_result is None and reddit_result is None:
             return None
 
         direction_map = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
@@ -748,6 +722,16 @@ class SentimentWorkflow(ExceptionManager):
             total_w += w
             explanations.append(
                 f"News({news_result.sentiment}, conf={news_result.confidence:.2f})"
+            )
+
+        if reddit_result is not None:
+            w = _W_REDDIT
+            d = direction_map.get(reddit_result.sentiment, 0.0)
+            weighted_score += d * reddit_result.confidence * w
+            weighted_conf += reddit_result.confidence * w
+            total_w += w
+            explanations.append(
+                f"Reddit({reddit_result.sentiment}, conf={reddit_result.confidence:.2f})"
             )
 
         if total_w == 0:
@@ -778,7 +762,7 @@ class SentimentWorkflow(ExceptionManager):
         Execute the complete sentiment analysis pipeline.
 
         Steps:
-        1. Fetch Reddit posts and aggregate Reddit sentiment
+        1. Fetch Reddit posts and analyse with chunk-then-synthesise LLM
         2. Fetch financial tweets and analyse with chunk-then-synthesise LLM
         3. Fetch RSS news and macro indicators
         4. Compute combined sentiment score (Twitter weighted highest)
@@ -791,29 +775,9 @@ class SentimentWorkflow(ExceptionManager):
         start_time = time.time()
 
         try:
-            # ---- Reddit ----
+            # ---- Reddit (chunk-then-synthesise) ----
             reddit_posts_data = self.fetch_reddit()
-            dynamic_weights = self.calculate_weights(reddit_posts_data)
-
-            all_sentiments: List[RedditSentimentEntry] = []
-
-            for subreddit_name, data in tqdm(reddit_posts_data.items()):
-                weight = dynamic_weights.get(subreddit_name, 0.5)
-                posts = data["posts"]
-
-                batch_id = 1
-                for i in range(0, len(posts), BATCH_SIZE):
-                    batch = posts[i:i + BATCH_SIZE]
-                    sentiments = self.reddit_analyzer.analyze_batch_sentiment(
-                        batch_id, batch, weight
-                    )
-                    all_sentiments.append(sentiments)
-                    batch_id += 1
-
-            reddit_result = self.aggregate_sentiment(all_sentiments)
-            top_posts = self.reddit_analyzer.get_top_influential_posts(
-                all_sentiments
-            )
+            reddit_result: RedditOverallResult = self.analyze_reddit(reddit_posts_data)
 
             # ---- Twitter (chunk-then-synthesise) ----
             tweets = self.fetch_twitter()
@@ -845,7 +809,7 @@ class SentimentWorkflow(ExceptionManager):
                 else 0
             )
 
-            reasoning: str = self.get_reasoning(top_posts, news_sentiment, twitter_result)
+            reasoning: str = self.get_reasoning(reddit_result, news_sentiment, twitter_result)
 
             combined_result = self._combine_results(
                 reddit_result,
@@ -857,7 +821,6 @@ class SentimentWorkflow(ExceptionManager):
 
             record_id = self._save_to_database(
                 reddit_result,
-                top_posts,
                 news_text,
                 indicators,
                 combined_result,
@@ -878,6 +841,13 @@ class SentimentWorkflow(ExceptionManager):
                 "database_id": record_id,
                 **combined_result,
                 "reasoning": reasoning,
+                "reddit_sentiment": {
+                    "sentiment": reddit_result.sentiment,
+                    "confidence": reddit_result.confidence,
+                    "explanation": reddit_result.explanation,
+                    "total_posts_analyzed": reddit_result.total_posts_analyzed,
+                    "chunks_analyzed": reddit_result.chunks_analyzed,
+                },
                 "twitter_sentiment": {
                     "sentiment": twitter_result.sentiment,
                     "confidence": twitter_result.confidence,
@@ -910,7 +880,7 @@ class SentimentWorkflow(ExceptionManager):
 
     def _combine_results(
         self,
-        reddit_result: Dict[str, Any],
+        reddit_result: RedditOverallResult,
         news_sentiment: NewsSentiment,
         indicators: MarketIndicators,
         twitter_result: Optional[TwitterSentimentResult] = None,
@@ -925,7 +895,7 @@ class SentimentWorkflow(ExceptionManager):
             Historical (0.10) > VIX (0.025) + Fear&Greed (0.025)
 
         Args:
-            reddit_result: Aggregated Reddit sentiment dict.
+            reddit_result: Synthesised Reddit sentiment result.
             news_sentiment: LLM news sentiment result.
             indicators: Macro market indicators.
             twitter_result: Aggregated Twitter sentiment (optional).
@@ -957,7 +927,12 @@ class SentimentWorkflow(ExceptionManager):
         news_conf_contribution = news_sentiment.confidence * _W_NEWS
 
         # ---- Reddit component ----
-        reddit_component = reddit_result["overall_score"] * _W_REDDIT
+        reddit_dir = (
+            1.0 if reddit_result.sentiment == "BULLISH"
+            else -1.0 if reddit_result.sentiment == "BEARISH"
+            else 0.0
+        )
+        reddit_component = reddit_result.confidence * _W_REDDIT * reddit_dir
 
         # ---- Historical component ----
         historical_component = historical_score * _W_HISTORICAL
@@ -1000,8 +975,7 @@ class SentimentWorkflow(ExceptionManager):
 
     def _save_to_database(
         self,
-        reddit_result: Dict[str, Any],
-        top_posts: List[Dict[str, Any]],
+        reddit_result: RedditOverallResult,
         news_text: str,
         indicators: MarketIndicators,
         combined: Dict[str, Any],
@@ -1012,8 +986,7 @@ class SentimentWorkflow(ExceptionManager):
         Persist sentiment analysis record to MongoDB.
 
         Args:
-            reddit_result: Aggregated Reddit sentiment dict.
-            top_posts: Top influential Reddit posts.
+            reddit_result: Synthesised Reddit sentiment result.
             news_text: Raw news text (truncated for storage).
             indicators: Macro market indicators.
             combined: Combined sentiment result dict.
@@ -1033,14 +1006,19 @@ class SentimentWorkflow(ExceptionManager):
                 "explanation": twitter_result.explanation,
             }
 
+        reddit_data: Dict[str, Any] = {
+            "sentiment": reddit_result.sentiment,
+            "confidence": reddit_result.confidence,
+            "explanation": reddit_result.explanation,
+            "total_posts_analyzed": reddit_result.total_posts_analyzed,
+            "chunks_analyzed": reddit_result.chunks_analyzed,
+        }
+
         record = SentimentRecord(
             overall_score=combined["score"],
             sentiment_label=combined["sentiment"],
             confidence=combined["confidence"],
-            reddit_weighted_score=reddit_result["overall_score"],
-            reddit_category_breakdown=reddit_result["category_breakdown"],
-            reddit_posts_analyzed=reddit_result["total_posts_analyzed"],
-            top_influential_posts=top_posts,
+            reddit_sentiment=reddit_data,
             news_sentiment={
                 "summary": news_text[:500] if news_text else "",
                 "source": "rss_feeds",

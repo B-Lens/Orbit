@@ -2,7 +2,7 @@
 import json
 import logging
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import numpy as np
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -10,245 +10,277 @@ from orbit.market_intelligence.config.reddit_config import CATEGORY_SENTIMENT_IM
 
 logger = logging.getLogger("Orbit")
 
-class RedditSentimentEntry(BaseModel):
-    """Model for individual Reddit post sentiment"""
-    post_id: str
-    subreddit: str
-    category: str
-    title: str
-    text_snippet: str
-    score: int
-    num_comments: int
-    raw_sentiment: str  # bullish/bearish/neutral
-    confidence: float
-    relevance: float = Field(ge=0, le=1)
-    base_weight: float
-    dynamic_weight: float
-    engagement_multiplier: float
-    final_weight: float
-    timestamp: float
-    explanation: str = ""
+# Maximum characters per post snippet when building the combined prompt
+_MAX_TITLE_CHARS = 200
+_MAX_BODY_CHARS = 600
+# Approximate token budget for all posts in a single LLM call.
+# Each chunk will contain at most this many characters of post content.
+_CHUNK_CHAR_LIMIT = 12_000
 
-class CategoryAggregation(BaseModel):
-    """Model for category-wise sentiment aggregation"""
-    category: str
-    total_weight: float
-    weighted_sentiment_sum: float
-    avg_confidence: float
-    post_count: int
-    avg_sentiment: float
-    impact_factor: float
-    weighted_contribution: float
+
+class RedditSentimentResult(BaseModel):
+    """Overall sentiment result for a batch/chunk of Reddit posts."""
+    sentiment: str          # BULLISH | BEARISH | NEUTRAL
+    confidence: float = Field(ge=0.0, le=1.0)
+    explanation: str
+
+
+class RedditOverallResult(BaseModel):
+    """Final synthesised Reddit sentiment across all chunks."""
+    sentiment: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    explanation: str
+    total_posts_analyzed: int
+    chunks_analyzed: int
+
 
 def extract_json(text: str) -> dict:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("No JSON found in LLM response")
-
     return json.loads(match.group(0))
 
+
+def _build_post_snippet(post: Dict[str, Any]) -> str:
+    """Return a compact text representation of a single Reddit post."""
+    title = (post.get("title") or "")[:_MAX_TITLE_CHARS]
+    body = (post.get("body") or post.get("selftext") or "")[:_MAX_BODY_CHARS]
+    subreddit = post.get("subreddit", "")
+    parts = [f"[r/{subreddit}] {title}"]
+    if body.strip():
+        parts.append(body.strip())
+    return "\n".join(parts)
+
+
+def _chunk_posts(posts: List[Dict[str, Any]], char_limit: int = _CHUNK_CHAR_LIMIT) -> List[List[Dict[str, Any]]]:
+    """
+    Split posts into chunks so that the combined text of each chunk stays
+    within *char_limit* characters.
+    """
+    chunks: List[List[Dict[str, Any]]] = []
+    current_chunk: List[Dict[str, Any]] = []
+    current_len = 0
+
+    for post in posts:
+        snippet = _build_post_snippet(post)
+        if current_chunk and current_len + len(snippet) > char_limit:
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_len = 0
+        current_chunk.append(post)
+        current_len += len(snippet)
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
 class WeightedRedditAnalyzer:
+    """
+    Analyse Reddit posts for market sentiment using a chunk-then-synthesise
+    approach.
+
+    Instead of scoring posts individually and aggregating numeric scores, this
+    analyser:
+
+    1. Flattens all posts from all subreddits into a single list.
+    2. Splits them into token-safe chunks.
+    3. Asks the LLM for an **overall** sentiment + reasoning for each chunk.
+    4. Feeds all chunk summaries back to the LLM for a **final synthesis**
+       that produces one :class:`RedditOverallResult`.
+    """
+
     def __init__(self, llm) -> None:
         self.llm = llm
-        
-    def analyze_batch_sentiment(
-        self, 
-        batch_id: int,
-        post_batch: Dict, 
-        dynamic_weight: float
-    ) -> RedditSentimentEntry:
-        """Analyze individual Reddit post with weighting"""
 
-        if not isinstance(post_batch, (list, tuple)):  # Adjust type accordingly
-            raise ValueError("post_batch must be a list or tuple of posts")
-        
-        merged = []
+    # ------------------------------------------------------------------
+    # PUBLIC API
+    # ------------------------------------------------------------------
 
-        for post in post_batch:
-            title = post.get("title", "")[:200]
-            body = (post.get("body") or "")[:800]
-
-            merged.append(f"""
-                Title: {title}
-                Body: {body}
-                """)
-
-        content = "\n---\n".join(merged)
-        
-        # Use LLM for sentiment analysis
-        prompt = f"""
-        Analyze the Batch of Reddit Posts for cryptocurrency/Financial markets Sentiment. Each post is separated by ---.:
-        
-        {content}
-        
-        Focus on the overall market/crypto sentiment, neither individual stocks nor specific assets.
-
-            Rules:
-            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - Give the confidence about the sentiment <0.0 - 1.0>
-            - Provide the explaination
-        
-        Respond in JSON format:
-        {{
-            "sentiment": "BULLISH|BEARISH|NEUTRAL",
-            "confidence": 0.0-1.0,
-            "relevance": 0.0-1.0 (how relevant is this to crypto/market sentiment),
-            "explanation": "brief explanation"
-        }}
+    def analyze(
+        self,
+        reddit_posts_data: Dict[str, Dict[str, Any]],
+    ) -> RedditOverallResult:
         """
-        
+        Analyse all Reddit posts and return a single synthesised sentiment.
+
+        Args:
+            reddit_posts_data: Mapping of subreddit name → data dict with a
+                               ``"posts"`` key containing a list of post dicts.
+
+        Returns:
+            :class:`RedditOverallResult` with final synthesised sentiment.
+        """
+        # Flatten all posts across subreddits
+        all_posts: List[Dict[str, Any]] = []
+        for data in reddit_posts_data.values():
+            all_posts.extend(data.get("posts", []))
+
+        if not all_posts:
+            logger.warning("Reddit: no posts to analyse.")
+            return RedditOverallResult(
+                sentiment="NEUTRAL",
+                confidence=0.0,
+                explanation="No Reddit posts available.",
+                total_posts_analyzed=0,
+                chunks_analyzed=0,
+            )
+
+        chunks = _chunk_posts(all_posts)
+        logger.info(
+            f"Reddit: {len(all_posts)} posts split into {len(chunks)} chunk(s) for LLM analysis."
+        )
+
+        chunk_summaries: List[RedditSentimentResult] = []
+        for idx, chunk in enumerate(chunks, start=1):
+            summary = self._analyze_chunk(idx, chunk)
+            chunk_summaries.append(summary)
+            logger.info(
+                f"Reddit chunk {idx}/{len(chunks)}: "
+                f"{summary.sentiment} (conf={summary.confidence:.2f})"
+            )
+
+        if len(chunk_summaries) == 1:
+            s = chunk_summaries[0]
+            return RedditOverallResult(
+                sentiment=s.sentiment,
+                confidence=s.confidence,
+                explanation=s.explanation,
+                total_posts_analyzed=len(all_posts),
+                chunks_analyzed=1,
+            )
+
+        return self._synthesise(chunk_summaries, total_posts=len(all_posts))
+
+    # ------------------------------------------------------------------
+    # CHUNK ANALYSIS
+    # ------------------------------------------------------------------
+
+    def _analyze_chunk(
+        self,
+        chunk_id: int,
+        posts: List[Dict[str, Any]],
+    ) -> RedditSentimentResult:
+        """
+        Ask the LLM for an overall sentiment for a single chunk of posts.
+
+        Args:
+            chunk_id: 1-based index used only for logging.
+            posts: List of post dicts in this chunk.
+
+        Returns:
+            :class:`RedditSentimentResult` for this chunk.
+        """
+        snippets = "\n---\n".join(_build_post_snippet(p) for p in posts)
+
+        prompt = f"""
+You are a financial sentiment analyst.
+
+Analyse the following Reddit posts (separated by ---) and determine the
+**overall** market/crypto sentiment expressed across ALL of them.
+
+Posts:
+{snippets}
+
+Rules:
+- sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+- confidence: float 0.0–1.0 reflecting how clearly the posts lean one way
+- explanation: concise synthesis of the key themes driving the sentiment
+- Focus on crypto / financial markets sentiment, not individual stocks
+
+Respond ONLY with valid JSON (no markdown, no extra text):
+{{
+  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": <float 0.0-1.0>,
+  "explanation": "<concise synthesis>"
+}}
+"""
+
         try:
-            result = self.llm.invoke(prompt)
-            logger.info(f"LLM Result for batch {batch_id}: {result}")
-            sentiment_data = extract_json(result)
-            logger.info(f"Extracted Sentiment Data for batch {batch_id}: {sentiment_data}")
+            raw = self.llm.invoke(prompt)
+            logger.info(f"Reddit chunk {chunk_id} LLM raw output: {raw}")
+            data = extract_json(str(raw))
+            return RedditSentimentResult(**data)
         except Exception as e:
-            logger.exception(f"LLM analysis failed: {e}, using fallback")
-            sentiment_data = {
-                "sentiment": "NEUTRAL",
-                "confidence": 0.3,
-                "relevance": 0.5,
-                "explanation": "Analysis failed"
-            }
-        
-        # Calculate engagement multiplier
-        engagement_score = post['engagement_score']
-        engagement_multiplier = min(2.0, 1.0 + engagement_score)
-        
-        # Calculate final weight
-        final_weight = dynamic_weight * engagement_multiplier * sentiment_data['relevance']
-        
-        return RedditSentimentEntry(
-            post_id=post['id'],
-            subreddit=post['subreddit'],
-            category=post['category'],
-            title=post['title'],
-            text_snippet=post['text'][:200],
-            score=post['score'],
-            num_comments=post['num_comments'],
-            raw_sentiment=sentiment_data['sentiment'],
-            confidence=sentiment_data['confidence'],
-            relevance=sentiment_data['relevance'],
-            base_weight=post['base_weight'],
-            dynamic_weight=dynamic_weight,
-            engagement_multiplier=engagement_multiplier,
-            final_weight=final_weight,
-            timestamp=post['created_utc'],
-            explanation=sentiment_data['explanation']
+            logger.exception(f"Reddit chunk {chunk_id} LLM analysis failed: {e}")
+            return RedditSentimentResult(
+                sentiment="NEUTRAL",
+                confidence=0.3,
+                explanation="Chunk analysis failed — using neutral fallback.",
+            )
+
+    # ------------------------------------------------------------------
+    # SYNTHESIS
+    # ------------------------------------------------------------------
+
+    def _synthesise(
+        self,
+        summaries: List[RedditSentimentResult],
+        total_posts: int,
+    ) -> RedditOverallResult:
+        """
+        Synthesise multiple chunk summaries into a single final sentiment.
+
+        Args:
+            summaries: One :class:`RedditSentimentResult` per chunk.
+            total_posts: Total number of posts analysed across all chunks.
+
+        Returns:
+            :class:`RedditOverallResult` with synthesised sentiment.
+        """
+        summary_text = "\n".join(
+            f"Chunk {i + 1}: sentiment={s.sentiment}, "
+            f"confidence={s.confidence:.2f}, explanation={s.explanation}"
+            for i, s in enumerate(summaries)
         )
-    
-    def aggregate_weighted_sentiment(
-        self, 
-        sentiments: List[RedditSentimentEntry]
-    ) -> Dict[str, Any]:
-        """Aggregate weighted sentiments by category"""
-        
-        category_data = {}
-        total_weight = 0
-        weighted_sentiment_score = 0
-        total_confidence = 0
-        
-        # Group by category
-        for entry in sentiments:
-            category = entry.category
-            
-            if category not in category_data:
-                category_data[category] = {
-                    'total_weight': 0,
-                    'sentiment_sum': 0,
-                    'confidence_sum': 0,
-                    'count': 0,
-                    'entries': []
-                }
-            
-            # Convert sentiment to numeric
-            sentiment_num = {
-                'BULLISH': 1.0,
-                'NEUTRAL': 0.0,
-                'BEARISH': -1.0
-            }.get(entry.raw_sentiment.upper(), 0.0)
-            
-            # Apply confidence to sentiment
-            adjusted_sentiment = sentiment_num * entry.confidence
-            
-            cat = category_data[category]
-            cat['total_weight'] += entry.final_weight
-            cat['sentiment_sum'] += adjusted_sentiment * entry.final_weight
-            cat['confidence_sum'] += entry.confidence
-            cat['count'] += 1
-            cat['entries'].append(entry)
-            
-            total_weight += entry.final_weight
-            weighted_sentiment_score += adjusted_sentiment * entry.final_weight
-            total_confidence += entry.confidence
-        
-        # Normalize overall score
-        if total_weight > 0:
-            weighted_sentiment_score /= total_weight
-            avg_confidence = total_confidence / len(sentiments) if sentiments else 0
-        else:
-            weighted_sentiment_score = 0
-            avg_confidence = 0
-        
-        # Calculate category-wise impact
-        category_breakdown = {}
-        for category, data in category_data.items():
-            if data['count'] > 0 and data['total_weight'] > 0:
-                avg_category_sentiment = data['sentiment_sum'] / data['total_weight']
-                impact = CATEGORY_SENTIMENT_IMPACT.get(category, 0.1)
-                
-                category_breakdown[category] = {
-                    'avg_sentiment': round(avg_category_sentiment, 3),
-                    'impact_factor': impact,
-                    'weighted_contribution': round(avg_category_sentiment * impact, 3),
-                    'post_count': data['count'],
-                    'total_weight': round(data['total_weight'], 2),
-                    'avg_confidence': round(data['confidence_sum'] / data['count'], 2)
-                }
-        
-        # Determine sentiment label
-        if weighted_sentiment_score > 0.2:
-            sentiment_label = 'BULLISH'
-        elif weighted_sentiment_score < -0.2:
-            sentiment_label = 'BEARISH'
-        else:
-            sentiment_label = 'NEUTRAL'
-        
-        return {
-            'overall_score': round(weighted_sentiment_score, 3),
-            'sentiment_label': sentiment_label,
-            'confidence': round(avg_confidence, 2),
-            'category_breakdown': category_breakdown,
-            'total_posts_analyzed': len(sentiments),
-            'total_weight_applied': round(total_weight, 2),
-            'timestamp': datetime.now().isoformat()
-        }
-    
-    def get_top_influential_posts(
-        self, 
-        sentiments: List[RedditSentimentEntry], 
-        limit: int = 10
-    ) -> List[Dict]:
-        """Get most influential posts based on final weight"""
-        sorted_posts = sorted(
-            sentiments, 
-            key=lambda x: x.final_weight * abs(
-                1 if x.raw_sentiment == 'BULLISH' else -1 if x.raw_sentiment == 'BEARISH' else 0
-            ),
-            reverse=True
-        )
-        
-        influential = []
-        for post in sorted_posts[:limit]:
-            influential.append({
-                'subreddit': f"r/{post.subreddit}",
-                'title': post.title[:100] + ('...' if len(post.title) > 100 else ''),
-                'sentiment': post.raw_sentiment.upper(),
-                'confidence': post.confidence,
-                'weight': round(post.final_weight, 2),
-                'score': post.score,
-                'comments': post.num_comments,
-                'explanation': post.explanation
-            })
-        
-        return influential
+
+        prompt = f"""
+You are a financial sentiment analyst.
+
+Below are sentiment summaries from {len(summaries)} batches of Reddit posts
+(covering {total_posts} posts in total).
+
+{summary_text}
+
+Synthesise these into a single overall Reddit market sentiment.
+
+Rules:
+- sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+- confidence: float 0.0–1.0
+- explanation: concise synthesis of the dominant themes
+
+Respond ONLY with valid JSON (no markdown, no extra text):
+{{
+  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": <float 0.0-1.0>,
+  "explanation": "<concise synthesis>"
+}}
+"""
+
+        try:
+            raw = self.llm.invoke(prompt)
+            logger.info(f"Reddit synthesis LLM raw output: {raw}")
+            data = extract_json(str(raw))
+            return RedditOverallResult(
+                **data,
+                total_posts_analyzed=total_posts,
+                chunks_analyzed=len(summaries),
+            )
+        except Exception as e:
+            logger.exception(f"Reddit synthesis LLM call failed: {e}")
+            # Fallback: simple majority vote
+            counts = {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0}
+            total_conf = 0.0
+            for s in summaries:
+                counts[s.sentiment] = counts.get(s.sentiment, 0) + 1
+                total_conf += s.confidence
+            majority = max(counts, key=lambda k: counts[k])
+            avg_conf = round(total_conf / len(summaries), 3)
+            return RedditOverallResult(
+                sentiment=majority,
+                confidence=avg_conf,
+                explanation="Synthesis failed — majority vote fallback used.",
+                total_posts_analyzed=total_posts,
+                chunks_analyzed=len(summaries),
+            )
