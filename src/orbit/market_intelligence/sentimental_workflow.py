@@ -294,13 +294,13 @@ class SentimentWorkflow(ExceptionManager):
             - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
             - Give the confidence about the sentiment < 0.0 - 1.0 >  
             - Do not give negative confidence values. If unsure, use low confidence with NEUTRAL sentiment.
-            - Provide the explaination
+            - Provide the explanation
 
-            Respond in Json Format:
+            Respond ONLY with valid JSON (no markdown, no extra text):
             {{
-                "sentiment": "BULLISH",
-                "confidence": 0.0,
-                "explanation": "brief explanation"
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "explaination": "<concise synthesis explanation>"
             }}
             """
 
@@ -820,7 +820,7 @@ class SentimentWorkflow(ExceptionManager):
             twitter_result: TwitterSentimentResult = self.analyze_twitter(tweets)
 
             # ---- News + Indicators ----
-            news_text = self.fetch_news(hours_back=8, limit=30)
+            news_text = self.fetch_news(hours_back=4, limit=30)
             indicators = self.fetch_indicators()
 
             PROMPT = f"""
