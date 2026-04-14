@@ -292,7 +292,8 @@ class SentimentWorkflow(ExceptionManager):
 
             Rules:
             - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - Give the confidence about the sentiment <0.0 - 1.0>
+            - Give the confidence about the sentiment < 0.0 - 1.0 >  
+            - Do not give negative confidence values. If unsure, use low confidence with NEUTRAL sentiment.
             - Provide the explaination
 
             Respond in Json Format:
