@@ -27,7 +27,7 @@ Also provides a lightweight `run_news_update()` path that:
 import os
 import time
 import logging
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from tqdm import tqdm
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Literal, Optional
@@ -92,6 +92,16 @@ class NewsSentiment(BaseModel):
     sentiment: SentimentType
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def clamp_confidence(cls, v: float) -> float:
+        """Clamp LLM-returned confidence to the valid [0.0, 1.0] range."""
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(1.0, v))
 
 
 class SentimentWorkflow(ExceptionManager):
@@ -280,8 +290,7 @@ class SentimentWorkflow(ExceptionManager):
         Use LLM to classify overall market sentiment from news articles.
 
         Args:
-            news_text: Combined news article text.
-            prompt: Optional custom prompt override.
+            prompt: Custom prompt to send to the LLM.
 
         Returns:
             Structured NewsSentiment object.
