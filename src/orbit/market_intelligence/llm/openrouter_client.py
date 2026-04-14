@@ -39,6 +39,8 @@ class OpenRouterClient:
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
             )
+            actual_model = getattr(response, "model", "unknown")
+            logger.info(f"OpenRouter routed to model: {actual_model}")
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"OpenRouter error: {e}")
