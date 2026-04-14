@@ -8,7 +8,7 @@ os.environ["LANGSMITH_API_KEY"] = "test_key"
 
 
 from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
-from orbit.market_intelligence.analysis.reddit_sentiment import RedditSentimentEntry
+from orbit.market_intelligence.analysis.reddit_sentiment import RedditOverallResult
 
     
 @pytest.mark.asyncio
@@ -39,30 +39,16 @@ async def test_run_analysis_success(monkeypatch):
     # ----------------------------
     # Mock sentiment analyzer
     # ----------------------------
-    fake_sentiment = RedditSentimentEntry(
+    fake_sentiment = RedditOverallResult(
         sentiment="BEARISH",
         confidence=0.7,
-        weight=0.8,
-        relevance=0.9,
-        post_id="1"
+        explanation="Market is bearish.",
+        total_posts_analyzed=2,
+        chunks_analyzed=1,
     )
 
-    workflow.reddit_analyzer.analyze_batch_sentiment = AsyncMock(
+    workflow.reddit_analyzer.analyze_reddit = AsyncMock(
         return_value=fake_sentiment
-    )
-
-    workflow.reddit_analyzer.aggregate_weighted_sentiment = MagicMock(
-        return_value={
-            "overall_score": -0.4,
-            "sentiment_label": "BEARISH",
-            "confidence": 0.75,
-            "total_posts_analyzed": 2,
-            "category_breakdown": {},
-        }
-    )
-
-    workflow.reddit_analyzer.get_top_influential_posts = MagicMock(
-        return_value=[]
     )
 
     # ----------------------------
