@@ -40,11 +40,8 @@ class SentimentRecord(BaseModel):
     sentiment_label: str  # BULLISH, BEARISH, NEUTRAL
     confidence: float  # 0-1
     
-    # Weighted Reddit Analysis
-    reddit_weighted_score: float
-    reddit_category_breakdown: Dict[str, Any]
-    reddit_posts_analyzed: int
-    top_influential_posts: List[Dict]
+    # Reddit Analysis
+    reddit_sentiment: Dict[str, Any]
     
     # Legacy Sources
     news_sentiment: Dict[str, Any]
