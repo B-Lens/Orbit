@@ -166,7 +166,7 @@ class TwitterSentimentAnalyzer:
             Rules:
             - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
             - Give the confidence about the sentiment <0.0 - 1.0>
-            - Provide the explaination
+            - Provide the explanation
 
             Respond in Json Format:
             {{

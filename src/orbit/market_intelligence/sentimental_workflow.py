@@ -288,7 +288,7 @@ class SentimentWorkflow(ExceptionManager):
             {{
             "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
             "confidence": <float 0.0-1.0>,
-            "explaination": "<concise synthesis explanation>"
+            "explanation": "<concise synthesis explanation>"
             }}
             """
 
