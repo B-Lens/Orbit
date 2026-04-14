@@ -337,20 +337,20 @@ class SentimentWorkflow(ExceptionManager):
         twitter_section = ""
         if twitter_result:
             twitter_section = f"""
-Twitter/X Sentiment:
-{twitter_result.explanation}
-(score={twitter_result.overall_score}, confidence={twitter_result.confidence})
-"""
+            Twitter/X Sentiment:
+            {twitter_result.explanation}
+            (score={twitter_result.overall_score}, confidence={twitter_result.confidence})
+            """
 
         prompt = f"""
-Provide reasoning for overall market sentiment:
-{twitter_section}
-Reddit Analysis ({reddit_result.total_posts_analyzed} posts):
-{reddit_result.explanation}
+            Provide reasoning for overall market sentiment:
+            {twitter_section}
+            Reddit Analysis ({reddit_result.total_posts_analyzed} posts):
+            {reddit_result.explanation}
 
-News Sentiment:
-{news_sentiment.explanation}
-"""
+            News Sentiment:
+            {news_sentiment.explanation}
+            """
 
         try:
             content = self.llm.invoke(prompt)

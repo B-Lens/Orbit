@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 from datetime import datetime
 from pydantic import BaseModel, Field
-from orbit.market_intelligence.config.reddit_config import CATEGORY_SENTIMENT_IMPACT
 
 logger = logging.getLogger("Orbit")
 
@@ -80,9 +79,6 @@ class WeightedRedditAnalyzer:
     """
     Analyse Reddit posts for market sentiment using a chunk-then-synthesise
     approach.
-
-    Instead of scoring posts individually and aggregating numeric scores, this
-    analyser:
 
     1. Flattens all posts from all subreddits into a single list.
     2. Splits them into token-safe chunks.
@@ -175,27 +171,27 @@ class WeightedRedditAnalyzer:
         snippets = "\n---\n".join(_build_post_snippet(p) for p in posts)
 
         prompt = f"""
-You are a financial sentiment analyst.
+            You are a financial sentiment analyst.
 
-Analyse the following Reddit posts (separated by ---) and determine the
-**overall** market/crypto sentiment expressed across ALL of them.
+            Analyse the following Reddit posts (separated by ---) and determine the
+            **overall** market/crypto sentiment expressed across ALL of them.
 
-Posts:
-{snippets}
+            Posts:
+            {snippets}
 
-Rules:
-- sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-- confidence: float 0.0–1.0 reflecting how clearly the posts lean one way
-- explanation: concise synthesis of the key themes driving the sentiment
-- Focus on crypto / financial markets sentiment, not individual stocks
+            Rules:
+            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way
+            - explanation: concise synthesis of the key themes driving the sentiment
+            - Focus on crypto / financial markets sentiment, not individual stocks
 
-Respond ONLY with valid JSON (no markdown, no extra text):
-{{
-  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "confidence": <float 0.0-1.0>,
-  "explanation": "<concise synthesis>"
-}}
-"""
+            Respond ONLY with valid JSON (no markdown, no extra text):
+            {{
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "explanation": "<concise synthesis>"
+            }}
+            """
 
         try:
             raw = self.llm.invoke(prompt)
@@ -236,27 +232,27 @@ Respond ONLY with valid JSON (no markdown, no extra text):
         )
 
         prompt = f"""
-You are a financial sentiment analyst.
+            You are a financial sentiment analyst.
 
-Below are sentiment summaries from {len(summaries)} batches of Reddit posts
-(covering {total_posts} posts in total).
+            Below are sentiment summaries from {len(summaries)} batches of Reddit posts
+            (covering {total_posts} posts in total).
 
-{summary_text}
+            {summary_text}
 
-Synthesise these into a single overall Reddit market sentiment.
+            Synthesise these into a single overall Reddit market sentiment.
 
-Rules:
-- sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-- confidence: float 0.0–1.0
-- explanation: concise synthesis of the dominant themes
+            Rules:
+            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+            - confidence: float 0.0–1.0
+            - explanation: concise synthesis of the dominant themes
 
-Respond ONLY with valid JSON (no markdown, no extra text):
-{{
-  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "confidence": <float 0.0-1.0>,
-  "explanation": "<concise synthesis>"
-}}
-"""
+            Respond ONLY with valid JSON (no markdown, no extra text):
+            {{
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "explanation": "<concise synthesis>"
+            }}
+            """
 
         try:
             raw = self.llm.invoke(prompt)
