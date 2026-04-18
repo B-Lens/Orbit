@@ -7,7 +7,7 @@ Provides :class:`TradeChecker`, the real-time position monitor that:
 * Ensures exactly one active SL (and optionally TP) per symbol, preventing
   the Binance ``-4045`` duplicate-stop-order error.
 * Trails or adapts stop-losses according to the configured strategy.
-* Maintains a live-price feed via a Binance WebSocket.
+* Maintains a live-price feed via a :class:`BinanceWSManager` WebSocket.
 * Uses Redis mappings as the single source of truth for all trade state.
 
 Redis key schema
@@ -31,7 +31,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import redis
-import websocket
 from binance.error import ClientError
 
 from config import COIN_TRADE_TYPE, TradeType, TRAILING_STOPLOSS
@@ -39,6 +38,7 @@ from orbit.utils.utils import get_indian_time
 from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
+from orbit.core.binance_ws_manager import BinanceWSManager
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
@@ -106,6 +106,10 @@ class TradeChecker(AuthenticationManager):
     3. Trails or adapts the stop-loss using the symbol's registered strategy.
     4. Sends Discord notifications for every significant event.
 
+    A :class:`BinanceWSManager` is used for the live price feed, providing
+    automatic reconnection, ping/pong keepalive, and stale-connection
+    detection.
+
     Args:
         order_manager: Pre-built :class:`OrderManager`.  A new instance is
             created when ``None``.
@@ -113,6 +117,8 @@ class TradeChecker(AuthenticationManager):
             created when ``None``.
         redis_client: Pre-built ``redis.StrictRedis`` connection.  A default
             ``localhost:6379/0`` connection is created when ``None``.
+        ws_stale_threshold: Seconds without a WebSocket message before the
+            connection is considered stale and forcibly restarted.
         **auth_kwargs: Forwarded to :class:`AuthenticationManager`.
     """
 
@@ -121,6 +127,7 @@ class TradeChecker(AuthenticationManager):
         order_manager: Optional[OrderManager] = None,
         mongo_handler: Optional[MongoHandler] = None,
         redis_client: Optional[redis.StrictRedis] = None,
+        ws_stale_threshold: float = 5.0,
         **auth_kwargs: Any,
     ) -> None:
         super().__init__(**auth_kwargs)
@@ -130,10 +137,58 @@ class TradeChecker(AuthenticationManager):
         self.order_manager: OrderManager = order_manager or OrderManager()
         self.mongo_handler: MongoHandler = mongo_handler or MongoHandler()
         self.live_prices: Dict[str, Tuple[float, float]] = {}
-        self.isWebSocketRunning: bool = False
         self.redis_client: redis.StrictRedis = redis_client or redis.StrictRedis(
             host="localhost", port=6379, db=0, decode_responses=True
         )
+        self._ws_stale_threshold = ws_stale_threshold
+        self._ws_manager: Optional[BinanceWSManager] = None
+
+    # ------------------------------------------------------------------
+    # WebSocket price-update callback
+    # ------------------------------------------------------------------
+
+    def _handle_price_update(self, symbol: str, price: float, timestamp: float) -> None:
+        """Receive a price tick from :class:`BinanceWSManager`."""
+        self.live_prices[symbol] = (price, timestamp)
+
+    def _handle_ws_status(self, msg: str) -> None:
+        """Forward WebSocket status messages to Discord logs."""
+        self.send_websocket_logs(data=None, description=msg, fields=None)
+
+    # ------------------------------------------------------------------
+    # WebSocket lifecycle
+    # ------------------------------------------------------------------
+
+    def _ensure_ws(self, trading_pairs: List[str]) -> None:
+        """Start the WebSocket manager if it is not already running.
+
+        If the manager exists but the trading pairs have changed, the
+        subscriptions are updated (which triggers an internal reconnect).
+        """
+        if self._ws_manager is None:
+            self._ws_manager = BinanceWSManager(
+                trading_pairs=trading_pairs,
+                on_price_update=self._handle_price_update,
+                on_status_change=self._handle_ws_status,
+                stale_threshold=self._ws_stale_threshold,
+            )
+            self._ws_manager.start()
+            logger.info("[TradeChecker] BinanceWSManager started.")
+        elif set(self._ws_manager.trading_pairs) != set(trading_pairs):
+            logger.info("[TradeChecker] Trading pairs changed — updating WebSocket subscriptions.")
+            self._ws_manager.update_pairs(trading_pairs)
+
+    def _stop_ws(self) -> None:
+        """Stop the WebSocket manager when there are no active trades."""
+        if self._ws_manager is not None:
+            self._ws_manager.stop()
+            self._ws_manager = None
+            logger.info("[TradeChecker] BinanceWSManager stopped (no active trades).")
+
+    @property
+    def isWebSocketRunning(self) -> bool:
+        """``True`` when the WebSocket manager is connected."""
+        return self._ws_manager is not None and self._ws_manager.is_connected
 
     # ------------------------------------------------------------------
     # Redis mapping helpers
@@ -237,9 +292,12 @@ class TradeChecker(AuthenticationManager):
             The current price, or ``None`` when no price can be obtained.
         """
         if symbol in self.live_prices:
-            current_price, last_updated = self.live_prices.get(symbol)
+            current_price, last_updated = self.live_prices[symbol]
             if time.time() - last_updated > 2:
-                logger.warning(f"[WARN] Price for {symbol} is stale ({time.time() - last_updated:.2f}s old)")
+                logger.warning(
+                    f"[WARN] Price for {symbol} is stale "
+                    f"({time.time() - last_updated:.2f}s old) — falling back to REST."
+                )
                 try:
                     current_price = self.get_future_symbol_price(symbol=symbol)
                     self.live_prices[symbol] = (current_price, time.time())
@@ -247,7 +305,7 @@ class TradeChecker(AuthenticationManager):
                     pass
             return current_price
 
-        logger.warning(f"[WARN] Live price for {symbol} not found.")
+        logger.warning(f"[WARN] Live price for {symbol} not found — fetching via REST.")
         try:
             current_price = self.get_future_symbol_price(symbol=symbol)
             self.live_prices[symbol] = (current_price, time.time())
@@ -862,71 +920,6 @@ class TradeChecker(AuthenticationManager):
         return trades
 
     # ------------------------------------------------------------------
-    # WebSocket helpers
-    # ------------------------------------------------------------------
-
-    def public_websocket(self, trading_pairs: List[str]) -> None:
-        """Open a Binance Futures WebSocket for real-time trade prices."""
-        def on_message(ws, message):
-            try:
-                message = json.loads(message)
-                if 'data' in message and 's' in message['data'] and 'p' in message['data']:
-                    symbol = message['data']['s']
-                    price = float(message['data']['p'])
-                    self.live_prices[symbol] = (price, time.time())
-                else:
-                    logger.error(f"Unexpected message format: {message}")
-                    self.send_websocket_logs(data='Unexpected message format in Websocket', description=f"{message}", fields=None)
-            except Exception:
-                logger.exception("Error parsing websocket message")
-
-        def on_error(ws, error):
-            logger.warning(f"WebSocket error: {error}")
-            self.send_websocket_logs(data='Websocket Error', description=f"{error}", fields=None)
-            self.isWebSocketRunning = False
-            try:
-                ws.close()
-            except Exception:
-                pass
-
-        def on_close(ws, *args):
-            logger.info("WebSocket closed")
-            self.send_websocket_logs(data='WebSocket closed', description=f"{args}", fields=None)
-            self.isWebSocketRunning = False
-            try:
-                ws.close()
-            except Exception:
-                pass
-
-        def on_open(ws):
-            logger.info("WebSocket connection opened")
-            self.send_websocket_logs(data=None, description='WebSocket Connection opened', fields=None)
-            self.isWebSocketRunning = True
-
-        streams = "/".join([f"{symbol.lower()}@trade" for symbol in trading_pairs])
-        future_socket_url = f"wss://fstream.binance.com/stream?streams={streams}"
-
-        self.future_ws = websocket.WebSocketApp(
-            future_socket_url,
-            on_open=on_open,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close,
-        )
-
-        self.wst = threading.Thread(target=self.future_ws.run_forever, daemon=True)
-        self.wst.start()
-
-    def stop_future_ws(self) -> None:
-        """Gracefully close the Futures WebSocket connection (if open)."""
-        if hasattr(self, 'future_ws'):
-            logger.info("Closing Futures WebSocket connection...")
-            try:
-                self.future_ws.close()
-            except Exception:
-                pass
-
-    # ------------------------------------------------------------------
     # Main monitor loop
     # ------------------------------------------------------------------
 
@@ -934,19 +927,27 @@ class TradeChecker(AuthenticationManager):
         """Infinite loop that monitors all active positions.
 
         Designed to run in a dedicated daemon thread.
+
+        The :class:`BinanceWSManager` is started lazily on the first
+        iteration that finds active trades, and stopped when no active
+        trades remain.
         """
         last_minute_used = -1
+
         while True:
             try:
                 flag = False
-                for symbol in trading_pairs:
-                    if symbol not in self.trades:
-                        continue
+                active_trade_symbols = [s for s in trading_pairs if s in self.trades]
 
-                    if not self.isWebSocketRunning:
-                        self.public_websocket(trading_pairs)
-                        time.sleep(1)
+                # Ensure WebSocket is running whenever we have active trades
+                if active_trade_symbols:
+                    self._ensure_ws(trading_pairs)
+                else:
+                    # No active trades — stop the WebSocket to save resources
+                    if self._ws_manager is not None:
+                        self._stop_ws()
 
+                for symbol in active_trade_symbols:
                     current_price = self.check_price_freshness(symbol)
                     if current_price is None:
                         continue
@@ -997,7 +998,7 @@ class TradeChecker(AuthenticationManager):
 
                     if not any_trade_active:
                         self.send_active_trades_info(data=None, description="No trade is Active", fields=None)
-                        self.stop_future_ws()
+                        self._stop_ws()
 
             except ClientError as error:
                 self.clientExceptionHandler(symbol=locals().get('symbol', None), error=error, Location="TradeChecker")
