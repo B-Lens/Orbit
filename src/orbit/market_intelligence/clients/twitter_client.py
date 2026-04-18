@@ -85,7 +85,7 @@ class TwitterClient:
                 timeout=self.cli_timeout,
             )
             if result.returncode != 0:
-                logger.error(
+                logger.warning(
                     f"twitter CLI non-zero exit ({result.returncode}) "
                     f"for query='{query}': {result.stderr.strip()}"
                 )
