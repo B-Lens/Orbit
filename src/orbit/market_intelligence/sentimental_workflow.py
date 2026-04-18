@@ -280,15 +280,14 @@ class SentimentWorkflow(ExceptionManager):
 
             Rules:
             - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - Give the confidence about the sentiment < 0.0 - 1.0 >  
-            - Do not give negative confidence values. If unsure, use low confidence with NEUTRAL sentiment.
+            - Give the confidence about the sentiment <0.0 - 1.0>
             - Provide the explanation
 
-            Respond ONLY with valid JSON (no markdown, no extra text):
+            Respond in Json Format:
             {{
-            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-            "confidence": <float 0.0-1.0>,
-            "explanation": "<concise synthesis explanation>"
+                "sentiment": "BULLISH",
+                "confidence": 0.0,
+                "explanation": "brief explanation"
             }}
             """
 
