@@ -710,7 +710,7 @@ class SentimentWorkflow(ExceptionManager):
             weighted_conf += twitter_result.confidence * w
             total_w += w
             explanations.append(
-                f"Twitter({twitter_result.sentiment}, conf={twitter_result.confidence:.2f})"
+                f"Twitter({twitter_result.sentiment}, conf={twitter_result.confidence:.2f}, explanation={twitter_result.explanation})"
             )
 
         if news_result is not None:
@@ -720,7 +720,7 @@ class SentimentWorkflow(ExceptionManager):
             weighted_conf += news_result.confidence * w
             total_w += w
             explanations.append(
-                f"News({news_result.sentiment}, conf={news_result.confidence:.2f})"
+                f"News({news_result.sentiment}, conf={news_result.confidence:.2f}, explanation={news_result.explanation})"
             )
 
         if reddit_result is not None:
@@ -730,7 +730,7 @@ class SentimentWorkflow(ExceptionManager):
             weighted_conf += reddit_result.confidence * w
             total_w += w
             explanations.append(
-                f"Reddit({reddit_result.sentiment}, conf={reddit_result.confidence:.2f})"
+                f"Reddit({reddit_result.sentiment}, conf={reddit_result.confidence:.2f}, explanation={reddit_result.explanation})"
             )
 
         if total_w == 0:
