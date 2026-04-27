@@ -20,24 +20,18 @@ import time
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-import redis
 from binance.error import ClientError
 
 from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.mongo_handler import MongoHandler
+from orbit.core.redis_manager import RedisManager
 from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
 
 logger = logging.getLogger("Orbit")
 
-ORDER_KEY_PREFIX = "order:"
 
-
-def _order_key(order_id: str) -> str:
-    return f"{ORDER_KEY_PREFIX}{order_id}"
-
-
-class OrderManager(AuthenticationManager):
+class OrderManager(AuthenticationManager, RedisManager):
     """Binance Futures order lifecycle management.
 
     Responsibilities:
@@ -69,10 +63,11 @@ class OrderManager(AuthenticationManager):
     def __init__(
         self,
         mongo_handler: Optional[MongoHandler] = None,
-        redis_client: Optional[redis.StrictRedis] = None,
+        redis_client=None,
         **auth_kwargs: Any,
     ) -> None:
-        super().__init__(**auth_kwargs)
+        AuthenticationManager.__init__(self, **auth_kwargs)
+        RedisManager.__init__(self, redis_client=redis_client)
 
         if mongo_handler is not None:
             self.mongo_handler: Optional[MongoHandler] = mongo_handler
@@ -82,28 +77,6 @@ class OrderManager(AuthenticationManager):
             except Exception as e:
                 self.handle_exception(e, "Exception while Creating MongoHandler")
                 self.mongo_handler = None
-
-        self.redis_client: redis.StrictRedis = redis_client or redis.StrictRedis(
-            host="localhost", port=6379, db=0, decode_responses=True
-        )
-
-    # -------------------------------------------------------------------------
-    # Redis mapping helpers
-    # -------------------------------------------------------------------------
-
-    def _register_order(self, order_id: str, trade_id: str) -> None:
-        """Persist ``order:{order_id}`` → *trade_id* in Redis."""
-        try:
-            self.redis_client.set(_order_key(str(order_id)), trade_id)
-        except Exception as e:
-            self.handle_exception(e, context_description=f"_register_order({order_id})")
-
-    def _deregister_order(self, order_id: str) -> None:
-        """Remove the ``order:{order_id}`` key from Redis."""
-        try:
-            self.redis_client.delete(_order_key(str(order_id)))
-        except Exception as e:
-            self.handle_exception(e, context_description=f"_deregister_order({order_id})")
 
     # -------------------------------------------------------------------------
     # Exchange filters helpers (tick, step, notional)
@@ -294,11 +267,11 @@ class OrderManager(AuthenticationManager):
         resp = self.future_client.sign_request("POST", "/fapi/v1/algoOrder", params)
         logger.info(f"[ALGO ORDER RESPONSE] {resp}")
 
-        # Register order → trade mapping
+        # Register order → trade mapping via RedisManager
         if resp and trade_id:
             algo_id = str(resp.get("algoId", ""))
             if algo_id:
-                self._register_order(algo_id, trade_id)
+                self.register_order(algo_id, trade_id)
 
         return resp
 
@@ -323,8 +296,7 @@ class OrderManager(AuthenticationManager):
         resp = self.future_client.sign_request("DELETE", "/fapi/v1/algoOrder", params)
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
 
-        # Clean up order mapping
-        self._deregister_order(str(algo_id))
+        self.deregister_order(str(algo_id))
 
         return resp
 
