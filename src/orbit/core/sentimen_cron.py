@@ -17,7 +17,7 @@ through the constructor.
 import time
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 import redis
@@ -37,6 +37,9 @@ NEWS_POLL_INTERVAL_SECONDS: int = 600  # 10 minutes
 # the confidence of the new sentiment exceeds this threshold, trigger an
 # immediate full analysis.
 SENTIMENT_DRIFT_THRESHOLD: float = 0.55
+
+# How long a drift window lasts before the counter is reset (seconds)
+DRIFT_WINDOW_SECONDS: int = 86_400  # 24 hours
 
 
 class Croner(ExceptionManager, RedisManager):
@@ -72,6 +75,69 @@ class Croner(ExceptionManager, RedisManager):
 
         self.news_poll_interval: int = news_poll_interval
         self.sentiment_drift_threshold: float = sentiment_drift_threshold
+
+    # ------------------------------------------------------------------
+    # DRIFT WINDOW MANAGEMENT
+    # ------------------------------------------------------------------
+
+    def _check_and_reset_drift_window(self) -> None:
+        """Check whether the 24-hour drift window has elapsed.
+
+        If it has, send a Discord alert with the final drift count and then
+        reset the counter so a fresh window begins.
+        """
+        window_start: Optional[datetime] = self.get_drift_window_start()
+        if window_start is None:
+            return
+
+        # Ensure window_start is timezone-aware for comparison
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=timezone.utc)
+
+        elapsed: timedelta = datetime.now(timezone.utc) - window_start
+        if elapsed.total_seconds() < DRIFT_WINDOW_SECONDS:
+            return
+
+        drift_count: int = self.get_drift_count()
+        window_end_iso: str = datetime.now(timezone.utc).isoformat()
+
+        logger.info(
+            f"[DriftWindow] 24-hour window elapsed. "
+            f"Total sentiment drifts: {drift_count}. "
+            f"Window started: {window_start.isoformat()}, ended: {window_end_iso}. "
+            "Resetting drift counter."
+        )
+
+        self.send_alerts(
+            data=(
+                f"Sentiment Drift Window Reset — "
+                f"Total drifts in the last 24 hours: {drift_count}"
+            ),
+            description=(
+                f"Window: {window_start.isoformat()} → {window_end_iso}"
+            ),
+            fields={
+                "drift_count": drift_count,
+                "window_start": window_start.isoformat(),
+                "window_end": window_end_iso,
+            },
+        )
+
+        self.reset_drift_count()
+
+    def _record_drift(self, from_sentiment: Optional[str], to_sentiment: str) -> None:
+        """Increment the drift counter, log the new total, and persist to Redis.
+
+        Args:
+            from_sentiment: The previously cached sentiment label (may be ``None``).
+            to_sentiment: The newly detected sentiment label.
+        """
+        new_count: int = self.increment_drift_count()
+        logger.info(
+            f"[SentimentDrift] Drift #{new_count} detected: "
+            f"{from_sentiment!r} → {to_sentiment!r}. "
+            f"Total drifts in current 24-hour window: {new_count}."
+        )
 
     # ------------------------------------------------------------------
     # FULL ANALYSIS
@@ -203,6 +269,10 @@ class Croner(ExceptionManager, RedisManager):
             )
 
             if sentiment_drifted:
+                self._record_drift(
+                    from_sentiment=cached_sentiment,
+                    to_sentiment=news_sentiment.sentiment,
+                )
                 logger.warning(
                     f"Sentiment drift detected: cached={cached_sentiment}, "
                     f"new={news_sentiment.sentiment} "
@@ -235,6 +305,10 @@ class Croner(ExceptionManager, RedisManager):
                     asyncio.run(self.run_once())
                     self.set_hourly_last_run(current_hour)
                     time.sleep(self.news_poll_interval)
+
+                # Check whether the 24-hour drift window has elapsed and
+                # reset the counter (sending a Discord alert) if so.
+                self._check_and_reset_drift_window()
 
                 asyncio.run(self.run_news_update_once())
                 time.sleep(self.news_poll_interval)
