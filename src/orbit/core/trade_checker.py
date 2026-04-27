@@ -197,28 +197,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.redis_set(symbol, cooldown_end)
 
     # ------------------------------------------------------------------
-    # Trade-mapping helpers  (delegates to RedisManager)
-    # ------------------------------------------------------------------
-
-    def _save_trade(self, trade_id: str, trade: Dict[str, Any]) -> None:
-        self.save_trade(trade_id, trade)
-
-    def _load_trade(self, trade_id: str) -> Optional[Dict[str, Any]]:
-        return self.load_trade(trade_id)
-
-    def _register_order(self, order_id: str, trade_id: str) -> None:
-        self.register_order(order_id, trade_id)
-
-    def _trade_id_for_order(self, order_id: str) -> Optional[str]:
-        return self.trade_id_for_order(order_id)
-
-    def _delete_trade_mapping(self, trade_id: str) -> None:
-        self.delete_trade_with_orders(trade_id)
-
-    def _update_trade_field(self, trade_id: str, updates: Dict[str, Any]) -> None:
-        self.update_trade_fields(trade_id, updates)
-
-    # ------------------------------------------------------------------
     # Price helpers
     # ------------------------------------------------------------------
 
