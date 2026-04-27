@@ -33,15 +33,35 @@ class OpenRouterClient:
     # ------------------------------------------------------------------
 
     def invoke(self, prompt: str) -> Optional[str]:
-        """Send *prompt* to OpenRouter and return the assistant reply text."""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
             )
+
+            msg = response.choices[0].message
             actual_model = getattr(response, "model", "unknown")
             logger.info(f"OpenRouter routed to model: {actual_model}")
-            return response.choices[0].message.content
+
+            # Handle text
+            if isinstance(msg.content, str) and msg.content.strip():
+                return msg.content
+
+            # Handle structured content
+            if isinstance(msg.content, list):
+                text = "".join(
+                    part.get("text", "") for part in msg.content if part.get("type") == "text"
+                )
+                if text.strip():
+                    return text
+
+            # Handle tool calls
+            if getattr(msg, "tool_calls", None):
+                logger.warning("Received tool call instead of text")
+                return None
+
+            logger.warning(f"Empty response received: {response}")
+            return None
         except Exception as e:
             logger.error(f"OpenRouter error: {e}")
             raise
