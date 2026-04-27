@@ -19,13 +19,14 @@ import redis
 from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.contradict_simulator import ContradictSimulator
 from orbit.core.mongo_handler import MongoHandler
+from orbit.core.redis_manager import RedisManager
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 from orbit.utils.utils import get_indian_time
 
 logger = logging.getLogger("Orbit")
 
 
-class SignalAnalyzer(AuthenticationManager):
+class SignalAnalyzer(AuthenticationManager, RedisManager):
     """Market signal generator.
 
     For every configured trading pair the analyser:
@@ -49,11 +50,8 @@ class SignalAnalyzer(AuthenticationManager):
         redis_client: Optional[redis.StrictRedis] = None,
         **auth_kwargs: Any,
     ) -> None:
-        super().__init__(**auth_kwargs)
-
-        self.redis_client: redis.StrictRedis = redis_client or redis.StrictRedis(
-            host="localhost", port=6379, db=0, decode_responses=True
-        )
+        AuthenticationManager.__init__(self, **auth_kwargs)
+        RedisManager.__init__(self, redis_client=redis_client)
 
         if mongo_handler is not None:
             self.mongo_handler: MongoHandler = mongo_handler
@@ -148,15 +146,15 @@ class SignalAnalyzer(AuthenticationManager):
     ) -> bool:
         """Check Redis for market sentiment and decide whether to skip.
 
-        A signal is skipped when it contradicts the prevailing sentiment
-        (e.g. ``SELL`` during ``BULLISH`` sentiment).  When skipped, a
-        background simulation is launched to track what would have happened.
+        A signal is skipped when it contradicts the prevailing sentiment.
+        When skipped, a background simulation is launched to track what
+        would have happened.
 
         Returns:
             ``True`` if the signal should be discarded.
         """
         try:
-            sentiment = self.redis_client.get("market_sentiments")
+            sentiment = self.get_market_sentiment()
             if sentiment:
                 skip = False
 
