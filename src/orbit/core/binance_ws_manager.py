@@ -10,7 +10,7 @@ Features
 * **Auto-reconnect** with exponential backoff (capped at 60 s).
 * **Ping/pong keepalive** via ``websocket-client`` built-in support.
 * **Stale-connection detection** — restarts if no message is received within
-  ``stale_threshold`` seconds (default 5 s).
+  ``stale_threshold`` seconds (default 30 s).
 * **Thread safety** — guarantees only one WebSocket thread runs at a time
   using a :class:`threading.Lock`.
 * **Clean shutdown** — :meth:`stop` signals the run-loop to exit and closes
@@ -30,10 +30,10 @@ logger = logging.getLogger("Orbit")
 _INITIAL_BACKOFF: float = 1.0       # seconds
 _MAX_BACKOFF: float = 60.0          # seconds
 _BACKOFF_FACTOR: float = 2.0        # exponential multiplier
-_PING_INTERVAL: int = 20            # seconds between pings
-_PING_TIMEOUT: int = 10             # seconds to wait for pong
-_STALE_THRESHOLD: float = 5.0       # seconds before a connection is considered stale
-_STALE_CHECK_INTERVAL: float = 2.0  # how often the stale-checker polls
+_PING_INTERVAL: int = 30            # seconds between pings (increased from 20)
+_PING_TIMEOUT: int = 20             # seconds to wait for pong (increased from 10)
+_STALE_THRESHOLD: float = 30.0      # seconds before a connection is considered stale (increased from 5)
+_STALE_CHECK_INTERVAL: float = 10.0 # how often the stale-checker polls (increased from 2)
 
 
 class BinanceWSManager:
@@ -193,7 +193,12 @@ class BinanceWSManager:
     # ------------------------------------------------------------------
 
     def _run_loop(self) -> None:
-        """Persistent reconnect loop with exponential backoff."""
+        """Persistent reconnect loop with exponential backoff.
+
+        Backoff resets to ``_INITIAL_BACKOFF`` after every successful
+        connection (i.e. one that stays up long enough to receive at least
+        one message).
+        """
         backoff = _INITIAL_BACKOFF
 
         while not self._stop_event.is_set():
@@ -211,10 +216,13 @@ class BinanceWSManager:
             with self._lock:
                 self._ws = ws
 
+            connect_time = time.time()
+
             try:
                 ws.run_forever(
                     ping_interval=self.ping_interval,
                     ping_timeout=self.ping_timeout,
+                    reconnect=0,  # disable websocket-client's own reconnect; we handle it
                 )
             except Exception:
                 logger.exception("[WSManager] Unexpected exception in run_forever()")
@@ -222,6 +230,11 @@ class BinanceWSManager:
             if self._stop_event.is_set():
                 logger.info("[WSManager] Stop event set — exiting run-loop.")
                 break
+
+            # Reset backoff if the connection was alive long enough to be
+            # considered successful (received at least one message after connect).
+            if self._last_message_time > connect_time:
+                backoff = _INITIAL_BACKOFF
 
             logger.warning(f"[WSManager] Disconnected. Reconnecting in {backoff:.1f}s …")
             self._stop_event.wait(timeout=backoff)
