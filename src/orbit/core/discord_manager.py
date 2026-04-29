@@ -173,7 +173,7 @@ class DiscordManager:
 
             if response.status_code != 204:
                 logger.exception(
-                    f"Failed webhook | Status: {response.status_code} | Response: {response.text} | url: {url}"
+                    f"Failed webhook | Status: {response.status_code} | Response: {response.text} | key: {key}"
                 )
 
             return response.status_code
