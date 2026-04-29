@@ -24,11 +24,13 @@ Key schema
 ``sentiment:last_news_fetch``       – ISO-8601 last news fetch time
 ``sentiment:last_reddit_fetch``     – ISO-8601 last Reddit fetch time
 ``sentiment:last_twitter_fetch``    – ISO-8601 last Twitter fetch time
+``sentiment:drift_count``           – integer count of sentiment drifts
+``sentiment:drift_window_start``    – ISO-8601 start of the 24-hour drift window
 """
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, Optional
 
 import redis
@@ -47,9 +49,15 @@ REDIS_KEY_HOURLY_LAST_RUN: str = "ms_hourly_last_run"
 REDIS_KEY_LAST_NEWS_FETCH: str = "sentiment:last_news_fetch"
 REDIS_KEY_LAST_REDDIT_FETCH: str = "sentiment:last_reddit_fetch"
 REDIS_KEY_LAST_TWITTER_FETCH: str = "sentiment:last_twitter_fetch"
+REDIS_KEY_DRIFT_COUNT: str = "sentiment:drift_count"
+REDIS_KEY_DRIFT_WINDOW_START: str = "sentiment:drift_window_start"
 
 # TTL for timestamp keys (48 hours)
 _TIMESTAMP_TTL: int = 172_800
+
+# TTL for drift keys (25 hours — slightly beyond the 24-hour window so Redis
+# never evicts them before the cron has a chance to read and reset them)
+_DRIFT_TTL: int = 90_000
 
 
 def _trade_key(trade_id: str) -> str:
@@ -308,3 +316,50 @@ class RedisManager:
                 )
         except Exception as e:
             logger.exception(f"[Redis] save_last_fetch_times failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Sentiment drift tracking
+    # ------------------------------------------------------------------
+
+    def get_drift_count(self) -> int:
+        """Return the number of sentiment drifts recorded in the current 24-hour window."""
+        raw = self.redis_get(REDIS_KEY_DRIFT_COUNT)
+        return int(raw) if raw is not None else 0
+
+    def get_drift_window_start(self) -> Optional[datetime]:
+        """Return the start of the current 24-hour drift window, or ``None``."""
+        raw = self.redis_get(REDIS_KEY_DRIFT_WINDOW_START)
+        if raw:
+            try:
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                return None
+        return None
+
+    def increment_drift_count(self) -> int:
+        """Increment the drift counter by 1 and return the new value.
+
+        If no drift window exists yet, one is started now with a 25-hour TTL
+        so Redis never evicts the keys before the cron can read and reset them.
+        """
+        try:
+            if self.redis_client.get(REDIS_KEY_DRIFT_WINDOW_START) is None:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                self.redis_client.setex(
+                    REDIS_KEY_DRIFT_WINDOW_START, _DRIFT_TTL, now_iso
+                )
+                self.redis_client.setex(REDIS_KEY_DRIFT_COUNT, _DRIFT_TTL, "0")
+
+            new_count = self.redis_client.incr(REDIS_KEY_DRIFT_COUNT)
+            return int(new_count)
+        except Exception as e:
+            logger.exception(f"[Redis] increment_drift_count failed: {e}")
+            return 0
+
+    def reset_drift_count(self) -> None:
+        """Delete both drift keys, clearing the 24-hour window."""
+        try:
+            self.redis_client.delete(REDIS_KEY_DRIFT_COUNT)
+            self.redis_client.delete(REDIS_KEY_DRIFT_WINDOW_START)
+        except Exception as e:
+            logger.exception(f"[Redis] reset_drift_count failed: {e}")
