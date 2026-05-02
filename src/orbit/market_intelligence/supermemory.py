@@ -2,7 +2,7 @@
 supermemory.py
 ==============
 
-SDK-based wrapper around the Supermemory API.
+REST-based wrapper around the Supermemory API (v4).
 
 Responsibilities
 ----------------
@@ -19,9 +19,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from supermemory import Supermemory
+import requests
 
 logger = logging.getLogger("Orbit")
+
+_BASE_URL = "https://api.supermemory.ai/v4"
+_TIMEOUT = 10
 
 
 # ------------------------------------------------------------------
@@ -30,11 +33,11 @@ logger = logging.getLogger("Orbit")
 
 @dataclass
 class SentimentMemory:
-    sentiment: str          # BULLISH | BEARISH | NEUTRAL
+    sentiment: str
     confidence: float
     explanation: str
-    source: str             # "full_analysis" | "news_update" | "drift"
-    timestamp: str          # ISO-8601
+    source: str
+    timestamp: str
 
 
 # ------------------------------------------------------------------
@@ -51,12 +54,16 @@ class SupermemoryClient:
         self._container_id = container_id
         self._enabled = bool(self._api_key)
 
-        if self._enabled:
-            self.client = Supermemory(api_key=self._api_key)
-        else:
+        if not self._enabled:
             logger.warning(
                 "SupermemoryClient: SUPERMEMORY_API_KEY not set — memory disabled."
             )
+
+    def _headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
 
     # ------------------------------------------------------------------
     # Add Memory
@@ -74,25 +81,37 @@ class SupermemoryClient:
             return False
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        tags = [f"source:{source}", f"sentiment:{sentiment}"] + (extra_tags or [])
+
+        memory = {
+            "content": f"Explanation: {explanation}",
+            "metadata": {
+                "sentiment": sentiment,
+                "confidence": round(confidence, 2),
+                "source": source,
+                "timestamp": now_iso,
+            },
+            "tags": [f"source:{source}", f"sentiment:{sentiment}"] + (extra_tags or []),
+        }
+
+        payload = {
+            "memories": [memory],
+            "containerTag": self._container_id,
+        }
 
         try:
-            self.client.memories.add(
-                content=f"Explanation: {explanation}",
-                metadata={
-                    "sentiment": sentiment,
-                    "confidence": round(confidence, 2),
-                    "source": source,
-                    "timestamp": now_iso,
-                },
-                container_tags=[self._container_id],
-                tags=tags,
+            resp = requests.post(
+                f"{_BASE_URL}/memories",
+                json=payload,
+                headers=self._headers(),
+                timeout=_TIMEOUT,
             )
+            resp.raise_for_status()
+
             logger.info(f"Stored sentiment memory ({sentiment}, {source})")
             return True
 
         except Exception as exc:
-            logger.exception(f"Supermemory SDK error (add): {exc}")
+            logger.exception(f"Supermemory REST error (add): {exc}")
             return False
 
     # ------------------------------------------------------------------
@@ -107,16 +126,25 @@ class SupermemoryClient:
         if not self._enabled:
             return []
 
+        payload = {"q": query}
+
         try:
-            results = self.client.memories.search(
-                query=query,
-                limit=limit,
-                container_tags=[self._container_id],
+            resp = requests.post(
+                f"{_BASE_URL}/search",
+                json=payload,
+                headers=self._headers(),
+                timeout=_TIMEOUT,
             )
+            resp.raise_for_status()
+
+            data = resp.json()
+
+            # depending on API shape
+            results = data.get("results", data)
 
             memories: List[SentimentMemory] = []
 
-            for item in results:
+            for item in results[:limit]:
                 meta = item.get("metadata", {})
 
                 memories.append(
@@ -132,7 +160,7 @@ class SupermemoryClient:
             return memories
 
         except Exception as exc:
-            logger.exception(f"Supermemory SDK error (search): {exc}")
+            logger.exception(f"Supermemory REST error (search): {exc}")
             return []
 
     # ------------------------------------------------------------------
