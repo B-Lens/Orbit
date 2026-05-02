@@ -5591,6 +5591,29 @@ files = [
 ]
 
 [[package]]
+name = "supermemory"
+version = "3.37.0"
+description = "The official Python library for the supermemory API"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "supermemory-3.37.0-py3-none-any.whl", hash = "sha256:68d5776c00fabec6ccb7a555b4c3d2b831d9b32fb511a132c3f7263197edaa43"},
+    {file = "supermemory-3.37.0.tar.gz", hash = "sha256:bcd1af66ebfa8c3bb7a26205683739a74af1ceeedcabeee243f1ecba366a5fce"},
+]
+
+[package.dependencies]
+anyio = ">=3.5.0,<5"
+distro = ">=1.7.0,<2"
+httpx = ">=0.23.0,<1"
+pydantic = ">=1.9.0,<3"
+sniffio = "*"
+typing-extensions = ">=4.14,<5"
+
+[package.extras]
+aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.9)"]
+
+[[package]]
 name = "tenacity"
 version = "9.1.2"
 description = "Retry code until it succeeds"
@@ -6631,4 +6654,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.13"
-content-hash = "3463ed5e4395a16f83ac765de87e61f53fa0cc0e2aba577b85b77af05783414e"
+content-hash = "0e239c0dcecd7ab1219c0ab57b7b28be8ca906cf4e47997c3682a5ae046212d8"
