@@ -17,7 +17,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 import requests
 
@@ -59,7 +59,7 @@ class SupermemoryClient:
                 "SupermemoryClient: SUPERMEMORY_API_KEY not set — memory disabled."
             )
 
-    def _headers(self) -> dict:
+    def _headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
