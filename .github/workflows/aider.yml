@@ -90,7 +90,7 @@ jobs:
         run: |
           aider \
             --message-file issue.txt \
-            --model openrouter/anthropic/claude-sonnet-4.6  \
+            --model openrouter/deepseek/deepseek-v4-pro  \
             --yes-always \
             --auto-commits \
             --no-pretty \
