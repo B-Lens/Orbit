@@ -10,12 +10,13 @@ collects per-chunk overall sentiments, then produces a single final
 chunk summaries.
 """
 
+import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from orbit.market_intelligence.analysis.reddit_sentiment import extract_json
 from orbit.market_intelligence.llm.llm_endpoint import LLM
 
 logger = logging.getLogger("Orbit")
@@ -51,6 +52,39 @@ class TwitterSentimentResult(BaseModel):
 # Maximum number of tweets per LLM chunk call.
 # Keeps each prompt well within typical 4 k-token context windows.
 _CHUNK_SIZE = 40
+
+
+def _extract_json_safe(raw: str) -> dict:
+    """Try to extract a JSON object from the LLM output.
+
+    Returns an empty dict if nothing parsable is found (never raises).
+    """
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to pull JSON out of markdown fences (```json ... ```)
+    pattern = r"```(?:json)?\s*\n?(.*?)\n?```"
+    matches = re.findall(pattern, raw, re.DOTALL)
+    for block in matches:
+        try:
+            return json.loads(block.strip())
+        except json.JSONDecodeError:
+            continue
+
+    # Very last resort: grab everything between the first { and the last }
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and start < end:
+        try:
+            return json.loads(raw[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+
+    return {}
 
 
 class TwitterSentimentAnalyzer:
@@ -159,7 +193,7 @@ class TwitterSentimentAnalyzer:
             Tweets:
             {tweets_block}
             """
-        
+
         RETURN_FORMAT = """
             Respond ONLY in valid JSON.
 
@@ -175,7 +209,7 @@ class TwitterSentimentAnalyzer:
                 "explanation": "brief explanation"
             }}
             """
-        
+
         prompt = prompt + "\n" + RETURN_FORMAT
 
         try:
@@ -184,11 +218,28 @@ class TwitterSentimentAnalyzer:
             logger.info(
                 f"LLM raw output for tweet chunk {chunk_index}: {raw}"
             )
-            data = extract_json(raw)
+            data = _extract_json_safe(raw)
+
+            if not data or "sentiment" not in data:
+                logger.warning(
+                    "Tweet chunk %d LLM output did not contain a valid sentiment key. Raw: %.200s",
+                    chunk_index,
+                    raw,
+                )
+                return ChunkSentimentSummary(
+                    sentiment="NEUTRAL",
+                    confidence=0.3,
+                    reasoning="LLM output could not be parsed into a sentiment.",
+                )
+
+            sentiment = str(data.get("sentiment", "NEUTRAL")).upper()
+            confidence = float(data.get("confidence", 0.5))
+            reasoning = str(data.get("reasoning") or data.get("explanation", ""))
+
             return ChunkSentimentSummary(
-                sentiment=str(data.get("sentiment", "NEUTRAL")).upper(),
-                confidence=float(data.get("confidence", 0.5)),
-                reasoning=str(data.get("reasoning", "")),
+                sentiment=sentiment,
+                confidence=confidence,
+                reasoning=reasoning,
             )
         except Exception as exc:
             logger.exception(
@@ -265,7 +316,7 @@ class TwitterSentimentAnalyzer:
             - BEARISH  → net negative for risk assets
             - NEUTRAL  → mixed or no clear signal
             - Provide a concise explanation that references the key themes.
-            - Ignore failed analysis or No analysis of the chunk 
+            - Ignore failed analysis or No analysis of the chunk
             - Ignore irrelevant content in the chunk summaries.
 
             Respond ONLY with valid JSON (no markdown, no extra text):
@@ -283,10 +334,24 @@ class TwitterSentimentAnalyzer:
             raw = self.llm.invoke(prompt)
             raw = str(raw).strip()
             logger.info(f"LLM synthesis output: {raw}")
-            data = extract_json(raw)
+            data = _extract_json_safe(raw)
+
+            if not data or "sentiment" not in data:
+                logger.warning(
+                    "Synthesis LLM output did not contain a valid sentiment key. Raw: %.200s",
+                    raw,
+                )
+                return TwitterSentimentResult(
+                    sentiment="NEUTRAL",
+                    confidence=0.0,
+                    overall_score=0.0,
+                    total_tweets_analyzed=0,
+                    explanation="Tweets Analysis failed during final synthesis step. Fallback applied.",
+                )
+
             sentiment = str(data.get("sentiment", "NEUTRAL")).upper()
             confidence = float(data.get("confidence", 0.5))
-            reasoning = str(data.get("reasoning", ""))
+            reasoning = str(data.get("reasoning") or data.get("explanation", ""))
             score = self._sentiment_to_score(sentiment, confidence)
 
             return TwitterSentimentResult(
