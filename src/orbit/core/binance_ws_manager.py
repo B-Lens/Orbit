@@ -27,6 +27,11 @@ import websocket
 
 logger = logging.getLogger("Orbit")
 
+# Suppress verbose ERROR messages from the underlying websocket-client
+# library so that routine disconnections do not flood the application
+# logs with ``Connection to remote host was lost. - goodbye``.
+logging.getLogger("websocket").setLevel(logging.WARNING)
+
 _INITIAL_BACKOFF: float = 1.0       # seconds
 _MAX_BACKOFF: float = 60.0          # seconds
 _BACKOFF_FACTOR: float = 2.0        # exponential multiplier
@@ -224,8 +229,12 @@ class BinanceWSManager:
                     ping_timeout=self.ping_timeout,
                     reconnect=0,  # disable websocket-client's own reconnect; we handle it
                 )
-            except Exception:
-                logger.exception("[WSManager] Unexpected exception in run_forever()")
+            except Exception as exc:
+                # ``run_forever`` raises when the underlying socket fails.
+                # This is a normal part of the reconnect logic; log at INFO
+                # level so that it does not show up as an ERROR in production
+                # dashboards.
+                logger.info("[WSManager] run_forever ended (%s)", exc)
 
             if self._stop_event.is_set():
                 logger.info("[WSManager] Stop event set — exiting run-loop.")
