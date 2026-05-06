@@ -192,7 +192,7 @@ class TwitterSentimentAnalyzer:
                 )
                 return ChunkSentimentSummary(
                     sentiment="NEUTRAL",
-                    confidence=0.3,
+                    confidence=0.0,
                     reasoning="LLM output could not be parsed into a sentiment.",
                 )
 
