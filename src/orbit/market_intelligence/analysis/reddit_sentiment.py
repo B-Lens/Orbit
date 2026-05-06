@@ -34,10 +34,51 @@ class RedditOverallResult(BaseModel):
 
 
 def extract_json(text: str) -> dict:
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        raise ValueError("No JSON found in LLM response")
-    return json.loads(match.group(0))
+    """Robustly extract a JSON object from an LLM response string.
+
+    This function tries several strategies to locate a JSON block inside the
+    raw text.  If no valid JSON is found it returns a safe fallback dict so
+    that the caller never receives ``None`` or an exception.
+    """
+    # 1. Try to parse the whole response as plain JSON.
+    try:
+        candidate = text.strip()
+        if candidate.startswith("{"):
+            return json.loads(candidate)
+    except Exception:
+        pass
+
+    # 2. Look for a code-fenced JSON block (```json ... ```).
+    fence_patterns = [
+        r"```json\s*(\{.*?\})\s*```",
+        r"```\s*(\{.*?\})\s*```",
+    ]
+    for pat in fence_patterns:
+        m = re.search(pat, text, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except Exception:
+                continue
+
+    # 3. Grab everything between the first ``{`` and the last ``}`` and
+    #    try to parse it.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start: end + 1]
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+
+    # 4. Nothing worked — return a safe fallback so analysis can continue.
+    logger.warning("extract_json: no JSON found in LLM output. Returning fallback.")
+    return {
+        "sentiment": "NEUTRAL",
+        "confidence": 0.3,
+        "explanation": "Fallback: LLM response did not contain valid JSON.",
+    }
 
 
 def _build_post_snippet(post: Dict[str, Any]) -> str:
