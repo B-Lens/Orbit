@@ -10,9 +10,7 @@ collects per-chunk overall sentiments, then produces a single final
 chunk summaries.
 """
 
-import json
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -52,40 +50,6 @@ class TwitterSentimentResult(BaseModel):
 # Maximum number of tweets per LLM chunk call.
 # Keeps each prompt well within typical 4 k-token context windows.
 _CHUNK_SIZE = 40
-
-
-def _extract_json_safe(raw: str) -> dict:
-    """Try to extract a JSON object from the LLM output.
-
-    Returns an empty dict if nothing parsable is found (never raises).
-    """
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    # Try to pull JSON out of markdown fences (```json ... ```)
-    pattern = r"```(?:json)?\s*\n?(.*?)\n?```"
-    matches = re.findall(pattern, raw, re.DOTALL)
-    for block in matches:
-        try:
-            return json.loads(block.strip())
-        except json.JSONDecodeError:
-            continue
-
-    # Very last resort: grab everything between the first { and the last }
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start != -1 and end != -1 and start < end:
-        try:
-            return json.loads(raw[start:end + 1])
-        except json.JSONDecodeError:
-            pass
-
-    return {}
-
 
 class TwitterSentimentAnalyzer:
     """Analyse financial tweets with an LLM using a chunk-then-synthesise approach.
@@ -218,7 +182,7 @@ class TwitterSentimentAnalyzer:
             logger.info(
                 f"LLM raw output for tweet chunk {chunk_index}: {raw}"
             )
-            data = _extract_json_safe(raw)
+            data = extract_json(raw)
 
             if not data or "sentiment" not in data:
                 logger.warning(
@@ -334,7 +298,7 @@ class TwitterSentimentAnalyzer:
             raw = self.llm.invoke(prompt)
             raw = str(raw).strip()
             logger.info(f"LLM synthesis output: {raw}")
-            data = _extract_json_safe(raw)
+            data = extract_json(raw)
 
             if not data or "sentiment" not in data:
                 logger.warning(
