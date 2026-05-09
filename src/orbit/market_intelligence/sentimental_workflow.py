@@ -997,8 +997,16 @@ class SentimentWorkflow(ExceptionManager):
             news_sentiment = self.get_market_sentiments(news_text=news_text)
 
             historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
+
+            label_weights = {
+                "BULLISH": 1,
+                "NEUTRAL": 0,
+                "BEARISH": -1,
+            }
+
             historical_score: float = (
-                sum(s["overall_score"] for s in historical_sentiment) / len(historical_sentiment)
+                sum(label_weights.get(s["combined_sentiment"]['sentiment'], 0) for s in historical_sentiment)
+                / len(historical_sentiment)
                 if historical_sentiment
                 else 0
             )
