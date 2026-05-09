@@ -181,7 +181,7 @@ class WeightedRedditAnalyzer:
 
             Rules:
             - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way
+            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way (set to 0.0 if completely unrelated to finanial markets)
             - explanation: concise synthesis of the key themes driving the sentiment
             - Focus on crypto / financial markets sentiment, not individual stocks
 
