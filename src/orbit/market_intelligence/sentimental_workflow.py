@@ -802,19 +802,17 @@ class SentimentWorkflow(ExceptionManager):
                 news_sentiment = self.get_market_sentiments(news_text=news_text)
 
             # ---- Blend Twitter + News + Reddit into a single incremental sentiment ----
-            blended_sentiment: Optional[NewsSentiment] = self._blend_incremental_sentiment(
+            blended_sentiment: Optional[Sentiment] = self._blend_incremental_sentiment(
                 twitter_result=twitter_sentiment,
                 news_result=news_sentiment,
                 reddit_result=reddit_sentiment,
             )
 
             # Store blended sentiment in Supermemory
-            if blended_sentiment is not None:
+            if blended_sentiment is not None and blended_sentiment.confidence != 0.0:
                 self._store_sentiment_memory(
-                    sentiment=blended_sentiment.sentiment,
-                    confidence=blended_sentiment.confidence,
-                    explanation=blended_sentiment.explanation,
-                    source="news_update",
+                    combined_result=blended_sentiment,
+                    source="blend_update",
                 )
 
             return {
@@ -866,10 +864,10 @@ class SentimentWorkflow(ExceptionManager):
 
     def _blend_incremental_sentiment(
         self,
-        twitter_result: Optional[TwitterSentimentResult],
-        news_result: Optional[NewsSentiment],
-        reddit_result: Optional[RedditOverallResult] = None,
-    ) -> Optional[NewsSentiment]:
+        twitter_result: TwitterSentimentResult,
+        news_result: NewsSentiment,
+        reddit_result: RedditOverallResult ,
+    ) -> Sentiment:
         """
         Blend Twitter, News, and Reddit incremental sentiments into a single
         :class:`NewsSentiment` for the Croner drift-detection path.
@@ -884,62 +882,82 @@ class SentimentWorkflow(ExceptionManager):
         """
         if twitter_result is None and news_result is None and reddit_result is None:
             return None
+        
+        twitter_section = ""
+        reddit_section = ""
+        news_section = ""
 
-        direction_map = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
+        if twitter_result:
+            twitter_section = f"""
+            Twitter Analysis:
+            (sentiment={twitter_result.sentiment}, confidence={twitter_result.confidence})
+            {twitter_result.explanation}
+            """
 
-        total_w = 0.0
-        weighted_score = 0.0
-        weighted_conf = 0.0
-        explanations: List[str] = []
+        if reddit_result:
+            reddit_section = f"""
+            Reddit Analysis:
+             (sentiment={reddit_result.sentiment}, confidence={reddit_result.confidence})
+             {reddit_result.explanation}
+            """
 
-        if twitter_result is not None:
-            w = _W_TWITTER
-            d = direction_map.get(twitter_result.sentiment, 0.0)
-            weighted_score += d * twitter_result.confidence * w
-            weighted_conf += twitter_result.confidence * w
-            total_w += w
-            explanations.append(
-                f"Twitter({twitter_result.sentiment}, conf={twitter_result.confidence:.2f}, explanation={twitter_result.explanation})"
+        if news_result:
+            news_section = f"""
+            News Analysis:
+             (sentiment={news_result.sentiment}, confidence={news_result.confidence})
+             {news_result.explanation}
+            """     
+
+        prompt = f"""
+
+            You are a senior financial market analyst specializing in sentiment aggregation.
+
+            ## TASK
+            Provide a reasoned overall market/crypto sentiment assessment by blending all available signals according to the specified weights.
+
+            ## BLENDING WEIGHTS
+            {weight_dict}
+
+            ## SIGNAL SOURCES
+            \n\n
+            {twitter_section}
+            \n
+            {reddit_section}
+            \n
+            {news_section}
+            \n 
+
+            Rules:
+            - Blend them using the provided weight dictionary.
+            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way (set to 0.0 if completely unrelated to finanial markets)
+            - explanation: concise synthesis of the key themes driving the sentiment
+            - Focus on crypto / financial markets sentiment, not individual stocks
+
+
+            Respond ONLY with valid JSON (no markdown, no extra text):
+            {{
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "explanation": "<concise synthesis>"
+            }}
+            """
+
+        try:
+            content = self.llm.invoke(prompt)
+            content = str(content).strip()
+            blend_sentiment: Dict[str, Any] = extract_json(content)  # validate JSON format
+            return Sentiment(**blend_sentiment)
+        except Exception as e:
+            self.handle_exception(
+                exception=e,
+                context_description="Reasoning generation failed",
             )
-
-        if news_result is not None:
-            w = _W_NEWS
-            d = direction_map.get(news_result.sentiment, 0.0)
-            weighted_score += d * news_result.confidence * w
-            weighted_conf += news_result.confidence * w
-            total_w += w
-            explanations.append(
-                f"News({news_result.sentiment}, conf={news_result.confidence:.2f}, explanation={news_result.explanation})"
+            return Sentiment(
+                sentiment=SentimentType.NEUTRAL,
+                confidence=0.0,
+                explanation="Blended sentiment analysis failed.",
             )
-
-        if reddit_result is not None:
-            w = _W_REDDIT
-            d = direction_map.get(reddit_result.sentiment, 0.0)
-            weighted_score += d * reddit_result.confidence * w
-            weighted_conf += reddit_result.confidence * w
-            total_w += w
-            explanations.append(
-                f"Reddit({reddit_result.sentiment}, conf={reddit_result.confidence:.2f}, explanation={reddit_result.explanation})"
-            )
-
-        if total_w == 0:
-            return None
-
-        score = weighted_score / total_w
-        conf = round(min(1.0, weighted_conf / total_w), 3)
-
-        if score > 0.1:
-            label = SentimentType.BULLISH
-        elif score < -0.1:
-            label = SentimentType.BEARISH
-        else:
-            label = SentimentType.NEUTRAL
-
-        return NewsSentiment(
-            sentiment=label,
-            confidence=conf,
-            explanation=" | ".join(explanations),
-        )
 
     # ------------------------------------------------------------------
     # MAIN WORKFLOW
