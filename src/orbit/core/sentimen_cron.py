@@ -229,7 +229,7 @@ class Croner(ExceptionManager, RedisManager):
         logger.info(f"Sentiment Analysis Result: {result}")
         sentiment = result.get("sentiment")
         sentiment_confidence = result.get("confidence")
-        sentiment_reasoning = result.get("reasoning")
+        sentiment_reasoning = result.get("explanation")
         dominant_memory_sentiment = result.get("dominant_memory_sentiment")
 
         twitter_info = result.get("twitter_sentiment", {})
@@ -240,7 +240,6 @@ class Croner(ExceptionManager, RedisManager):
             data=(
                 f"Market Sentiment = {sentiment}, Confidence : {sentiment_confidence}, "
                 f"Reasoning : {sentiment_reasoning} | "
-                f"Twitter: {twitter_label} (conf={twitter_conf}) | "
                 f"Memory dominant: {dominant_memory_sentiment}"
             ),
             description=None,
@@ -250,7 +249,6 @@ class Croner(ExceptionManager, RedisManager):
         try:
             self.set_market_sentiment(sentiment)
         except Exception as e:
-            logger.exception("Failed to update Redis after full analysis.")
             self.handle_exception(
                 e,
                 context_description="Failed to update Redis after full analysis",

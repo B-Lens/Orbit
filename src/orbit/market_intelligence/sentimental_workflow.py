@@ -1051,18 +1051,10 @@ class SentimentWorkflow(ExceptionManager):
                 **combined_result.model_dump(),
                 "dominant_memory_sentiment": dominant_memory_sentiment,
                 "reddit_sentiment": {
-                    "sentiment": reddit_result.sentiment,
-                    "confidence": reddit_result.confidence,
-                    "explanation": reddit_result.explanation,
-                    "total_posts_analyzed": reddit_result.total_posts_analyzed,
-                    "chunks_analyzed": reddit_result.chunks_analyzed,
+                    **reddit_result.model_dump()
                 },
                 "twitter_sentiment": {
-                    "sentiment": twitter_result.sentiment,
-                    "confidence": twitter_result.confidence,
-                    "overall_score": twitter_result.overall_score,
-                    "total_tweets_analyzed": twitter_result.total_tweets_analyzed,
-                    "explanation": twitter_result.explanation,
+                    **twitter_result.model_dump()
                 },
                 # "trends": trend.dict() if trend else None,
                 # "trading_signal": signal,
@@ -1072,7 +1064,6 @@ class SentimentWorkflow(ExceptionManager):
             }
 
         except Exception as e:
-            logger.exception("Workflow failed")
             self.handle_exception(
                 exception=e,
                 context_description="run_analysis",
