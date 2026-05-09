@@ -1005,7 +1005,7 @@ class SentimentWorkflow(ExceptionManager):
             }
 
             historical_score: float = (
-                sum(label_weights.get(s["combined_sentiment"]['sentiment'], 0) for s in historical_sentiment)
+                sum(label_weights.get(s.get("combined_sentiment", {}).get("sentiment"), 0) for s in historical_sentiment)
                 / len(historical_sentiment)
                 if historical_sentiment
                 else 0
