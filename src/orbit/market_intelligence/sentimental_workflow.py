@@ -89,6 +89,19 @@ weight_dict = {
     "fear_greed": 0.025
 }
 
+class Sentiment(BaseModel):
+    """
+    Structured representation of LLM-evaluated news sentiment.
+
+    Attributes:
+        sentiment: Overall market sentiment (BULLISH, BEARISH, NEUTRAL)
+        confidence: Confidence score between 0 and 1
+        explanation: Brief textual explanation of reasoning
+    """
+    sentiment: SentimentType
+    confidence: float = Field(ge=0.0, le=1.0)
+    explanation: str
+
 class NewsSentiment(BaseModel):
     """
     Structured representation of LLM-evaluated news sentiment.
@@ -187,10 +200,8 @@ class SentimentWorkflow(ExceptionManager):
 
     def _store_sentiment_memory(
         self,
-        sentiment: str,
-        confidence: float,
-        explanation: str,
-        source: str,
+        combined_result: Sentiment,
+        source: str = "full_analysis",
     ) -> None:
         """Persist a sentiment result to Supermemory (best-effort).
 
@@ -201,6 +212,9 @@ class SentimentWorkflow(ExceptionManager):
             source: Pipeline stage that produced this result.
         """
         try:
+            sentiment = combined_result.sentiment
+            confidence = combined_result.confidence
+            explanation = combined_result.explanation   
             self.supermemory.add_sentiment(
                 sentiment=sentiment,
                 confidence=confidence,
@@ -429,15 +443,6 @@ class SentimentWorkflow(ExceptionManager):
             data = extract_json(raw_content)
             result = NewsSentiment(**data)
             self.last_news_sentiment = result
-
-            # Store in Supermemory for future context
-            self._store_sentiment_memory(
-                sentiment=result.sentiment,
-                confidence=result.confidence,
-                explanation=result.explanation,
-                source="news_llm",
-            )
-
             return result
 
         except Exception as e:
@@ -782,25 +787,12 @@ class SentimentWorkflow(ExceptionManager):
             twitter_sentiment: Optional[TwitterSentimentResult] = None
             if has_new_tweets:
                 twitter_sentiment = self.analyze_twitter(new_tweets)
-                # Store Twitter sentiment in Supermemory
-                self._store_sentiment_memory(
-                    sentiment=twitter_sentiment.sentiment,
-                    confidence=twitter_sentiment.confidence,
-                    explanation=twitter_sentiment.explanation,
-                    source="twitter_update",
-                )
+  
 
             # ---- Reddit sentiment (chunk-then-synthesise) ----
             reddit_sentiment: Optional[RedditOverallResult] = None
             if has_new_reddit_posts:
                 reddit_sentiment = self.analyze_reddit(new_reddit_data)
-                # Store Reddit sentiment in Supermemory
-                self._store_sentiment_memory(
-                    sentiment=reddit_sentiment.sentiment,
-                    confidence=reddit_sentiment.confidence,
-                    explanation=reddit_sentiment.explanation,
-                    source="reddit_update",
-                )
 
             # ---- Build news text for LLM call ----
             news_sentiment: Optional[NewsSentiment] = None
@@ -993,7 +985,7 @@ class SentimentWorkflow(ExceptionManager):
                 else 0
             )
 
-            combined_result: Dict[str, Any] = self._combine_results(
+            combined_result: Sentiment = self._combine_results(
                 reddit_result,
                 news_sentiment,
                 twitter_result=twitter_result,
@@ -1003,9 +995,7 @@ class SentimentWorkflow(ExceptionManager):
 
             # Store final combined result in Supermemory
             self._store_sentiment_memory(
-                sentiment=combined_result["sentiment"],
-                confidence=combined_result["confidence"],
-                explanation=combined_result["explanation"],
+                combined_result=combined_result,
                 source="full_analysis",
             )
 
@@ -1078,7 +1068,7 @@ class SentimentWorkflow(ExceptionManager):
         twitter_result: TwitterSentimentResult,
         indicators: MarketIndicators,
         historical_score: float = 0.0,
-    ) -> Dict[str, Any]:
+    ) -> Sentiment:
         """
         Combine Twitter, Reddit, News, Indicator signals and historical score
         into a final sentiment score.
@@ -1098,16 +1088,16 @@ class SentimentWorkflow(ExceptionManager):
             Dictionary with label, confidence and explanation.
         """
 
-        reasoning: str = self.get_reasoning(reddit_result, news_sentiment, twitter_result)
+        reasoning: str = self.get_reasoning(reddit_result, news_sentiment, twitter_result, indicators)
         combined_data: Dict[str, Any] = extract_json(reasoning)
-        return combined_data
+        return Sentiment(**combined_data)
 
     def _save_to_database(
         self,
         reddit_result: RedditOverallResult,
         news_text: str,
         indicators: MarketIndicators,
-        combined: Dict[str, Any],
+        combined: Sentiment,
         processing_time: int,
         twitter_result: Optional[TwitterSentimentResult] = None,
     ) -> str:
@@ -1144,9 +1134,9 @@ class SentimentWorkflow(ExceptionManager):
         }
 
         record = SentimentRecord(
-            overall_score=combined["score"],
-            sentiment_label=combined["sentiment"],
-            confidence=combined["confidence"],
+            sentiment_label=combined.sentiment,
+            confidence=combined.confidence,
+            explanation=combined.explanation,
             reddit_sentiment=reddit_data,
             news_sentiment={
                 "summary": news_text[:500] if news_text else "",
