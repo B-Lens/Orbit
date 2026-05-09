@@ -36,9 +36,7 @@ class SentimentRecord(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
     
     # Overall sentiment
-    overall_score: float  # -1 to 1
-    sentiment_label: str  # BULLISH, BEARISH, NEUTRAL
-    confidence: float  # 0-1
+    combined_sentiment: Dict[str, Any]  # Store the full combined sentiment result
     
     # Reddit Analysis
     reddit_sentiment: Dict[str, Any]
@@ -46,7 +44,7 @@ class SentimentRecord(BaseModel):
     # Legacy Sources
     news_sentiment: Dict[str, Any]
     market_indicators: Dict[str, Any]
-    twitter_sentiment: Dict[str, Any]
+    twitter_sentiment: Dict[str, Any] 
     
     # Market Context
     prices: Dict[str, float] = Field(default_factory=dict)

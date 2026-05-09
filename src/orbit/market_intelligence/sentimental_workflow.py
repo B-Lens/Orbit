@@ -864,10 +864,10 @@ class SentimentWorkflow(ExceptionManager):
 
     def _blend_incremental_sentiment(
         self,
-        twitter_result: TwitterSentimentResult,
-        news_result: NewsSentiment,
-        reddit_result: RedditOverallResult ,
-    ) -> Sentiment:
+        twitter_result: Optional[TwitterSentimentResult],
+        news_result: Optional[NewsSentiment],
+        reddit_result: Optional[RedditOverallResult],
+    ) -> Optional[Sentiment]:
         """
         Blend Twitter, News, and Reddit incremental sentiments into a single
         :class:`NewsSentiment` for the Croner drift-detection path.
@@ -1022,8 +1022,8 @@ class SentimentWorkflow(ExceptionManager):
                 news_text,
                 indicators,
                 combined_result,
+                twitter_result,
                 int((time.time() - start_time) * 1000),
-                twitter_result=twitter_result,
             )
 
             now = get_indian_time()
@@ -1040,7 +1040,7 @@ class SentimentWorkflow(ExceptionManager):
                 "success": True,
                 "timestamp": get_indian_time().isoformat(),
                 "database_id": record_id,
-                **combined_result,
+                **combined_result.model_dump(),
                 "dominant_memory_sentiment": dominant_memory_sentiment,
                 "reddit_sentiment": {
                     "sentiment": reddit_result.sentiment,
@@ -1116,8 +1116,8 @@ class SentimentWorkflow(ExceptionManager):
         news_text: str,
         indicators: MarketIndicators,
         combined: Sentiment,
+        twitter_result: TwitterSentimentResult,
         processing_time: int,
-        twitter_result: Optional[TwitterSentimentResult] = None,
     ) -> str:
         """
         Persist sentiment analysis record to MongoDB.
@@ -1133,29 +1133,10 @@ class SentimentWorkflow(ExceptionManager):
         Returns:
             Inserted record ID.
         """
-        twitter_data: Dict[str, Any] = {}
-        if twitter_result is not None:
-            twitter_data = {
-                "sentiment": twitter_result.sentiment,
-                "confidence": twitter_result.confidence,
-                "overall_score": twitter_result.overall_score,
-                "total_tweets_analyzed": twitter_result.total_tweets_analyzed,
-                "explanation": twitter_result.explanation,
-            }
-
-        reddit_data: Dict[str, Any] = {
-            "sentiment": reddit_result.sentiment,
-            "confidence": reddit_result.confidence,
-            "explanation": reddit_result.explanation,
-            "total_posts_analyzed": reddit_result.total_posts_analyzed,
-            "chunks_analyzed": reddit_result.chunks_analyzed,
-        }
 
         record = SentimentRecord(
-            sentiment_label=combined.sentiment,
-            confidence=combined.confidence,
-            explanation=combined.explanation,
-            reddit_sentiment=reddit_data,
+            combined_sentiment=combined.model_dump(),
+            reddit_sentiment=reddit_result.model_dump(),
             news_sentiment={
                 "summary": news_text[:500] if news_text else "",
                 "source": "rss_feeds",
@@ -1164,7 +1145,7 @@ class SentimentWorkflow(ExceptionManager):
                 "vix": indicators.vix,
                 "fear_greed_index": indicators.fear_greed_index,
             },
-            twitter_sentiment=twitter_data,
+            twitter_sentiment=twitter_result.model_dump(),
             processing_time_ms=processing_time,
         )
 
