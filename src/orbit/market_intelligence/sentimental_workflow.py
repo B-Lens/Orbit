@@ -1030,8 +1030,8 @@ class SentimentWorkflow(ExceptionManager):
             self._last_news_fetch = now
             self._last_reddit_fetch = now
 
-            trend = self.mongodb.calculate_trends(hours=24)
-            signal = self.mongodb.get_trading_signals()
+            # trend = self.mongodb.calculate_trends(hours=24)
+            # signal = self.mongodb.get_trading_signals()
 
             # Expose dominant memory sentiment for Croner
             dominant_memory_sentiment = self.get_dominant_memory_sentiment()
@@ -1056,8 +1056,8 @@ class SentimentWorkflow(ExceptionManager):
                     "total_tweets_analyzed": twitter_result.total_tweets_analyzed,
                     "explanation": twitter_result.explanation,
                 },
-                "trends": trend.dict() if trend else None,
-                "trading_signal": signal,
+                # "trends": trend.dict() if trend else None,
+                # "trading_signal": signal,
                 "processing_time_ms": int(
                     (time.time() - start_time) * 1000
                 ),
