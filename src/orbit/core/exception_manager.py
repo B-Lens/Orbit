@@ -106,13 +106,13 @@ class ExceptionManager(DiscordManager):
             traceback.format_exception(type(exception), exception, exception.__traceback__)
         )
 
-        logger.error(
-            "Found Exception. status: %s, error code: %s, error message: %s\nFull traceback:\n%s",
-            getattr(exception, "status_code", None),
-            getattr(exception, "error_code", None),
-            getattr(exception, "error_message", None),
-            traceback_str,
-        )
+        # logger.error(
+        #     "Found Exception. status: %s, error code: %s, error message: %s\nFull traceback:\n%s",
+        #     getattr(exception, "status_code", None),
+        #     getattr(exception, "error_code", None),
+        #     getattr(exception, "error_message", None),
+        #     traceback_str,
+        # )
 
         exception_message = (
             f"{context_description}: {exception} "
@@ -121,7 +121,8 @@ class ExceptionManager(DiscordManager):
 
         commit_id: str = get_commit_id()
         logger.error(f"Exception in commit {commit_id}")
-        logger.error(exception_message)
+        logger.exception(exception)
+        # logger.error(exception_message)
 
         commit_id = commit_id[:7] if commit_id != "unknown" else commit_id
         self.exception_trigger(

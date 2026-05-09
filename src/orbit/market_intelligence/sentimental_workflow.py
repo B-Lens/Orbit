@@ -80,13 +80,27 @@ logger = logging.getLogger("Orbit")
 # ---------------------------------------------------------------------------
 # Sentiment combination weights
 # ---------------------------------------------------------------------------
-_W_TWITTER: float = 0.35
-_W_NEWS: float = 0.30
-_W_REDDIT: float = 0.20
-_W_HISTORICAL: float = 0.10
-_W_VIX: float = 0.025
-_W_FEAR_GREED: float = 0.025
+weight_dict = {
+    "twitter": 0.35,
+    "news": 0.30,
+    "reddit": 0.20,
+    "historical": 0.10,
+    "vix": 0.025,
+    "fear_greed": 0.025
+}
 
+class Sentiment(BaseModel):
+    """
+    Structured representation of LLM-evaluated news sentiment.
+
+    Attributes:
+        sentiment: Overall market sentiment (BULLISH, BEARISH, NEUTRAL)
+        confidence: Confidence score between 0 and 1
+        explanation: Brief textual explanation of reasoning
+    """
+    sentiment: SentimentType
+    confidence: float = Field(ge=0.0, le=1.0)
+    explanation: str
 
 class NewsSentiment(BaseModel):
     """
@@ -186,10 +200,8 @@ class SentimentWorkflow(ExceptionManager):
 
     def _store_sentiment_memory(
         self,
-        sentiment: str,
-        confidence: float,
-        explanation: str,
-        source: str,
+        combined_result: Sentiment,
+        source: str = "full_analysis",
     ) -> None:
         """Persist a sentiment result to Supermemory (best-effort).
 
@@ -200,6 +212,9 @@ class SentimentWorkflow(ExceptionManager):
             source: Pipeline stage that produced this result.
         """
         try:
+            sentiment = combined_result.sentiment
+            confidence = combined_result.confidence
+            explanation = combined_result.explanation   
             self.supermemory.add_sentiment(
                 sentiment=sentiment,
                 confidence=confidence,
@@ -336,7 +351,7 @@ class SentimentWorkflow(ExceptionManager):
     # LLM SENTIMENT
     # ------------------------------------------------------------------
 
-    def get_market_sentiments(self, prompt: str) -> NewsSentiment:
+    def get_market_sentiments(self, news_text: str) -> NewsSentiment:
         """
         Use LLM to classify overall market sentiment from news articles.
 
@@ -345,19 +360,55 @@ class SentimentWorkflow(ExceptionManager):
         reduces intra-day sentiment flips caused by transient noise.
 
         Args:
-            prompt: Full prompt to send to the LLM.
+            news_text: Formatted text containing recent news articles.
 
         Returns:
             Structured NewsSentiment object.
         """
+
+        prompt = f"""
+                    Analyze overall market sentiment from the following news articles.
+
+                    Focus ONLY on MAJOR RECENT EVENTS that can move:
+                    - Financial markets
+                    - Gold (XAUUSD)
+                    - Crypto markets
+
+                    Prioritize:
+                    - Central bank decisions (Fed, ECB, BOJ, RBI)
+                    - Inflation data (CPI, PPI)
+                    - Interest rate changes
+                    - Geopolitical conflicts / wars
+                    - ETF approvals / regulations
+                    - Large institutional flows
+                    - USD strength / weakness
+                    - Recession signals
+                    - Liquidity changes
+
+                    Decision logic:
+                    - No major event → NEUTRAL
+                    - One strong major event → BULLISH or BEARISH
+                    - Multiple major events same direction → high confidence
+                    - Mixed major events → NEUTRAL
+
+                    Ignore:
+                    - opinions
+                    - technical analysis
+                    - minor commentary
+                    - speculation
+                    - duplicate news
+
+                    News articles:
+                    {news_text}
+                """
 
         RETURN_FORMAT = """\n
             Respond ONLY in valid JSON.
 
             Rules:
             - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - Give the confidence about the sentiment <0.0 - 1.0>
-            - Provide the explanation
+            - Give the confidence about the sentiment <0.0 - 1.0> (set to 0.0 if the news is completely unrelated to financial markets)
+            - Provide the explanation in a concise manner, focusing on the key themes and events that led to the sentiment classification.  Avoid generic statements and aim for specific insights derived from the news articles.
 
             Respond in Json Format:
             {{
@@ -392,15 +443,6 @@ class SentimentWorkflow(ExceptionManager):
             data = extract_json(raw_content)
             result = NewsSentiment(**data)
             self.last_news_sentiment = result
-
-            # Store in Supermemory for future context
-            self._store_sentiment_memory(
-                sentiment=result.sentiment,
-                confidence=result.confidence,
-                explanation=result.explanation,
-                source="news_llm",
-            )
-
             return result
 
         except Exception as e:
@@ -421,7 +463,8 @@ class SentimentWorkflow(ExceptionManager):
         self,
         reddit_result: RedditOverallResult,
         news_sentiment: NewsSentiment,
-        twitter_result: Optional[TwitterSentimentResult] = None,
+        twitter_result: TwitterSentimentResult,
+        indicators: MarketIndicators,
     ) -> str:
         """
         Generate LLM-based reasoning for final market sentiment.
@@ -433,17 +476,36 @@ class SentimentWorkflow(ExceptionManager):
             reddit_result: Overall Reddit sentiment result.
             news_sentiment: Structured news sentiment result.
             twitter_result: Optional Twitter sentiment result.
+            indicators: Market indicators.
 
         Returns:
             Human-readable reasoning string.
         """
         twitter_section = ""
+        reddit_section = ""
+        news_section = ""
+
         if twitter_result:
             twitter_section = f"""
-            Twitter/X Sentiment:
+            Twitter Analysis:
+            (sentiment={twitter_result.sentiment}, confidence={twitter_result.confidence})
             {twitter_result.explanation}
-            (score={twitter_result.overall_score}, confidence={twitter_result.confidence})
             """
+
+        if reddit_result:
+            reddit_section = f"""
+            Reddit Analysis:
+             (sentiment={reddit_result.sentiment}, confidence={reddit_result.confidence})
+             {reddit_result.explanation}
+            """
+
+        if news_sentiment:
+            news_section = f"""
+            News Analysis:
+             (sentiment={news_sentiment.sentiment}, confidence={news_sentiment.confidence})
+             {news_sentiment.explanation}
+            """        
+
 
         memory_context = self._get_memory_context(
             query="recent market sentiment reasoning"
@@ -453,15 +515,43 @@ class SentimentWorkflow(ExceptionManager):
         )
 
         prompt = f"""
-            {memory_section}
-            Provide reasoning for overall market sentiment, taking into account
-            the recent sentiment history above (if any) to ensure continuity:
-            {twitter_section}
-            Reddit Analysis ({reddit_result.total_posts_analyzed} posts):
-            {reddit_result.explanation}
 
-            News Sentiment:
-            {news_sentiment.explanation}
+            You are a senior financial market analyst specializing in sentiment aggregation.
+
+            ## TASK
+            Provide a reasoned overall market/crypto sentiment assessment by blending all available signals according to the specified weights.
+
+            ## RECENT SENTIMENT HISTORY (for continuity)
+            {memory_section if memory_section else "No recent history available."}
+
+            ## BLENDING WEIGHTS
+            {weight_dict}
+
+            ## SIGNAL SOURCES
+            \n\n
+            {twitter_section}
+            \n
+            {reddit_section}
+            \n
+            {news_section}
+            \n 
+            Indicators: {indicators}
+            \n
+
+            Rules:
+            - Blend them using the provided weight dictionary.
+            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way (set to 0.0 if completely unrelated to finanial markets)
+            - explanation: concise synthesis of the key themes driving the sentiment
+            - Focus on crypto / financial markets sentiment, not individual stocks
+
+
+            Respond ONLY with valid JSON (no markdown, no extra text):
+            {{
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "explanation": "<concise synthesis>"
+            }}
             """
 
         try:
@@ -697,85 +787,32 @@ class SentimentWorkflow(ExceptionManager):
             twitter_sentiment: Optional[TwitterSentimentResult] = None
             if has_new_tweets:
                 twitter_sentiment = self.analyze_twitter(new_tweets)
-                # Store Twitter sentiment in Supermemory
-                self._store_sentiment_memory(
-                    sentiment=twitter_sentiment.sentiment,
-                    confidence=twitter_sentiment.confidence,
-                    explanation=twitter_sentiment.explanation,
-                    source="twitter_update",
-                )
+  
 
             # ---- Reddit sentiment (chunk-then-synthesise) ----
             reddit_sentiment: Optional[RedditOverallResult] = None
             if has_new_reddit_posts:
                 reddit_sentiment = self.analyze_reddit(new_reddit_data)
-                # Store Reddit sentiment in Supermemory
-                self._store_sentiment_memory(
-                    sentiment=reddit_sentiment.sentiment,
-                    confidence=reddit_sentiment.confidence,
-                    explanation=reddit_sentiment.explanation,
-                    source="reddit_update",
-                )
 
             # ---- Build news text for LLM call ----
             news_sentiment: Optional[NewsSentiment] = None
             if has_new_articles:
                 news_text = format_for_llm(new_articles, limit=25)
 
-                # Supermemory context is injected inside get_market_sentiments
-                prompt = f"""
-                    Analyze overall market sentiment from the following news articles.
-
-                    Focus ONLY on MAJOR RECENT EVENTS that can move:
-                    - Financial markets
-                    - Gold (XAUUSD)
-                    - Crypto markets
-
-                    Prioritize:
-                    - Central bank decisions (Fed, ECB, BOJ, RBI)
-                    - Inflation data (CPI, PPI)
-                    - Interest rate changes
-                    - Geopolitical conflicts / wars
-                    - ETF approvals / regulations
-                    - Large institutional flows
-                    - USD strength / weakness
-                    - Recession signals
-                    - Liquidity changes
-
-                    Decision logic:
-                    - No major event → NEUTRAL
-                    - One strong major event → BULLISH or BEARISH
-                    - Multiple major events same direction → high confidence
-                    - Mixed major events → NEUTRAL
-
-                    Ignore:
-                    - opinions
-                    - technical analysis
-                    - minor commentary
-                    - speculation
-                    - duplicate news
-
-                    News articles:
-                    {news_text}
-                """
-
-                # get_market_sentiments injects Supermemory context and stores result
-                news_sentiment = self.get_market_sentiments(prompt=prompt)
+                news_sentiment = self.get_market_sentiments(news_text=news_text)
 
             # ---- Blend Twitter + News + Reddit into a single incremental sentiment ----
-            blended_sentiment: Optional[NewsSentiment] = self._blend_incremental_sentiment(
+            blended_sentiment: Optional[Sentiment] = self._blend_incremental_sentiment(
                 twitter_result=twitter_sentiment,
                 news_result=news_sentiment,
                 reddit_result=reddit_sentiment,
             )
 
             # Store blended sentiment in Supermemory
-            if blended_sentiment is not None:
+            if blended_sentiment is not None and blended_sentiment.confidence != 0.0:
                 self._store_sentiment_memory(
-                    sentiment=blended_sentiment.sentiment,
-                    confidence=blended_sentiment.confidence,
-                    explanation=blended_sentiment.explanation,
-                    source="news_update",
+                    combined_result=blended_sentiment,
+                    source="blend_update",
                 )
 
             return {
@@ -829,8 +866,8 @@ class SentimentWorkflow(ExceptionManager):
         self,
         twitter_result: Optional[TwitterSentimentResult],
         news_result: Optional[NewsSentiment],
-        reddit_result: Optional[RedditOverallResult] = None,
-    ) -> Optional[NewsSentiment]:
+        reddit_result: Optional[RedditOverallResult],
+    ) -> Optional[Sentiment]:
         """
         Blend Twitter, News, and Reddit incremental sentiments into a single
         :class:`NewsSentiment` for the Croner drift-detection path.
@@ -845,62 +882,82 @@ class SentimentWorkflow(ExceptionManager):
         """
         if twitter_result is None and news_result is None and reddit_result is None:
             return None
+        
+        twitter_section = ""
+        reddit_section = ""
+        news_section = ""
 
-        direction_map = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
+        if twitter_result:
+            twitter_section = f"""
+            Twitter Analysis:
+            (sentiment={twitter_result.sentiment}, confidence={twitter_result.confidence})
+            {twitter_result.explanation}
+            """
 
-        total_w = 0.0
-        weighted_score = 0.0
-        weighted_conf = 0.0
-        explanations: List[str] = []
+        if reddit_result:
+            reddit_section = f"""
+            Reddit Analysis:
+             (sentiment={reddit_result.sentiment}, confidence={reddit_result.confidence})
+             {reddit_result.explanation}
+            """
 
-        if twitter_result is not None:
-            w = _W_TWITTER
-            d = direction_map.get(twitter_result.sentiment, 0.0)
-            weighted_score += d * twitter_result.confidence * w
-            weighted_conf += twitter_result.confidence * w
-            total_w += w
-            explanations.append(
-                f"Twitter({twitter_result.sentiment}, conf={twitter_result.confidence:.2f}, explanation={twitter_result.explanation})"
+        if news_result:
+            news_section = f"""
+            News Analysis:
+             (sentiment={news_result.sentiment}, confidence={news_result.confidence})
+             {news_result.explanation}
+            """     
+
+        prompt = f"""
+
+            You are a senior financial market analyst specializing in sentiment aggregation.
+
+            ## TASK
+            Provide a reasoned overall market/crypto sentiment assessment by blending all available signals according to the specified weights.
+
+            ## BLENDING WEIGHTS
+            {weight_dict}
+
+            ## SIGNAL SOURCES
+            \n\n
+            {twitter_section}
+            \n
+            {reddit_section}
+            \n
+            {news_section}
+            \n 
+
+            Rules:
+            - Blend them using the provided weight dictionary.
+            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
+            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way (set to 0.0 if completely unrelated to finanial markets)
+            - explanation: concise synthesis of the key themes driving the sentiment
+            - Focus on crypto / financial markets sentiment, not individual stocks
+
+
+            Respond ONLY with valid JSON (no markdown, no extra text):
+            {{
+            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+            "confidence": <float 0.0-1.0>,
+            "explanation": "<concise synthesis>"
+            }}
+            """
+
+        try:
+            content = self.llm.invoke(prompt)
+            content = str(content).strip()
+            blend_sentiment: Dict[str, Any] = extract_json(content)  # validate JSON format
+            return Sentiment(**blend_sentiment)
+        except Exception as e:
+            self.handle_exception(
+                exception=e,
+                context_description="Reasoning generation failed",
             )
-
-        if news_result is not None:
-            w = _W_NEWS
-            d = direction_map.get(news_result.sentiment, 0.0)
-            weighted_score += d * news_result.confidence * w
-            weighted_conf += news_result.confidence * w
-            total_w += w
-            explanations.append(
-                f"News({news_result.sentiment}, conf={news_result.confidence:.2f}, explanation={news_result.explanation})"
+            return Sentiment(
+                sentiment=SentimentType.NEUTRAL,
+                confidence=0.0,
+                explanation="Blended sentiment analysis failed.",
             )
-
-        if reddit_result is not None:
-            w = _W_REDDIT
-            d = direction_map.get(reddit_result.sentiment, 0.0)
-            weighted_score += d * reddit_result.confidence * w
-            weighted_conf += reddit_result.confidence * w
-            total_w += w
-            explanations.append(
-                f"Reddit({reddit_result.sentiment}, conf={reddit_result.confidence:.2f}, explanation={reddit_result.explanation})"
-            )
-
-        if total_w == 0:
-            return None
-
-        score = weighted_score / total_w
-        conf = round(min(1.0, weighted_conf / total_w), 3)
-
-        if score > 0.1:
-            label = SentimentType.BULLISH
-        elif score < -0.1:
-            label = SentimentType.BEARISH
-        else:
-            label = SentimentType.NEUTRAL
-
-        return NewsSentiment(
-            sentiment=label,
-            confidence=conf,
-            explanation=" | ".join(explanations),
-        )
 
     # ------------------------------------------------------------------
     # MAIN WORKFLOW
@@ -928,46 +985,16 @@ class SentimentWorkflow(ExceptionManager):
             reddit_posts_data = self.fetch_reddit()
             reddit_result: RedditOverallResult = self.analyze_reddit(reddit_posts_data)
 
-            # Store Reddit result in Supermemory
-            self._store_sentiment_memory(
-                sentiment=reddit_result.sentiment,
-                confidence=reddit_result.confidence,
-                explanation=reddit_result.explanation,
-                source="reddit_full",
-            )
-
             # ---- Twitter (chunk-then-synthesise) ----
             tweets = self.fetch_twitter()
             twitter_result: TwitterSentimentResult = self.analyze_twitter(tweets)
 
-            # Store Twitter result in Supermemory
-            self._store_sentiment_memory(
-                sentiment=twitter_result.sentiment,
-                confidence=twitter_result.confidence,
-                explanation=twitter_result.explanation,
-                source="twitter_full",
-            )
 
             # ---- News + Indicators ----
             news_text = self.fetch_news(hours_back=4, limit=30)
             indicators = self.fetch_indicators()
 
-            # Supermemory context is injected inside get_market_sentiments
-            PROMPT = f"""
-                Analyze overall market sentiment from the following news.
-
-                Consider:
-                - macroeconomic impact
-                - gold reaction
-                - crypto reaction
-                - risk-on / risk-off tone
-                - central bank signals
-
-                News:
-                {news_text}
-            """
-            # get_market_sentiments injects Supermemory context and stores result
-            news_sentiment = self.get_market_sentiments(prompt=PROMPT)
+            news_sentiment = self.get_market_sentiments(news_text=news_text)
 
             historical_sentiment: List[Dict[str, Any]] = self.mongodb.get_recent_sentiments(hours=24)
             historical_score: float = (
@@ -976,21 +1003,17 @@ class SentimentWorkflow(ExceptionManager):
                 else 0
             )
 
-            reasoning: str = self.get_reasoning(reddit_result, news_sentiment, twitter_result)
-
-            combined_result = self._combine_results(
+            combined_result: Sentiment = self._combine_results(
                 reddit_result,
                 news_sentiment,
-                indicators,
                 twitter_result=twitter_result,
+                indicators=indicators,
                 historical_score=historical_score,
             )
 
             # Store final combined result in Supermemory
             self._store_sentiment_memory(
-                sentiment=combined_result["sentiment"],
-                confidence=combined_result["confidence"],
-                explanation=reasoning,
+                combined_result=combined_result,
                 source="full_analysis",
             )
 
@@ -999,8 +1022,8 @@ class SentimentWorkflow(ExceptionManager):
                 news_text,
                 indicators,
                 combined_result,
+                twitter_result,
                 int((time.time() - start_time) * 1000),
-                twitter_result=twitter_result,
             )
 
             now = get_indian_time()
@@ -1017,8 +1040,7 @@ class SentimentWorkflow(ExceptionManager):
                 "success": True,
                 "timestamp": get_indian_time().isoformat(),
                 "database_id": record_id,
-                **combined_result,
-                "reasoning": reasoning,
+                **combined_result.model_dump(),
                 "dominant_memory_sentiment": dominant_memory_sentiment,
                 "reddit_sentiment": {
                     "sentiment": reddit_result.sentiment,
@@ -1061,10 +1083,10 @@ class SentimentWorkflow(ExceptionManager):
         self,
         reddit_result: RedditOverallResult,
         news_sentiment: NewsSentiment,
+        twitter_result: TwitterSentimentResult,
         indicators: MarketIndicators,
-        twitter_result: Optional[TwitterSentimentResult] = None,
         historical_score: float = 0.0,
-    ) -> Dict[str, Any]:
+    ) -> Sentiment:
         """
         Combine Twitter, Reddit, News, Indicator signals and historical score
         into a final sentiment score.
@@ -1076,90 +1098,26 @@ class SentimentWorkflow(ExceptionManager):
         Args:
             reddit_result: Synthesised Reddit sentiment result.
             news_sentiment: LLM news sentiment result.
+            twitter_result: Aggregated Twitter sentiment.
             indicators: Macro market indicators.
-            twitter_result: Aggregated Twitter sentiment (optional).
             historical_score: Average score from the last 24 h of DB records.
 
         Returns:
-            Dictionary with combined score, label, and confidence.
+            Dictionary with label, confidence and explanation.
         """
-        direction_map = {
-            SentimentType.BULLISH: 1.0,
-            SentimentType.BEARISH: -1.0,
-        }
 
-        # ---- Twitter component ----
-        twitter_component = 0.0
-        twitter_conf_contribution = 0.0
-        if twitter_result is not None:
-            t_dir = (
-                1.0 if twitter_result.sentiment == "BULLISH"
-                else -1.0 if twitter_result.sentiment == "BEARISH"
-                else 0.0
-            )
-            twitter_component = twitter_result.confidence * _W_TWITTER * t_dir
-            twitter_conf_contribution = twitter_result.confidence * _W_TWITTER
-
-        # ---- News component ----
-        news_dir = direction_map.get(news_sentiment.sentiment, 0.0)
-        news_component = news_sentiment.confidence * _W_NEWS * news_dir
-        news_conf_contribution = news_sentiment.confidence * _W_NEWS
-
-        # ---- Reddit component ----
-        reddit_dir = (
-            1.0 if reddit_result.sentiment == "BULLISH"
-            else -1.0 if reddit_result.sentiment == "BEARISH"
-            else 0.0
-        )
-        reddit_component = reddit_result.confidence * _W_REDDIT * reddit_dir
-
-        # ---- Historical component ----
-        historical_component = historical_score * _W_HISTORICAL
-
-        # ---- Indicator components ----
-        fear_greed = indicators.fear_greed_index
-        fear_greed_component: float = 0.0
-        if fear_greed is not None:
-            direction = 1 if fear_greed < 50 else -1
-            fear_greed_component = fear_greed * _W_FEAR_GREED * direction
-
-        vix_component = (indicators.vix or 0) * _W_VIX * -1
-
-        combined_score = (
-            twitter_component
-            + news_component
-            + reddit_component
-            + historical_component
-            + vix_component
-            + fear_greed_component
-        )
-
-        if combined_score > 0.2:
-            label = "BULLISH"
-        elif combined_score < -0.2:
-            label = "BEARISH"
-        else:
-            label = "NEUTRAL"
-
-        confidence = round(
-            twitter_conf_contribution + news_conf_contribution,
-            2,
-        )
-
-        return {
-            "score": round(combined_score, 3),
-            "sentiment": label,
-            "confidence": min(1.0, confidence),
-        }
+        reasoning: str = self.get_reasoning(reddit_result, news_sentiment, twitter_result, indicators)
+        combined_data: Dict[str, Any] = extract_json(reasoning)
+        return Sentiment(**combined_data)
 
     def _save_to_database(
         self,
         reddit_result: RedditOverallResult,
         news_text: str,
         indicators: MarketIndicators,
-        combined: Dict[str, Any],
+        combined: Sentiment,
+        twitter_result: TwitterSentimentResult,
         processing_time: int,
-        twitter_result: Optional[TwitterSentimentResult] = None,
     ) -> str:
         """
         Persist sentiment analysis record to MongoDB.
@@ -1175,29 +1133,10 @@ class SentimentWorkflow(ExceptionManager):
         Returns:
             Inserted record ID.
         """
-        twitter_data: Dict[str, Any] = {}
-        if twitter_result is not None:
-            twitter_data = {
-                "sentiment": twitter_result.sentiment,
-                "confidence": twitter_result.confidence,
-                "overall_score": twitter_result.overall_score,
-                "total_tweets_analyzed": twitter_result.total_tweets_analyzed,
-                "explanation": twitter_result.explanation,
-            }
-
-        reddit_data: Dict[str, Any] = {
-            "sentiment": reddit_result.sentiment,
-            "confidence": reddit_result.confidence,
-            "explanation": reddit_result.explanation,
-            "total_posts_analyzed": reddit_result.total_posts_analyzed,
-            "chunks_analyzed": reddit_result.chunks_analyzed,
-        }
 
         record = SentimentRecord(
-            overall_score=combined["score"],
-            sentiment_label=combined["sentiment"],
-            confidence=combined["confidence"],
-            reddit_sentiment=reddit_data,
+            combined_sentiment=combined.model_dump(),
+            reddit_sentiment=reddit_result.model_dump(),
             news_sentiment={
                 "summary": news_text[:500] if news_text else "",
                 "source": "rss_feeds",
@@ -1206,7 +1145,7 @@ class SentimentWorkflow(ExceptionManager):
                 "vix": indicators.vix,
                 "fear_greed_index": indicators.fear_greed_index,
             },
-            twitter_sentiment=twitter_data,
+            twitter_sentiment=twitter_result.model_dump(),
             processing_time_ms=processing_time,
         )
 
