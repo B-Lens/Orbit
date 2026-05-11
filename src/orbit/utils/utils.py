@@ -1,4 +1,6 @@
 import os
+import re
+import json
 import numpy as np
 import requests
 from scipy.signal import argrelextrema
@@ -30,6 +32,11 @@ def get_indian_time() -> datetime.datetime:
     india_time = utc_now.replace(tzinfo=pytz.utc).astimezone(india_timezone)
     return india_time
 
+def extract_json(text: str) -> dict:
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError("No JSON found in LLM response")
+    return json.loads(match.group(0))
 
 def get_commit_id() -> str:
     try:

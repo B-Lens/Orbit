@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Literal, Optional
 from zoneinfo import ZoneInfo
 
+
 from orbit.core.exception_manager import ExceptionManager
 from orbit.market_intelligence.clients.reddit_client import RedditClient
 from orbit.market_intelligence.clients.twitter_client import TwitterClient
@@ -54,7 +55,6 @@ from orbit.market_intelligence.clients.rss_client import (
 from orbit.market_intelligence.analysis.reddit_sentiment import (
     WeightedRedditAnalyzer,
     RedditOverallResult,
-    extract_json,
 )
 from orbit.market_intelligence.analysis.twitter_sentiment import (
     TwitterSentimentAnalyzer,
@@ -72,7 +72,7 @@ from orbit.market_intelligence.utils.utils import (
     MarketIndicators,
 )
 from orbit.market_intelligence.supermemory import SupermemoryClient
-from orbit.utils.utils import require_env, get_indian_time, to_ist
+from orbit.utils.utils import extract_json, get_indian_time, to_ist
 
 
 logger = logging.getLogger("Orbit")
@@ -555,7 +555,7 @@ class SentimentWorkflow(ExceptionManager):
             """
 
         try:
-            content = self.llm.invoke(prompt)
+            content = self.llm.invoke(prompt, use_groq=True)
             return str(content).strip()
         except Exception as e:
             logger.exception("Reasoning generation failed")
@@ -944,14 +944,14 @@ class SentimentWorkflow(ExceptionManager):
             """
 
         try:
-            content = self.llm.invoke(prompt)
+            content = self.llm.invoke(prompt, use_groq=True)
             content = str(content).strip()
             blend_sentiment: Dict[str, Any] = extract_json(content)  # validate JSON format
             return Sentiment(**blend_sentiment)
         except Exception as e:
             self.handle_exception(
                 exception=e,
-                context_description="Reasoning generation failed",
+                context_description="Blending incremental sentiment failed",
             )
             return Sentiment(
                 sentiment=SentimentType.NEUTRAL,

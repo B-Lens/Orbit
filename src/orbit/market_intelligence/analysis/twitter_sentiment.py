@@ -14,7 +14,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-from orbit.market_intelligence.analysis.reddit_sentiment import extract_json
+from orbit.utils.utils import extract_json
 from orbit.market_intelligence.llm.llm_endpoint import LLM
 
 logger = logging.getLogger("Orbit")

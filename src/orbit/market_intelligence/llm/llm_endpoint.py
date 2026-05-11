@@ -87,13 +87,33 @@ class LLM(ExceptionManager):
     # invoke
     # -----------------------------------------------------------------------
 
-    def invoke(self, prompt: str) -> Optional[str]:
+    def invoke(self, prompt: str, use_groq: bool = False) -> Optional[str]:
 
         assert self.groq_llm or self.openrouter_llm, "No LLM backend available"
     
         prompt_token_length = len(prompt.split())
         logger.info(f"Invoking LLM token length: {prompt_token_length}")
         self._track_token_usage(prompt_token_length)
+
+        # ----------------------------------------------------------
+        # 1. Use GROQ as primary only if explicitly requested
+        # ----------------------------------------------------------
+        if use_groq and self.groq_llm:
+            try:
+                response = self.groq_llm.invoke(prompt)
+                return response.content if hasattr(response, "content") else response
+
+            except Exception as e:
+                logger.exception("Groq failed, falling back to OpenRouter")
+
+                if self.openrouter_llm:
+                    try:
+                        return self.openrouter_llm.invoke(prompt)
+                    except Exception as fallback_error:
+                        self.handle_exception(
+                            fallback_error,
+                            context_description="OpenRouter fallback failure",
+                        )
 
         # ----------------------------------------------------------
         # 1. Try OpenRouter first
@@ -113,7 +133,6 @@ class LLM(ExceptionManager):
                 response = self.groq_llm.invoke(prompt)
                 return response.content
             except Exception as e:
-                logger.error(f"Groq fallback failed : {e}")
                 self.handle_exception(
                     e,
                     context_description="Groq LLM fallback failure",
