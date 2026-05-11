@@ -7,6 +7,8 @@ import numpy as np
 from datetime import datetime
 from pydantic import BaseModel, Field
 
+from orbit.utils.utils import extract_json
+
 logger = logging.getLogger("Orbit")
 
 # Maximum characters per post snippet when building the combined prompt
@@ -31,13 +33,6 @@ class RedditOverallResult(BaseModel):
     explanation: str
     total_posts_analyzed: int
     chunks_analyzed: int
-
-
-def extract_json(text: str) -> dict:
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        raise ValueError("No JSON found in LLM response")
-    return json.loads(match.group(0))
 
 
 def _build_post_snippet(post: Dict[str, Any]) -> str:
