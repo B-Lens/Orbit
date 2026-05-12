@@ -11,7 +11,7 @@ chunk summaries.
 """
 
 import logging
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 from orbit.utils.utils import extract_json
@@ -28,19 +28,19 @@ logger = logging.getLogger("Orbit")
 class ChunkSentimentSummary(BaseModel):
     """Intermediate sentiment summary for one chunk of tweets."""
 
-    sentiment: Literal["BULLISH", "BEARISH", "NEUTRAL"] = "NEUTRAL"
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    reasoning: str = "LLM output could not be parsed into a sentiment."
+    sentiment: str  # BULLISH | BEARISH | NEUTRAL
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str
 
 
 class TwitterSentimentResult(BaseModel):
     """Final aggregated sentiment across all analysed tweets."""
 
-    sentiment: Literal["BULLISH", "BEARISH", "NEUTRAL"] = "NEUTRAL"
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    overall_score: float = Field(default=0.0, ge=-1.0, le=1.0)
+    sentiment: str  # BULLISH | BEARISH | NEUTRAL
+    confidence: float = Field(ge=0.0, le=1.0)
+    overall_score: float  # -1.0 (bearish) … +1.0 (bullish)
     total_tweets_analyzed: int
-    explanation: str = "Failed to parse overall sentiment response"
+    explanation: str
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ class TwitterSentimentAnalyzer:
         if not tweets:
             return ChunkSentimentSummary(
                 sentiment="NEUTRAL",
-                confidence=0.0,
+                confidence=0.3,
                 reasoning="Empty chunk.",
             )
 
@@ -190,7 +190,11 @@ class TwitterSentimentAnalyzer:
                     chunk_index,
                     raw,
                 )
-                return ChunkSentimentSummary()
+                return ChunkSentimentSummary(
+                    sentiment="NEUTRAL",
+                    confidence=0.0,
+                    reasoning="LLM output could not be parsed into a sentiment.",
+                )
 
             sentiment = str(data.get("sentiment", "NEUTRAL")).upper()
             confidence = float(data.get("confidence", 0.5))
@@ -207,7 +211,7 @@ class TwitterSentimentAnalyzer:
             )
             return ChunkSentimentSummary(
                 sentiment="NEUTRAL",
-                confidence=0.0,
+                confidence=0.3,
                 reasoning="LLM call failed for this chunk.",
             )
 
@@ -235,7 +239,7 @@ class TwitterSentimentAnalyzer:
         if not summaries:
             return TwitterSentimentResult(
                 sentiment="NEUTRAL",
-                confidence=0.0,
+                confidence=0.3,
                 overall_score=0.0,
                 total_tweets_analyzed=total_tweets,
                 explanation="No tweets available for analysis.",
@@ -310,7 +314,7 @@ class TwitterSentimentAnalyzer:
                 )
 
             sentiment = str(data.get("sentiment", "NEUTRAL")).upper()
-            confidence = float(data.get("confidence", 0.0))
+            confidence = float(data.get("confidence", 0.5))
             reasoning = str(data.get("reasoning") or data.get("explanation", ""))
             score = self._sentiment_to_score(sentiment, confidence)
 
