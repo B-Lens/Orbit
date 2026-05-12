@@ -49,6 +49,7 @@ class OpenRouterClient:
                     messages=[{"role": "user", "content": prompt}],
                 )
             except Exception as e:
+                logger.warning(f"LLM Inference failed on attempt {attempt}")
                 if attempt == MAX_RETRIES + 1:
                     return None
                 continue
@@ -66,7 +67,11 @@ class OpenRouterClient:
 
             # Max attempts reached; use the response even though it came from retry model
             logger.info("Max retries reached; using response from %s", RETRY_MODEL)
-            return self._extract_content(response)
+            extracted_response = self._extract_content(response)
+            if extracted_response is None:
+                logger.warning("Extracted Response is None")
+                continue
+            return extracted_response
 
         # Should never be reached, but guard
         return None
