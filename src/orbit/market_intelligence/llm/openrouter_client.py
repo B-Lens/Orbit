@@ -1,17 +1,24 @@
-import logging
 import os
+import logging
 from typing import Optional
 from openai import OpenAI
 
 logger = logging.getLogger("Orbit")
 
 OPENROUTER_MODEL = "openrouter/free"
+RETRY_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428:free"
+MAX_RETRIES = 3
 
 class OpenRouterClient:
     """Thin wrapper around the OpenRouter chat-completions endpoint via the OpenAI SDK.
 
     Mimics the minimal interface used by the rest of the codebase:
         client.invoke(prompt: str) -> str | None
+
+    If the response is routed to ``RETRY_MODEL``, the client will re-call the
+    LLM up to ``MAX_RETRIES`` times hoping to be routed to a different model.
+    If after the retries the model is still the same, the last response is
+    returned.
     """
 
     def __init__(
@@ -25,7 +32,7 @@ class OpenRouterClient:
         self.timeout = timeout
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=self.api_key
+            api_key=self.api_key,
         )
 
     # ------------------------------------------------------------------
@@ -33,15 +40,55 @@ class OpenRouterClient:
     # ------------------------------------------------------------------
 
     def invoke(self, prompt: str) -> Optional[str]:
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-            )
+        """Send a prompt and return text content, with retry logic for unwanted models."""
+        # We start with attempt 1 and go up to MAX_RETRIES + 1 (the final fallback).
+        for attempt in range(1, MAX_RETRIES + 2):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            except Exception as e:
+                logger.warning(f"LLM Inference failed on attempt {attempt}")
+                if attempt == MAX_RETRIES + 1:
+                    return None
+                continue
 
-            msg = response.choices[0].message
-            actual_model = getattr(response, "model", "unknown")
-            logger.info(f"OpenRouter routed to model: {actual_model}")
+            # Determine the actual model used for this request
+            routed_model = getattr(response, "model", None)
+            logger.info("OpenRouter routed to model: %s (attempt %d)", routed_model, attempt)
+
+            # If NOT the retry model, extract and return content immediately
+            if routed_model == RETRY_MODEL:
+                logger.info(
+                    "Response from %s – retrying (%d/%d)", RETRY_MODEL, attempt, MAX_RETRIES
+                )
+                continue
+
+            # Max attempts reached; use the response even though it came from retry model
+            logger.info("Max retries reached; using response from %s", RETRY_MODEL)
+            extracted_response = self._extract_content(response)
+            if extracted_response is None:
+                logger.warning("Extracted Response is None")
+                continue
+            return extracted_response
+
+        # Should never be reached, but guard
+        return None
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _extract_content(self, response) -> Optional[str]:
+        """Safely extract text content from an OpenAI chat response."""
+        try:
+            choices = response.choices
+            if not choices:
+                return None
+            msg = choices[0].message
+            if msg is None:
+                return None
 
             # Handle text
             if isinstance(msg.content, str) and msg.content.strip():
@@ -49,6 +96,7 @@ class OpenRouterClient:
 
             # Handle structured content
             if isinstance(msg.content, list):
+                logger.warning("Received List message instead of raw text")
                 text = "".join(
                     part.get("text", "") for part in msg.content if part.get("type") == "text"
                 )
@@ -60,11 +108,11 @@ class OpenRouterClient:
                 logger.warning("Received tool call instead of text")
                 return None
 
-            logger.warning(f"Empty response received: {response}")
+            logger.warning("Empty or unsupported content in response")
             return None
-        except Exception as e:
-            logger.error(f"OpenRouter error: {e}")
-            raise
+        except (AttributeError, IndexError, TypeError) as e:
+            logger.exception("Failed to extract content: %s", e)
+            return None
 
     # ------------------------------------------------------------------
     # Compatibility shim so callers can treat this like a LangChain model
