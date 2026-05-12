@@ -111,9 +111,9 @@ class NewsSentiment(BaseModel):
         confidence: Confidence score between 0 and 1
         explanation: Brief textual explanation of reasoning
     """
-    sentiment: SentimentType
-    confidence: float = Field(ge=0.0, le=1.0)
-    explanation: str
+    sentiment: Literal["BULLISH", "BEARISH", "NEUTRAL"] = "NEUTRAL"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    explanation: str = "Failed to parse sentiment response"
 
 
 class SentimentWorkflow(ExceptionManager):
@@ -441,19 +441,21 @@ class SentimentWorkflow(ExceptionManager):
             raw_content = str(raw_content)
             logger.info(f"LLM raw output for news sentiment: {raw_content}")
             data = extract_json(raw_content)
+            if data is None:
+                logger.warning("LLM output for news sentiment could not be parsed as JSON.")
+                return NewsSentiment()
             result = NewsSentiment(**data)
             self.last_news_sentiment = result
             return result
 
         except Exception as e:
-            logger.exception("News sentiment analysis failed")
             self.handle_exception(
                 exception=e,
                 context_description="News sentiment analysis failed",
             )
             fallback = NewsSentiment(
-                sentiment=SentimentType.NEUTRAL,
-                confidence=0.3,
+                sentiment="NEUTRAL",
+                confidence=0.0,
                 explanation="Analysis failed",
             )
             self.last_news_sentiment = fallback
@@ -558,7 +560,6 @@ class SentimentWorkflow(ExceptionManager):
             content = self.llm.invoke(prompt, use_groq=True)
             return str(content).strip()
         except Exception as e:
-            logger.exception("Reasoning generation failed")
             self.handle_exception(
                 exception=e,
                 context_description="Reasoning generation failed",
