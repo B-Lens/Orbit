@@ -49,7 +49,6 @@ class OpenRouterClient:
                     messages=[{"role": "user", "content": prompt}],
                 )
             except Exception as e:
-                logger.error("OpenRouter call error (attempt %d): %s", attempt, e)
                 if attempt == MAX_RETRIES + 1:
                     return None
                 continue
@@ -59,11 +58,7 @@ class OpenRouterClient:
             logger.info("OpenRouter routed to model: %s (attempt %d)", routed_model, attempt)
 
             # If NOT the retry model, extract and return content immediately
-            if routed_model != RETRY_MODEL:
-                return self._extract_content(response)
-
-            # Retry model served this response
-            if attempt <= MAX_RETRIES:
+            if routed_model == RETRY_MODEL:
                 logger.info(
                     "Response from %s – retrying (%d/%d)", RETRY_MODEL, attempt, MAX_RETRIES
                 )
@@ -96,6 +91,7 @@ class OpenRouterClient:
 
             # Handle structured content
             if isinstance(msg.content, list):
+                logger.warning("Received List message instead of raw text")
                 text = "".join(
                     part.get("text", "") for part in msg.content if part.get("type") == "text"
                 )
@@ -110,7 +106,7 @@ class OpenRouterClient:
             logger.warning("Empty or unsupported content in response")
             return None
         except (AttributeError, IndexError, TypeError) as e:
-            logger.error("Failed to extract content: %s", e)
+            logger.exception("Failed to extract content: %s", e)
             return None
 
     # ------------------------------------------------------------------
