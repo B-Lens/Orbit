@@ -256,7 +256,7 @@ class WeightedRedditAnalyzer:
             logger.info(f"Reddit synthesis LLM raw output: {raw}")
             data = extract_json(str(raw))
             if data is None:
-                return RedditOverallResult()
+                return RedditOverallResult(sentiment="NEUTRAL", confidence=0.0, explanation="LLM output could not be parsed into overall sentiment.", total_posts_analyzed=total_posts, chunks_analyzed=len(summaries))
             return RedditOverallResult(
                 **data,
                 total_posts_analyzed=total_posts,

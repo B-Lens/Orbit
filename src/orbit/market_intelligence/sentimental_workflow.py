@@ -449,14 +449,13 @@ class SentimentWorkflow(ExceptionManager):
             return result
 
         except Exception as e:
-            logger.exception("News sentiment analysis failed")
             self.handle_exception(
                 exception=e,
                 context_description="News sentiment analysis failed",
             )
             fallback = NewsSentiment(
-                sentiment=SentimentType.NEUTRAL,
-                confidence=0.3,
+                sentiment="NEUTRAL",
+                confidence=0.0,
                 explanation="Analysis failed",
             )
             self.last_news_sentiment = fallback
@@ -561,7 +560,6 @@ class SentimentWorkflow(ExceptionManager):
             content = self.llm.invoke(prompt, use_groq=True)
             return str(content).strip()
         except Exception as e:
-            logger.exception("Reasoning generation failed")
             self.handle_exception(
                 exception=e,
                 context_description="Reasoning generation failed",
