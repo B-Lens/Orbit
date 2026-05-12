@@ -2,7 +2,7 @@
 import json
 import logging
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 import numpy as np
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -20,17 +20,16 @@ _CHUNK_CHAR_LIMIT = 12_000
 
 
 class RedditSentimentResult(BaseModel):
-    """Overall sentiment result for a batch/chunk of Reddit posts."""
-    sentiment: str          # BULLISH | BEARISH | NEUTRAL
-    confidence: float = Field(ge=0.0, le=1.0)
-    explanation: str
+    sentiment: Literal["BULLISH", "BEARISH", "NEUTRAL"] = "NEUTRAL"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    explanation: str = "Failed to parse sentiment response"
 
 
 class RedditOverallResult(BaseModel):
     """Final synthesised Reddit sentiment across all chunks."""
-    sentiment: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    explanation: str
+    sentiment: Literal["BULLISH", "BEARISH", "NEUTRAL"] = "NEUTRAL"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    explanation: str = "Failed to parse overall sentiment response"
     total_posts_analyzed: int
     chunks_analyzed: int
 
@@ -192,12 +191,15 @@ class WeightedRedditAnalyzer:
             raw = self.llm.invoke(prompt)
             logger.info(f"Reddit chunk {chunk_id} LLM raw output: {raw}")
             data = extract_json(str(raw))
+            if data is None:
+                logger.warning(f"Reddit chunk {chunk_id} LLM output could not be parsed as JSON.")
+                return RedditSentimentResult()
             return RedditSentimentResult(**data)
         except Exception as e:
             logger.exception(f"Reddit chunk {chunk_id} LLM analysis failed: {e}")
             return RedditSentimentResult(
                 sentiment="NEUTRAL",
-                confidence=0.3,
+                confidence=0.0,
                 explanation="Chunk analysis failed — using neutral fallback.",
             )
 
@@ -253,6 +255,8 @@ class WeightedRedditAnalyzer:
             raw = self.llm.invoke(prompt)
             logger.info(f"Reddit synthesis LLM raw output: {raw}")
             data = extract_json(str(raw))
+            if data is None:
+                return RedditOverallResult()
             return RedditOverallResult(
                 **data,
                 total_posts_analyzed=total_posts,
