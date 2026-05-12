@@ -73,6 +73,7 @@ from orbit.market_intelligence.utils.utils import (
 )
 from orbit.market_intelligence.supermemory import SupermemoryClient
 from orbit.utils.utils import extract_json, get_indian_time, to_ist
+from orbit.core.redis_manager import RedisManager
 
 
 logger = logging.getLogger("Orbit")
@@ -151,7 +152,12 @@ class SentimentWorkflow(ExceptionManager):
     - finance: Yahoo Finance Gold (GC=F), Yahoo Finance USD Index (DX-Y.NYB)
     """
 
-    def __init__(self, llm: LLM, supermemory: Optional[SupermemoryClient] = None) -> None:
+    def __init__(
+        self,
+        llm: LLM,
+        supermemory: Optional[SupermemoryClient] = None,
+        redis_manager: Optional[RedisManager] = None,
+    ) -> None:
         """
         Initialize workflow dependencies.
 
@@ -160,6 +166,9 @@ class SentimentWorkflow(ExceptionManager):
             supermemory: Optional pre-built :class:`SupermemoryClient`.  When
                 ``None`` a new client is created (it will self-disable if
                 ``SUPERMEMORY_API_KEY`` is not set).
+            redis_manager: Optional pre-built :class:`RedisManager`.  When
+                ``None`` a default connection is created; used to persist LLM
+                failure counts per source (twitter, reddit, news).
         """
         self.llm: LLM = llm
         self.reddit_client: RedditClient = RedditClient()
@@ -168,6 +177,11 @@ class SentimentWorkflow(ExceptionManager):
         self.twitter_analyzer: TwitterSentimentAnalyzer = TwitterSentimentAnalyzer(llm)
         self.mongodb: MongoDBManager = MongoDBManager()
         self.supermemory: SupermemoryClient = supermemory or SupermemoryClient()
+
+        if redis_manager is not None:
+            self.redis_manager: RedisManager = redis_manager
+        else:
+            self.redis_manager: RedisManager = RedisManager()
 
         # Timestamps managed here as in-process fallback.
         # Croner is responsible for persisting these to Redis across restarts.
@@ -237,6 +251,18 @@ class SentimentWorkflow(ExceptionManager):
             return None
 
     # ------------------------------------------------------------------
+    # LLM FAILURE TRACKING (per source)
+    # ------------------------------------------------------------------
+
+    def _increment_llm_fail(self, source: str) -> None:
+        """Increment the LLM failure counter for *source* (twitter / reddit / news)."""
+        try:
+            cnt = self.redis_manager.increment_llm_fail_count(source)
+            logger.warning(f"LLM fail count for {source} incremented to {cnt}")
+        except Exception as e:
+            logger.exception(f"Failed to increment LLM fail count for {source}: {e}")
+
+    # ------------------------------------------------------------------
     # FETCH STEPS
     # ------------------------------------------------------------------
 
@@ -277,14 +303,18 @@ class SentimentWorkflow(ExceptionManager):
         Returns:
             :class:`RedditOverallResult` with final synthesised sentiment.
         """
-        result = self.reddit_analyzer.analyze(reddit_posts_data)
-        logger.info(
-            f"Reddit sentiment: {result.sentiment} "
-            f"(confidence={result.confidence}, "
-            f"posts={result.total_posts_analyzed}, "
-            f"chunks={result.chunks_analyzed})"
-        )
-        return result
+        try:
+            result = self.reddit_analyzer.analyze(reddit_posts_data)
+            logger.info(
+                f"Reddit sentiment: {result.sentiment} "
+                f"(confidence={result.confidence}, "
+                f"posts={result.total_posts_analyzed}, "
+                f"chunks={result.chunks_analyzed})"
+            )
+            return result
+        except Exception as e:
+            self._increment_llm_fail("reddit")
+            raise
 
     def fetch_twitter(self) -> List[Dict[str, Any]]:
         """
@@ -309,13 +339,17 @@ class SentimentWorkflow(ExceptionManager):
         Returns:
             :class:`TwitterSentimentResult` with final synthesised sentiment.
         """
-        summaries: List[ChunkSentimentSummary] = self.twitter_analyzer.analyze_tweets(tweets)
-        result = self.twitter_analyzer.aggregate(summaries, total_tweets=len(tweets))
-        logger.info(
-            f"Twitter sentiment: {result.sentiment} "
-            f"(confidence={result.confidence}, score={result.overall_score})"
-        )
-        return result
+        try:
+            summaries: List[ChunkSentimentSummary] = self.twitter_analyzer.analyze_tweets(tweets)
+            result = self.twitter_analyzer.aggregate(summaries, total_tweets=len(tweets))
+            logger.info(
+                f"Twitter sentiment: {result.sentiment} "
+                f"(confidence={result.confidence}, score={result.overall_score})"
+            )
+            return result
+        except Exception as e:
+            self._increment_llm_fail("twitter")
+            raise
 
     def fetch_news(self, hours_back: int = 4, limit: int = 30) -> str:
         """
@@ -453,6 +487,7 @@ class SentimentWorkflow(ExceptionManager):
                 exception=e,
                 context_description="News sentiment analysis failed",
             )
+            self._increment_llm_fail("news")
             fallback = NewsSentiment(
                 sentiment="NEUTRAL",
                 confidence=0.0,

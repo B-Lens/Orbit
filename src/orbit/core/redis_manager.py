@@ -26,6 +26,10 @@ Key schema
 ``sentiment:last_twitter_fetch``    – ISO-8601 last Twitter fetch time
 ``sentiment:drift_count``           – integer count of sentiment drifts
 ``sentiment:drift_window_start``    – ISO-8601 start of the 24-hour drift window
+``sentiment:llm_fail:twitter``      – integer count of LLM failures (Twitter)
+``sentiment:llm_fail:reddit``       – integer count of LLM failures (Reddit)
+``sentiment:llm_fail:news``         – integer count of LLM failures (News)
+``sentiment:llm_fail_last_reset``   – ISO-8601 timestamp of last 24‑h reset
 """
 
 import json
@@ -52,12 +56,18 @@ REDIS_KEY_LAST_TWITTER_FETCH: str = "sentiment:last_twitter_fetch"
 REDIS_KEY_DRIFT_COUNT: str = "sentiment:drift_count"
 REDIS_KEY_DRIFT_WINDOW_START: str = "sentiment:drift_window_start"
 
+REDIS_KEY_LLM_FAIL_PREFIX: str = "sentiment:llm_fail:"
+REDIS_KEY_LLM_FAIL_LAST_RESET: str = "sentiment:llm_fail_last_reset"
+
 # TTL for timestamp keys (48 hours)
 _TIMESTAMP_TTL: int = 172_800
 
 # TTL for drift keys (25 hours — slightly beyond the 24-hour window so Redis
 # never evicts them before the cron has a chance to read and reset them)
 _DRIFT_TTL: int = 90_000
+
+# TTL for LLM fail keys (25 hours, same reasoning as drift keys)
+_LLM_FAIL_TTL: int = 90_000
 
 
 def _trade_key(trade_id: str) -> str:
@@ -363,3 +373,60 @@ class RedisManager:
             self.redis_client.delete(REDIS_KEY_DRIFT_WINDOW_START)
         except Exception as e:
             logger.exception(f"[Redis] reset_drift_count failed: {e}")
+
+    # ------------------------------------------------------------------
+    # LLM failure tracking (per source: twitter / reddit / news)
+    # ------------------------------------------------------------------
+
+    def _llm_fail_key(self, source: str) -> str:
+        """Build the Redis key for the given LLM source."""
+        return f"{REDIS_KEY_LLM_FAIL_PREFIX}{source}"
+
+    def get_llm_fail_count(self, source: str) -> int:
+        """Return the current LLM failure count for *source*.
+
+        *source* must be one of ``"twitter"``, ``"reddit"``, ``"news"``.
+        """
+        raw = self.redis_get(self._llm_fail_key(source))
+        return int(raw) if raw is not None else 0
+
+    def increment_llm_fail_count(self, source: str) -> int:
+        """Increment the LLM failure counter for *source* and return the new value.
+
+        The key is created automatically if it does not exist, and its TTL is
+        set to ``_LLM_FAIL_TTL`` on every access so the counters survive for at
+        least 25 hours even without a reset.
+        """
+        try:
+            key = self._llm_fail_key(source)
+            new_count = self.redis_client.incr(key)
+            self.redis_client.expire(key, _LLM_FAIL_TTL)
+            return int(new_count)
+        except Exception as e:
+            logger.exception(f"[Redis] increment_llm_fail_count({source}) failed: {e}")
+            return 0
+
+    def reset_llm_fail_counts(self) -> None:
+        """Delete all three LLM failure counters (twitter, reddit, news)."""
+        try:
+            for source in ("twitter", "reddit", "news"):
+                self.redis_client.delete(self._llm_fail_key(source))
+        except Exception as e:
+            logger.exception(f"[Redis] reset_llm_fail_counts failed: {e}")
+
+    def get_llm_fail_last_reset(self) -> Optional[datetime]:
+        """Return the datetime of the last 24‑h LLM fail reset, or ``None``."""
+        raw = self.redis_get(REDIS_KEY_LLM_FAIL_LAST_RESET)
+        if raw:
+            try:
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                return None
+        return None
+
+    def set_llm_fail_last_reset(self, iso_dt: str) -> None:
+        """Record *iso_dt* as the last LLM fail reset time with a 25‑h TTL."""
+        try:
+            self.redis_setex(REDIS_KEY_LLM_FAIL_LAST_RESET, _LLM_FAIL_TTL, iso_dt)
+        except Exception as e:
+            logger.exception(f"[Redis] set_llm_fail_last_reset failed: {e}")

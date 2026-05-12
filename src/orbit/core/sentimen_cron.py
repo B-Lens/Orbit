@@ -25,6 +25,12 @@ of the last N sentiment results).  A drift is suppressed when:
 
 This prevents a single noisy news article or tweet batch from flipping the
 cached sentiment when the broader recent history disagrees.
+
+LLM failure tracking
+--------------------
+The Croner also tracks cumulative LLM failure counts separately for Twitter,
+Reddit, and News sources.  Every 24 hours it sends a Discord alert with the
+per-source counts and resets the counters to 0.
 """
 
 import time
@@ -58,6 +64,9 @@ DRIFT_WINDOW_SECONDS: int = 86_400  # 24 hours
 # When a new signal contradicts memory but its confidence is below this value
 # the drift is suppressed.
 MEMORY_OVERRIDE_THRESHOLD: float = 0.75
+
+# How long before the LLM failure counters are reset and an alert is sent (seconds)
+LLM_FAIL_WINDOW_SECONDS: int = 86_400  # 24 hours
 
 
 class Croner(ExceptionManager, RedisManager):
@@ -214,6 +223,61 @@ class Croner(ExceptionManager, RedisManager):
             f"threshold ({self.memory_override_threshold})."
         )
         return True
+
+    # ------------------------------------------------------------------
+    # LLM FAILURE WINDOW MANAGEMENT
+    # ------------------------------------------------------------------
+
+    def _check_and_reset_llm_fail_window(self) -> None:
+        """Check whether 24 hours have passed since the last LLM fail reset.
+
+        If the window has elapsed, send a Discord alert with the per-source
+        cumulative fail counts and then reset all three counters to 0.
+        """
+        last_reset: Optional[datetime] = self.get_llm_fail_last_reset()
+        if last_reset is not None:
+            if last_reset.tzinfo is None:
+                last_reset = last_reset.replace(tzinfo=timezone.utc)
+            elapsed: timedelta = datetime.now(timezone.utc) - last_reset
+            if elapsed.total_seconds() < LLM_FAIL_WINDOW_SECONDS:
+                return
+
+        twitter_fails: int = self.get_llm_fail_count("twitter")
+        reddit_fails: int = self.get_llm_fail_count("reddit")
+        news_fails: int = self.get_llm_fail_count("news")
+        total_fails: int = twitter_fails + reddit_fails + news_fails
+
+        window_start_iso: Optional[str] = None
+        if last_reset is not None:
+            window_start_iso = last_reset.isoformat()
+        window_end_iso: str = datetime.now(timezone.utc).isoformat()
+
+        logger.info(
+            f"[LLMFailWindow] 24-hour window elapsed. "
+            f"Total LLM fails: {total_fails} "
+            f"(Twitter: {twitter_fails}, Reddit: {reddit_fails}, News: {news_fails})."
+        )
+
+        self.send_alerts(
+            data=(
+                f"LLM fail count window reset — "
+                f"Total fails in the last 24 hours: {total_fails}"
+            ),
+            description=(
+                f"Window: {window_start_iso or 'N/A'} → {window_end_iso}"
+            ),
+            fields={
+                "twitter_fails": twitter_fails,
+                "reddit_fails": reddit_fails,
+                "news_fails": news_fails,
+                "total_fails": total_fails,
+            },
+        )
+
+        # Reset all three counters and record the fresh window start
+        self.reset_llm_fail_counts()
+        now_iso: str = datetime.now(timezone.utc).isoformat()
+        self.set_llm_fail_last_reset(now_iso)
 
     # ------------------------------------------------------------------
     # FULL ANALYSIS
@@ -419,6 +483,9 @@ class Croner(ExceptionManager, RedisManager):
                 # Check whether the 24-hour drift window has elapsed and
                 # reset the counter (sending a Discord alert) if so.
                 self._check_and_reset_drift_window()
+
+                # Check and reset the LLM failure counter every 24 hours
+                self._check_and_reset_llm_fail_window()
 
                 asyncio.run(self.run_news_update_once())
                 time.sleep(self.news_poll_interval)
