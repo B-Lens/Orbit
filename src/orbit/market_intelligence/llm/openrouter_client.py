@@ -42,14 +42,14 @@ class OpenRouterClient:
     def invoke(self, prompt: str) -> Optional[str]:
         """Send a prompt and return text content, with retry logic for unwanted models."""
         # We start with attempt 1 and go up to MAX_RETRIES + 1 (the final fallback).
-        for attempt in range(1, MAX_RETRIES + 2):
+        for attempt in range(0, MAX_RETRIES + 1):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                 )
             except Exception as e:
-                logger.warning(f"LLM Inference failed on attempt {attempt}")
+                logger.info(f"LLM Inference failed on attempt {attempt}")
                 if attempt == MAX_RETRIES + 1:
                     return None
                 continue
@@ -59,14 +59,17 @@ class OpenRouterClient:
             logger.info("OpenRouter routed to model: %s (attempt %d)", routed_model, attempt)
 
             # If NOT the retry model, extract and return content immediately
-            if routed_model == RETRY_MODEL:
+            if routed_model == RETRY_MODEL and attempt < MAX_RETRIES:
                 logger.info(
                     "Response from %s – retrying (%d/%d)", RETRY_MODEL, attempt, MAX_RETRIES
                 )
                 continue
 
-            # Max attempts reached; use the response even though it came from retry model
-            logger.info("Max retries reached; using response from %s", RETRY_MODEL)
+            if routed_model == RETRY_MODEL and attempt == MAX_RETRIES:
+                logger.warning(
+                    "Final attempt also routed to %s – returning this response", RETRY_MODEL
+                )
+
             extracted_response = self._extract_content(response)
             if extracted_response is None:
                 logger.warning("Extracted Response is None")
