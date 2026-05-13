@@ -195,6 +195,15 @@ class WeightedRedditAnalyzer:
             return RedditSentimentResult(**data)
         except Exception as e:
             logger.exception(f"Reddit chunk {chunk_id} LLM analysis failed: {e}")
+            # Attempt a second extraction after a more aggressive repair
+            try:
+                cleaned = str(raw).strip()
+                cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+                cleaned = re.sub(r'\s*```$', '', cleaned)
+                data = extract_json(cleaned)
+                return RedditSentimentResult(**data)
+            except Exception:
+                pass
             return RedditSentimentResult(
                 sentiment="NEUTRAL",
                 confidence=0.3,

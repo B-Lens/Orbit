@@ -32,11 +32,41 @@ def get_indian_time() -> datetime.datetime:
     india_time = utc_now.replace(tzinfo=pytz.utc).astimezone(india_timezone)
     return india_time
 
+def _repair_unescaped_quotes_in_json(text: str) -> str:
+    """
+    Attempt to fix common LLM JSON issues where double quotes inside
+    string values are not escaped.  This is a best-effort heuristic.
+    """
+    try:
+        # Find the "explanation" value and escape inner quotes.
+        def _escape_inner_quotes(match):
+            key = match.group(1)          # "explanation"
+            value = match.group(2)        # the raw string content
+            escaped = re.sub(r'(?<!\\)"', r'\\"', value)
+            return f'"{key}": "{escaped}"'
+        text = re.sub(
+            r'"(explanation)"\s*:\s*"((?:[^"\\]|\\.)*)"',
+            _escape_inner_quotes,
+            text,
+            flags=re.DOTALL
+        )
+    except Exception:
+        pass
+    return text
+
 def extract_json(text: str) -> dict:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("No JSON found in LLM response")
-    return json.loads(match.group(0))
+    raw_json = match.group(0)
+    try:
+        return json.loads(raw_json)
+    except json.JSONDecodeError:
+        repaired = _repair_unescaped_quotes_in_json(raw_json)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            raise
 
 def get_commit_id() -> str:
     try:
@@ -115,4 +145,3 @@ def generate_chart(df, support=None, resistance=None):
 
 def oc(df, index):
     return df['open'].iloc[index], df['close'].iloc[index]
-
