@@ -24,7 +24,7 @@ import requests
 logger = logging.getLogger("Orbit")
 
 _BASE_URL = "https://api.supermemory.ai/v4"
-_TIMEOUT = 30
+_TIMEOUT = 40
 
 
 # ------------------------------------------------------------------
