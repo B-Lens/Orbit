@@ -1,7 +1,7 @@
 import os
 import re
 import json
-import numpy as np
+from json_repair import repair_json
 import requests
 from scipy.signal import argrelextrema
 import datetime
@@ -36,7 +36,8 @@ def extract_json(text: str) -> dict:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("No JSON found in LLM response")
-    return json.loads(match.group(0))
+    fixed_json = repair_json(match.group(0))
+    return json.loads(fixed_json)
 
 def get_commit_id() -> str:
     try:
