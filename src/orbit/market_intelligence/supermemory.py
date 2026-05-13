@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional, Dict
@@ -25,6 +26,7 @@ logger = logging.getLogger("Orbit")
 
 _BASE_URL = "https://api.supermemory.ai/v4"
 _TIMEOUT = 30
+_MAX_RETRIES = 2
 
 
 # ------------------------------------------------------------------
@@ -66,6 +68,59 @@ class SupermemoryClient:
         }
 
     # ------------------------------------------------------------------
+    # Internal helper with retry logic
+    # ------------------------------------------------------------------
+
+    def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        json_payload: Optional[Dict] = None,
+    ) -> Optional[requests.Response]:
+        """Perform an HTTP request with retries on timeout / connection errors."""
+        last_exc = None
+        for attempt in range(1 + _MAX_RETRIES):
+            try:
+                if method.upper() == "POST":
+                    resp = requests.post(
+                        url,
+                        json=json_payload,
+                        headers=self._headers(),
+                        timeout=_TIMEOUT,
+                    )
+                else:
+                    resp = requests.get(
+                        url,
+                        headers=self._headers(),
+                        timeout=_TIMEOUT,
+                    )
+                resp.raise_for_status()
+                return resp
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    backoff = 2 ** attempt
+                    logger.warning(
+                        "Supermemory %s attempt %d/%d timed out, retrying in %ds ...",
+                        method,
+                        attempt + 1,
+                        _MAX_RETRIES + 1,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                else:
+                    logger.error(
+                        "Supermemory %s failed after %d retries: %s",
+                        method,
+                        _MAX_RETRIES,
+                        exc,
+                    )
+            except Exception as exc:
+                logger.exception(f"Supermemory REST error ({method}): {exc}")
+                return None
+        return None
+
+    # ------------------------------------------------------------------
     # Add Memory
     # ------------------------------------------------------------------
 
@@ -98,21 +153,18 @@ class SupermemoryClient:
             "containerTag": self._container_id,
         }
 
-        try:
-            resp = requests.post(
-                f"{_BASE_URL}/memories",
-                json=payload,
-                headers=self._headers(),
-                timeout=_TIMEOUT,
-            )
-            resp.raise_for_status()
+        resp = self._request_with_retry(
+            "POST",
+            f"{_BASE_URL}/memories",
+            json_payload=payload,
+        )
 
-            logger.info(f"Stored sentiment memory ({sentiment}, {source})")
-            return True
-
-        except Exception as exc:
-            logger.exception(f"Supermemory REST error (add): {exc}")
+        if resp is None:
+            logger.warning(f"Failed to store sentiment memory ({sentiment}, {source})")
             return False
+
+        logger.info(f"Stored sentiment memory ({sentiment}, {source})")
+        return True
 
     # ------------------------------------------------------------------
     # Search Memory
@@ -128,40 +180,41 @@ class SupermemoryClient:
 
         payload = {"q": query}
 
-        try:
-            resp = requests.post(
-                f"{_BASE_URL}/search",
-                json=payload,
-                headers=self._headers(),
-                timeout=_TIMEOUT,
-            )
-            resp.raise_for_status()
+        resp = self._request_with_retry(
+            "POST",
+            f"{_BASE_URL}/search",
+            json_payload=payload,
+        )
 
-            data = resp.json()
-
-            # depending on API shape
-            results = data.get("results", data)
-
-            memories: List[SentimentMemory] = []
-
-            for item in results[:limit]:
-                meta = item.get("metadata", {})
-
-                memories.append(
-                    SentimentMemory(
-                        sentiment=meta.get("sentiment", "NEUTRAL"),
-                        confidence=float(meta.get("confidence", 0.5)),
-                        explanation=item.get("content", ""),
-                        source=meta.get("source", "unknown"),
-                        timestamp=meta.get("timestamp", ""),
-                    )
-                )
-
-            return memories
-
-        except Exception as exc:
-            logger.exception(f"Supermemory REST error (search): {exc}")
+        if resp is None:
+            logger.warning("Supermemory search failed, returning empty results")
             return []
+
+        try:
+            data = resp.json()
+        except Exception as exc:
+            logger.exception(f"Supermemory search response not valid JSON: {exc}")
+            return []
+
+        # depending on API shape
+        results = data.get("results", data)
+
+        memories: List[SentimentMemory] = []
+
+        for item in results[:limit]:
+            meta = item.get("metadata", {})
+
+            memories.append(
+                SentimentMemory(
+                    sentiment=meta.get("sentiment", "NEUTRAL"),
+                    confidence=float(meta.get("confidence", 0.5)),
+                    explanation=item.get("content", ""),
+                    source=meta.get("source", "unknown"),
+                    timestamp=meta.get("timestamp", ""),
+                )
+            )
+
+        return memories
 
     # ------------------------------------------------------------------
     # Build Context String
