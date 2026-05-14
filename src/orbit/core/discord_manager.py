@@ -172,14 +172,24 @@ class DiscordManager:
                 response = requests.post(url, json=payload)
 
             if response.status_code != 204:
-                logger.exception(
-                    f"Failed webhook | Status: {response.status_code} | Response: {response.text} | key: {key}"
-                )
+                # For active_trade_prices and websocket webhooks, log a warning instead of an error
+                if key in ("active_trade_prices", "websocket"):
+                    logger.warning(
+                        f"Failed webhook | Status: {response.status_code} | Response: {response.text} | key: {key}"
+                    )
+                else:
+                    logger.exception(
+                        f"Failed webhook | Status: {response.status_code} | Response: {response.text} | key: {key}"
+                    )
 
             return response.status_code
 
         except Exception as e:
-            logger.exception("Error sending webhook '%s': %s", key, str(e))
+            # For active_trade_prices and websocket webhooks, log a warning instead of an error
+            if key in ("active_trade_prices", "websocket"):
+                logger.warning("Error sending webhook '%s': %s", key, str(e))
+            else:
+                logger.exception("Error sending webhook '%s': %s", key, str(e))
 
     # Webhook calls
     def send_websocket_logs(self, data: str, description: str, fields: dict = None):
