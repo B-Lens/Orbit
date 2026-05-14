@@ -15,25 +15,42 @@ Features
   using a :class:`threading.Lock`.
 * **Clean shutdown** — :meth:`stop` signals the run-loop to exit and closes
   the underlying socket gracefully.
+
+Fixes applied (2026-05-14)
+--------------------------
+1. ``update_pairs`` now acquires ``_lock`` before writing ``trading_pairs``
+   to eliminate the torn-read race condition with ``_stream_url()``.
+2. ``start()`` clears ``_stop_event`` *inside* the lock so the stale-checker
+   never starts before the run-thread is ready.
+3. ``_stale_thread`` is guarded against double-launch on rapid
+   ``stop()``/``start()`` cycles.
+4. Duplicate disconnect log entries suppressed via ``_notified_disconnect``
+   flag — only ``_on_close`` emits the final status notification.
+5. Empty ``trading_pairs`` detected at the top of ``_run_loop``; the loop
+   aborts cleanly instead of spinning in backoff forever.
+6. ``_STALE_CHECK_INTERVAL`` is now derived from ``stale_threshold`` (⌊threshold/3⌋,
+   minimum 1 s) so short thresholds are always caught promptly.
+7. ``_on_close`` type annotations corrected (``Optional[int]``,
+   ``Optional[str]``).
+8. ``_last_message_time`` writes are protected by ``_lock`` (belt-and-braces
+   for non-CPython runtimes).
 """
 
 import json
 import logging
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional
 
 import websocket
 
 logger = logging.getLogger("Orbit")
 
-_INITIAL_BACKOFF: float = 1.0       # seconds
-_MAX_BACKOFF: float = 60.0          # seconds
-_BACKOFF_FACTOR: float = 2.0        # exponential multiplier
-_PING_INTERVAL: int = 30            # seconds between pings (increased from 20)
-_PING_TIMEOUT: int = 20             # seconds to wait for pong (increased from 10)
-_STALE_THRESHOLD: float = 30.0      # seconds before a connection is considered stale (increased from 5)
-_STALE_CHECK_INTERVAL: float = 10.0 # how often the stale-checker polls (increased from 2)
+_INITIAL_BACKOFF: float = 1.0    # seconds
+_MAX_BACKOFF: float = 60.0       # seconds
+_BACKOFF_FACTOR: float = 2.0     # exponential multiplier
+_PING_INTERVAL: int = 30         # seconds between pings
+_PING_TIMEOUT: int = 20          # seconds to wait for pong
 
 
 class BinanceWSManager:
@@ -57,7 +74,7 @@ class BinanceWSManager:
         trading_pairs: List[str],
         on_price_update: Callable[[str, float, float], None],
         on_status_change: Optional[Callable[[str], None]] = None,
-        stale_threshold: float = _STALE_THRESHOLD,
+        stale_threshold: float = 30.0,
         ping_interval: int = _PING_INTERVAL,
         ping_timeout: int = _PING_TIMEOUT,
     ) -> None:
@@ -68,6 +85,10 @@ class BinanceWSManager:
         self.ping_interval = ping_interval
         self.ping_timeout = ping_timeout
 
+        # Fix #6 — derive check interval from threshold so short thresholds
+        # are always caught within one polling cycle.
+        self._stale_check_interval: float = max(1.0, stale_threshold / 3)
+
         self._ws: Optional[websocket.WebSocketApp] = None
         self._ws_thread: Optional[threading.Thread] = None
         self._stale_thread: Optional[threading.Thread] = None
@@ -76,6 +97,9 @@ class BinanceWSManager:
         self._stop_event = threading.Event()
         self._last_message_time: float = 0.0
         self._connected: bool = False
+
+        # Fix #4 — suppress duplicate log/callback on error+close pair
+        self._notified_disconnect: bool = False
 
     # ------------------------------------------------------------------
     # Public interface
@@ -92,14 +116,15 @@ class BinanceWSManager:
         Safe to call multiple times — subsequent calls are no-ops if the
         manager is already running.
         """
-        if self._stop_event.is_set():
-            # Allow restart after a previous stop()
-            self._stop_event.clear()
-
+        # Fix #2 — clear stop_event inside the lock so the stale-checker
+        # is never launched before the run-thread exists.
         with self._lock:
             if self._ws_thread and self._ws_thread.is_alive():
                 logger.debug("[WSManager] Already running — ignoring start()")
                 return
+
+            # Safe to clear here: we hold the lock and the run-thread is not alive.
+            self._stop_event.clear()
 
             self._ws_thread = threading.Thread(
                 target=self._run_loop,
@@ -108,12 +133,15 @@ class BinanceWSManager:
             )
             self._ws_thread.start()
 
-        self._stale_thread = threading.Thread(
-            target=self._stale_checker,
-            name="BinanceWSManager-stale",
-            daemon=True,
-        )
-        self._stale_thread.start()
+        # Fix #3 — guard stale-checker against double-launch.
+        if not (self._stale_thread and self._stale_thread.is_alive()):
+            self._stale_thread = threading.Thread(
+                target=self._stale_checker,
+                name="BinanceWSManager-stale",
+                daemon=True,
+            )
+            self._stale_thread.start()
+
         logger.info("[WSManager] Started.")
 
     def stop(self) -> None:
@@ -129,7 +157,10 @@ class BinanceWSManager:
             trading_pairs: New list of symbols.
         """
         logger.info(f"[WSManager] Updating trading pairs to {trading_pairs}")
-        self.trading_pairs = trading_pairs
+        # Fix #1 — acquire lock before writing to prevent torn reads in
+        # _stream_url() which may be called concurrently from _run_loop.
+        with self._lock:
+            self.trading_pairs = trading_pairs
         self._close_ws()  # triggers reconnect in _run_loop
 
     # ------------------------------------------------------------------
@@ -137,7 +168,11 @@ class BinanceWSManager:
     # ------------------------------------------------------------------
 
     def _stream_url(self) -> str:
-        streams = "/".join(f"{p.lower()}@trade" for p in self.trading_pairs)
+        # Called from _run_loop which already holds _lock at ws-creation time,
+        # but _stream_url itself is cheap — just read under the lock.
+        with self._lock:
+            pairs = list(self.trading_pairs)
+        streams = "/".join(f"{p.lower()}@trade" for p in pairs)
         return f"wss://fstream.binance.com/stream?streams={streams}"
 
     def _notify_status(self, msg: str) -> None:
@@ -163,18 +198,24 @@ class BinanceWSManager:
 
     def _on_open(self, ws: websocket.WebSocketApp) -> None:
         self._connected = True
-        self._last_message_time = time.time()
+        self._notified_disconnect = False  # reset for the new connection
+        with self._lock:
+            self._last_message_time = time.time()
         self._notify_status("WebSocket connection opened.")
 
     def _on_message(self, ws: websocket.WebSocketApp, raw: str) -> None:
-        self._last_message_time = time.time()
+        # Fix #8 — protect _last_message_time write (belt-and-braces for
+        # non-CPython runtimes; no-op overhead on CPython due to the GIL).
+        now = time.time()
+        with self._lock:
+            self._last_message_time = now
         try:
             msg = json.loads(raw)
             data = msg.get("data", {})
             symbol = data.get("s")
             price_str = data.get("p")
             if symbol and price_str:
-                self._on_price_update(symbol, float(price_str), self._last_message_time)
+                self._on_price_update(symbol, float(price_str), now)
             else:
                 logger.debug(f"[WSManager] Unrecognised message format: {msg}")
         except Exception:
@@ -182,11 +223,24 @@ class BinanceWSManager:
 
     def _on_error(self, ws: websocket.WebSocketApp, error: Exception) -> None:
         self._connected = False
-        self._notify_status(f"WebSocket error: {error}")
+        # Fix #4 — log the error once here, but do NOT call _notify_status
+        # yet. _on_close always fires after _on_error, so we let _on_close
+        # own the status notification to avoid duplicate callbacks.
+        logger.warning(f"[WSManager] WebSocket error: {error}")
 
-    def _on_close(self, ws: websocket.WebSocketApp, close_status_code, close_msg) -> None:
+    def _on_close(
+        self,
+        ws: websocket.WebSocketApp,
+        close_status_code: Optional[int],   # Fix #7 — corrected type annotation
+        close_msg: Optional[str],            # Fix #7 — corrected type annotation
+    ) -> None:
         self._connected = False
-        self._notify_status(f"WebSocket closed (code={close_status_code}, msg={close_msg})")
+        # Fix #4 — emit the single, authoritative disconnect status here.
+        if not self._notified_disconnect:
+            self._notified_disconnect = True
+            self._notify_status(
+                f"WebSocket closed (code={close_status_code}, msg={close_msg})"
+            )
 
     # ------------------------------------------------------------------
     # Run-loop with exponential backoff
@@ -202,6 +256,18 @@ class BinanceWSManager:
         backoff = _INITIAL_BACKOFF
 
         while not self._stop_event.is_set():
+
+            # Fix #5 — abort cleanly instead of spinning when no pairs are set.
+            with self._lock:
+                pairs_snapshot = list(self.trading_pairs)
+
+            if not pairs_snapshot:
+                logger.error(
+                    "[WSManager] No trading pairs configured — "
+                    "run-loop will not start. Call update_pairs() first."
+                )
+                break
+
             url = self._stream_url()
             logger.info(f"[WSManager] Connecting to {url}")
 
@@ -222,7 +288,7 @@ class BinanceWSManager:
                 ws.run_forever(
                     ping_interval=self.ping_interval,
                     ping_timeout=self.ping_timeout,
-                    reconnect=0,  # disable websocket-client's own reconnect; we handle it
+                    reconnect=0,  # we manage reconnects ourselves
                 )
             except Exception:
                 logger.exception("[WSManager] Unexpected exception in run_forever()")
@@ -233,7 +299,9 @@ class BinanceWSManager:
 
             # Reset backoff if the connection was alive long enough to be
             # considered successful (received at least one message after connect).
-            if self._last_message_time > connect_time:
+            with self._lock:
+                last_msg = self._last_message_time
+            if last_msg > connect_time:
                 backoff = _INITIAL_BACKOFF
 
             logger.warning(f"[WSManager] Disconnected. Reconnecting in {backoff:.1f}s …")
@@ -247,9 +315,14 @@ class BinanceWSManager:
     # ------------------------------------------------------------------
 
     def _stale_checker(self) -> None:
-        """Background thread that restarts the WebSocket if it goes stale."""
+        """Background thread that restarts the WebSocket if it goes stale.
+
+        The poll interval is ``max(1, stale_threshold / 3)`` seconds, so
+        even short thresholds are caught within a single polling cycle
+        (Fix #6).
+        """
         while not self._stop_event.is_set():
-            self._stop_event.wait(timeout=_STALE_CHECK_INTERVAL)
+            self._stop_event.wait(timeout=self._stale_check_interval)
 
             if self._stop_event.is_set():
                 break
@@ -257,7 +330,10 @@ class BinanceWSManager:
             if not self._connected:
                 continue
 
-            age = time.time() - self._last_message_time
+            with self._lock:
+                last_msg = self._last_message_time
+
+            age = time.time() - last_msg
             if age > self.stale_threshold:
                 logger.warning(
                     f"[WSManager] No message received for {age:.1f}s "
