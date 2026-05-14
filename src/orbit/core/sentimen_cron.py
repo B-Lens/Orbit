@@ -337,6 +337,8 @@ class Croner(ExceptionManager, RedisManager):
                     dominant_memory_sentiment=dominant_memory_sentiment,
                 )
 
+            memory_suppressed = False # disabled memory supressed explicitly (not feasible yet)
+
             sentiment_drifted: bool = basic_drift and not memory_suppressed
 
             self.send_market_sentiment(
