@@ -267,7 +267,7 @@ class PromptManager:
             try:
                 prompt_obj = self.langfuse_client.get_prompt(name=name)
                 if prompt_obj and prompt_obj.prompt:
-                    logger.debug("Using Langfuse prompt '%s'", name)
+                    logger.info("Using Langfuse prompt '%s'", name)
                     return prompt_obj.prompt.format(**kwargs)
             except Exception as exc:
                 logger.warning("Failed to fetch Langfuse prompt '%s': %s", name, exc)
@@ -277,7 +277,7 @@ class PromptManager:
         if local_template is None:
             raise ValueError(f"No local template for prompt '{name}'")
 
-        logger.debug("Using local fallback prompt '%s'", name)
+        logger.info("Using local fallback prompt '%s'", name)
 
         # Attempt to ingest the local template if not already done
         self._ensure_ingested(name, local_template)
@@ -304,7 +304,7 @@ class PromptManager:
         try:
             existing = self.langfuse_client.get_prompt(name=name)
             if existing is not None:
-                logger.debug("Prompt '%s' already exists in Langfuse.", name)
+                logger.info("Prompt '%s' already exists in Langfuse.", name)
                 return
         except Exception:
             pass
