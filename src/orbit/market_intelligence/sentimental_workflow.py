@@ -465,7 +465,7 @@ class SentimentWorkflow(ExceptionManager):
         )
 
         prompt = self.prompt_manager.get_prompt(
-            "reasoning",
+            "final_sentiment",
             memory_section=memory_section,
             weight_dict=weight_dict,
             twitter_section=twitter_section,

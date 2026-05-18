@@ -161,7 +161,7 @@ class PromptManager:
             "    \"explanation\": \"brief explanation\"\n"
             "}}"
         ),
-        "reasoning": (
+        "final_sentiment": (
             "You are a senior financial market analyst specializing in sentiment aggregation.\n\n"
             "## TASK\n"
             "Provide a reasoned overall market/crypto sentiment assessment by blending all available signals according to the specified weights.\n\n"
