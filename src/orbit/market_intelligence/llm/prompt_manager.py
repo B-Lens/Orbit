@@ -314,6 +314,7 @@ class PromptManager:
                 name=name,
                 prompt=template,
                 type="text",
+                labels=["production"]
             )
             logger.info("Ingested prompt '%s' into Langfuse.", name)
         except Exception as exc:
