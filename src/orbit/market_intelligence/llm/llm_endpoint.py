@@ -9,7 +9,7 @@ from langchain_groq import ChatGroq
 import redis
 from datetime import datetime
 from dotenv import load_dotenv
-from langfuse.callback import CallbackHandler
+from langfuse.langchain import CallbackHandler
 
 from orbit.utils.utils import require_env
 from orbit.core.exception_manager import ExceptionManager
