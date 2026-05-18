@@ -9,6 +9,7 @@ from langchain_groq import ChatGroq
 import redis
 from datetime import datetime
 from dotenv import load_dotenv
+from langfuse.callback import CallbackHandler
 
 from orbit.utils.utils import require_env
 from orbit.core.exception_manager import ExceptionManager
@@ -24,6 +25,7 @@ GROQ_MODELS = ["openai/gpt-oss-120b", "llama-3.1-8b-instant", "gemma2-9b-it"]
 
 logger = logging.getLogger("Orbit")
 
+langfuse_handler = CallbackHandler()
 
 class LLM(ExceptionManager):
     """LLM wrapper with Groq as primary and OpenRouter as fallback."""
@@ -100,7 +102,12 @@ class LLM(ExceptionManager):
         # ----------------------------------------------------------
         if use_groq and self.groq_llm:
             try:
-                response = self.groq_llm.invoke(prompt)
+                response = self.groq_llm.invoke(
+                            prompt,
+                            config={
+                            "callbacks": [langfuse_handler]
+                            }
+                        )
                 return response.content if hasattr(response, "content") else response
 
             except Exception as e:
