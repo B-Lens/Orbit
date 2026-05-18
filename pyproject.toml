@@ -73,6 +73,7 @@ python-binance = "^1.0.35"
 feedparser = "^6.0.12"
 twitter-cli = "^0.8.5"
 json-repair = "^0.59.9"
+langfuse = "^4.6.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
