@@ -66,6 +66,7 @@ from orbit.market_intelligence.models.mongodb_models import (
     SentimentRecord,
 )
 from orbit.market_intelligence.llm.llm_endpoint import LLM
+from orbit.market_intelligence.llm.langfuse_manager import LangfuseManager
 from orbit.market_intelligence.utils.utils import (
     fetch_market_indicators,
     SentimentType,
@@ -168,6 +169,7 @@ class SentimentWorkflow(ExceptionManager):
         self.twitter_analyzer: TwitterSentimentAnalyzer = TwitterSentimentAnalyzer(llm)
         self.mongodb: MongoDBManager = MongoDBManager()
         self.supermemory: SupermemoryClient = supermemory or SupermemoryClient()
+        self.langfuse: LangfuseManager = LangfuseManager()
 
         # Timestamps managed here as in-process fallback.
         # Croner is responsible for persisting these to Redis across restarts.
@@ -366,57 +368,9 @@ class SentimentWorkflow(ExceptionManager):
             Structured NewsSentiment object.
         """
 
-        prompt = f"""
-                    Analyze overall market sentiment from the following news articles.
-
-                    Focus ONLY on MAJOR RECENT EVENTS that can move:
-                    - Financial markets
-                    - Gold (XAUUSD)
-                    - Crypto markets
-
-                    Prioritize:
-                    - Central bank decisions (Fed, ECB, BOJ, RBI)
-                    - Inflation data (CPI, PPI)
-                    - Interest rate changes
-                    - Geopolitical conflicts / wars
-                    - ETF approvals / regulations
-                    - Large institutional flows
-                    - USD strength / weakness
-                    - Recession signals
-                    - Liquidity changes
-
-                    Decision logic:
-                    - No major event → NEUTRAL
-                    - One strong major event → BULLISH or BEARISH
-                    - Multiple major events same direction → high confidence
-                    - Mixed major events → NEUTRAL
-
-                    Ignore:
-                    - opinions
-                    - technical analysis
-                    - minor commentary
-                    - speculation
-                    - duplicate news
-
-                    News articles:
-                    {news_text}
-                """
-
-        RETURN_FORMAT = """\n
-            Respond ONLY in valid JSON.
-
-            Rules:
-            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - Give the confidence about the sentiment <0.0 - 1.0> (set to 0.0 if the news is completely unrelated to financial markets)
-            - Provide the explanation in a concise manner, focusing on the key themes and events that led to the sentiment classification.  Avoid generic statements and aim for specific insights derived from the news articles.
-
-            Respond in Json Format:
-            {{
-                "sentiment": "BULLISH",
-                "confidence": 0.0,
-                "explanation": "brief explanation"
-            }}
-            """
+        core_prompt = self.langfuse.compile_prompt(
+            "news_sentiment_core", {"news_text": news_text}
+        )
 
         # Prepend Supermemory context so the LLM is aware of recent history
         memory_context = self._get_memory_context(
@@ -429,12 +383,10 @@ class SentimentWorkflow(ExceptionManager):
                 "(do NOT simply repeat it — use it to avoid unnecessary sentiment "
                 "flips unless the new evidence is clearly stronger), now analyse "
                 "the following:\n\n"
-                + prompt
-                + "\n"
-                + RETURN_FORMAT
+                + core_prompt
             )
         else:
-            full_prompt = prompt + "\n" + RETURN_FORMAT
+            full_prompt = core_prompt
 
         try:
             raw_content = self.llm.invoke(full_prompt)
@@ -510,49 +462,17 @@ class SentimentWorkflow(ExceptionManager):
         memory_context = self._get_memory_context(
             query="recent market sentiment reasoning"
         )
-        memory_section = (
-            f"\n{memory_context}\n" if memory_context else ""
+
+        prompt = self.langfuse.compile_prompt(
+            "sentiment_reasoning",
+            {
+                "twitter_section": twitter_section,
+                "reddit_section": reddit_section,
+                "news_section": news_section,
+                "indicators": str(indicators),
+                "memory_context": memory_context or "",
+            }
         )
-
-        prompt = f"""
-
-            You are a senior financial market analyst specializing in sentiment aggregation.
-
-            ## TASK
-            Provide a reasoned overall market/crypto sentiment assessment by blending all available signals according to the specified weights.
-
-            ## RECENT SENTIMENT HISTORY (for continuity)
-            {memory_section if memory_section else "No recent history available."}
-
-            ## BLENDING WEIGHTS
-            {weight_dict}
-
-            ## SIGNAL SOURCES
-            \n\n
-            {twitter_section}
-            \n
-            {reddit_section}
-            \n
-            {news_section}
-            \n 
-            Indicators: {indicators}
-            \n
-
-            Rules:
-            - Blend them using the provided weight dictionary.
-            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way (set to 0.0 if completely unrelated to finanial markets)
-            - explanation: concise synthesis of the key themes driving the sentiment
-            - Focus on crypto / financial markets sentiment, not individual stocks
-
-
-            Respond ONLY with valid JSON (no markdown, no extra text):
-            {{
-            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-            "confidence": <float 0.0-1.0>,
-            "explanation": "<concise synthesis>"
-            }}
-            """
 
         try:
             content = self.llm.invoke(prompt, use_groq=True)
@@ -908,40 +828,14 @@ class SentimentWorkflow(ExceptionManager):
              {news_result.explanation}
             """     
 
-        prompt = f"""
-
-            You are a senior financial market analyst specializing in sentiment aggregation.
-
-            ## TASK
-            Provide a reasoned overall market/crypto sentiment assessment by blending all available signals according to the specified weights.
-
-            ## BLENDING WEIGHTS
-            {weight_dict}
-
-            ## SIGNAL SOURCES
-            \n\n
-            {twitter_section}
-            \n
-            {reddit_section}
-            \n
-            {news_section}
-            \n 
-
-            Rules:
-            - Blend them using the provided weight dictionary.
-            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way (set to 0.0 if completely unrelated to finanial markets)
-            - explanation: concise synthesis of the key themes driving the sentiment
-            - Focus on crypto / financial markets sentiment, not individual stocks
-
-
-            Respond ONLY with valid JSON (no markdown, no extra text):
-            {{
-            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-            "confidence": <float 0.0-1.0>,
-            "explanation": "<concise synthesis>"
-            }}
-            """
+        prompt = self.langfuse.compile_prompt(
+            "blend_incremental",
+            {
+                "twitter_section": twitter_section,
+                "reddit_section": reddit_section,
+                "news_section": news_section,
+            }
+        )
 
         try:
             content = self.llm.invoke(prompt, use_groq=True)
