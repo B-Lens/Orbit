@@ -8,6 +8,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from orbit.utils.utils import extract_json
+from orbit.market_intelligence.llm.prompt_manager import PromptManager
 
 logger = logging.getLogger("Orbit")
 
@@ -84,6 +85,7 @@ class WeightedRedditAnalyzer:
 
     def __init__(self, llm) -> None:
         self.llm = llm
+        self.prompt_manager = PromptManager()
 
     # ------------------------------------------------------------------
     # PUBLIC API
@@ -165,28 +167,7 @@ class WeightedRedditAnalyzer:
         """
         snippets = "\n---\n".join(_build_post_snippet(p) for p in posts)
 
-        prompt = f"""
-            You are a financial sentiment analyst.
-
-            Analyse the following Reddit posts (separated by ---) and determine the
-            **overall** market/crypto sentiment expressed across ALL of them.
-
-            Posts:
-            {snippets}
-
-            Rules:
-            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - confidence: float 0.0-1.0 reflecting how clearly the posts lean one way (set to 0.0 if completely unrelated to finanial markets)
-            - explanation: concise synthesis of the key themes driving the sentiment
-            - Focus on crypto / financial markets sentiment, not individual stocks
-
-            Respond ONLY with valid JSON (no markdown, no extra text):
-            {{
-            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-            "confidence": <float 0.0-1.0>,
-            "explanation": "<concise synthesis>"
-            }}
-            """
+        prompt = self.prompt_manager.get_prompt("reddit_chunk_analysis", snippets=snippets)
 
         try:
             raw = self.llm.invoke(prompt)
@@ -226,28 +207,12 @@ class WeightedRedditAnalyzer:
             for i, s in enumerate(summaries)
         )
 
-        prompt = f"""
-            You are a financial sentiment analyst.
-
-            Below are sentiment summaries from {len(summaries)} batches of Reddit posts
-            (covering {total_posts} posts in total).
-
-            {summary_text}
-
-            Synthesise these into a single overall Reddit market sentiment.
-
-            Rules:
-            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - confidence: float 0.0–1.0
-            - explanation: concise synthesis of the dominant themes
-
-            Respond ONLY with valid JSON (no markdown, no extra text):
-            {{
-            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-            "confidence": <float 0.0-1.0>,
-            "explanation": "<concise synthesis>"
-            }}
-            """
+        prompt = self.prompt_manager.get_prompt(
+            "reddit_synthesis",
+            chunk_count=len(summaries),
+            total_posts=total_posts,
+            summary_text=summary_text,
+        )
 
         try:
             raw = self.llm.invoke(prompt)
