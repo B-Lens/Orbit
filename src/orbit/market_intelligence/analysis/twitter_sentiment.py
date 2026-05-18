@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from orbit.utils.utils import extract_json
 from orbit.market_intelligence.llm.llm_endpoint import LLM
+from orbit.market_intelligence.llm.prompt_manager import PromptManager
 
 logger = logging.getLogger("Orbit")
 
@@ -70,6 +71,7 @@ class TwitterSentimentAnalyzer:
     def __init__(self, llm: LLM, chunk_size: int = _CHUNK_SIZE) -> None:
         self.llm = llm
         self.chunk_size = chunk_size
+        self.prompt_manager = PromptManager()
 
     # ------------------------------------------------------------------
     # PUBLIC ENTRY POINT
@@ -131,50 +133,7 @@ class TwitterSentimentAnalyzer:
             f"Analyzing tweet chunk {chunk_index} ({len(tweets)} tweets) with LLM"
         )
 
-        prompt = f"""
-            You are an institutional financial sentiment analyst.
-
-            Below is a batch of financial tweets. Read ALL of them and determine the
-            OVERALL market sentiment they collectively express with respect to tradable
-            assets (crypto, stocks, gold, forex, macro, interest rates, risk sentiment).
-
-            Rules:
-            - BULLISH  → net positive for risk assets / prices likely up
-            - BEARISH  → net negative for risk assets / prices likely down
-            - NEUTRAL  → mixed, unclear, or no meaningful market signal
-            - Base your judgment on the WEIGHT OF EVIDENCE across all tweets, not on
-            any single tweet.
-            - Ignore jokes, memes, and off-topic content.
-            - High-conviction directional language raises confidence.
-            - Speculation words ("maybe", "could") lower confidence.
-
-            Confidence guidelines:
-            0.9-1.0  : strong, consistent directional signal across most tweets
-            0.7-0.89 : clear directional bias in the majority of tweets
-            0.4-0.69 : weak or mixed directional signal
-            0.0-0.39 : mostly noise / irrelevant
-
-            Tweets:
-            {tweets_block}
-            """
-
-        RETURN_FORMAT = """
-            Respond ONLY in valid JSON.
-
-            Rules:
-            - sentiment MUST be exactly one of: "BULLISH", "BEARISH", "NEUTRAL"
-            - Give the confidence about the sentiment <0.0 - 1.0> (0.0 if completely unrelated to financial markets)
-            - Provide the explanation in a field called "explanation" (concise synthesis of key themes).
-
-            Respond in Json Format:
-            {{
-                "sentiment": "BULLISH",
-                "confidence": 0.0,
-                "explanation": "brief explanation"
-            }}
-            """
-
-        prompt = prompt + "\n" + RETURN_FORMAT
+        prompt = self.prompt_manager.get_prompt("twitter_chunk_analysis", tweets_block=tweets_block)
 
         try:
             raw = self.llm.invoke(prompt)
@@ -265,34 +224,7 @@ class TwitterSentimentAnalyzer:
             )
         summaries_block = "\n".join(summary_lines)
 
-        prompt = f"""
-            You are an institutional financial sentiment analyst.
-
-            Below are sentiment summaries produced from separate batches of financial
-            tweets. Each summary represents the collective sentiment of one batch.
-
-            Your task: synthesise ALL summaries into a single overall market sentiment.
-
-            Rules:
-            - focus on the strongest signals or valid analysis of the chunk.
-            - Weigh each chunk by its confidence score.
-            - BULLISH  → net positive for risk assets
-            - BEARISH  → net negative for risk assets
-            - NEUTRAL  → mixed or no clear signal
-            - Provide a concise explanation that references the key themes.
-            - Ignore failed analysis or No analysis of the chunk
-            - Ignore irrelevant content in the chunk summaries.
-
-            Respond ONLY with valid JSON (no markdown, no extra text):
-            {{
-            "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-            "confidence": <float 0.0-1.0>,
-            "reasoning": "<concise synthesis explanation>"
-            }}
-
-            Chunk summaries:
-            {summaries_block}
-            """
+        prompt = self.prompt_manager.get_prompt("twitter_synthesis", summaries_block=summaries_block)
 
         try:
             raw = self.llm.invoke(prompt)
