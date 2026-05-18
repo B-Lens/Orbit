@@ -173,7 +173,7 @@ class DiscordManager:
 
             if response.status_code != 204:
                 # For active_trade_prices and websocket webhooks, log a warning instead of an error
-                if key in ("active_trade_prices", "websocket"):
+                if key in ("active_trade_prices", "websocket", "active_trades"):
                     logger.warning(
                         f"Failed webhook | Status: {response.status_code} | Response: {response.text} | key: {key}"
                     )
