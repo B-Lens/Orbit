@@ -14,13 +14,13 @@ class LangfuseManager:
 
     - ``LANGFUSE_PUBLIC_KEY``
     - ``LANGFUSE_SECRET_KEY``
-    - ``LANGFUSE_HOST`` (defaults to ``https://cloud.langfuse.com``)
+    - ``LANGFUSE_BASE_URL`` (defaults to ``https://cloud.langfuse.com``)
     """
 
     def __init__(self) -> None:
         public_key = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
         secret_key = os.environ.get("LANGFUSE_SECRET_KEY", "")
-        host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        host = os.environ.get("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
 
         if not public_key or not secret_key:
             logger.warning(
