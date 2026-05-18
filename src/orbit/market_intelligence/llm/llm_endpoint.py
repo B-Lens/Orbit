@@ -4,7 +4,6 @@ import logging
 import os
 from typing import Optional
 
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_groq import ChatGroq
 import redis
 from datetime import datetime
