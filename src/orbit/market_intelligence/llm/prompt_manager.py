@@ -314,7 +314,6 @@ class PromptManager:
                 name=name,
                 prompt=template,
                 type="text",
-                is_active=True,
             )
             logger.info("Ingested prompt '%s' into Langfuse.", name)
         except Exception as exc:
