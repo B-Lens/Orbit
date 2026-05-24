@@ -23,7 +23,6 @@ Also provides a lightweight `run_news_update()` path that:
 - Re-scores sentiment when any source has new data.
 - Keeps LLM token usage low by skipping the call when nothing is new.
 
-Supermemory integration has been removed.
 """
 
 import os
@@ -295,7 +294,6 @@ class SentimentWorkflow(ExceptionManager):
 
         base_prompt = self.prompt_manager.get_prompt("news_sentiment", news_text=news_text)
 
-        # No Supermemory context — removed.
         full_prompt = base_prompt
 
         try:
@@ -330,8 +328,6 @@ class SentimentWorkflow(ExceptionManager):
     ) -> str:
         """
         Generate LLM-based reasoning for final market sentiment.
-
-        (Supermemory context has been removed.)
 
         Args:
             reddit_result: Overall Reddit sentiment result.
@@ -502,8 +498,6 @@ class SentimentWorkflow(ExceptionManager):
 
         This is designed to be called every 10 minutes.
 
-        (Supermemory integration has been removed.)
-
         Args:
             last_news_fetch: Timestamp of the last news fetch (from Redis).
             last_reddit_fetch: Timestamp of the last Reddit fetch (from Redis).
@@ -516,7 +510,6 @@ class SentimentWorkflow(ExceptionManager):
                 ``new_article_count``, ``new_reddit_post_count``,
                 ``new_tweet_count``, ``last_news_fetch``, ``last_reddit_fetch``,
                 ``last_twitter_fetch``, ``timestamp``, ``success``,
-                ``dominant_memory_sentiment``.
         """
         effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
         effective_reddit_since: Optional[datetime] = last_reddit_fetch or self._last_reddit_fetch
@@ -529,9 +522,6 @@ class SentimentWorkflow(ExceptionManager):
             f"last_reddit_fetch={effective_reddit_since}, "
             f"last_twitter_fetch={effective_twitter_since}"
         )
-
-        # Supermemory removed — dominant_memory_sentiment is always None.
-        dominant_memory_sentiment: Optional[str] = None
 
         try:
             # ---- RSS News ----
@@ -593,7 +583,6 @@ class SentimentWorkflow(ExceptionManager):
                     "new_article_count": 0,
                     "new_reddit_post_count": 0,
                     "new_tweet_count": 0,
-                    "dominant_memory_sentiment": dominant_memory_sentiment,
                     "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                     "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
                     "last_twitter_fetch": self._last_twitter_fetch.isoformat() if self._last_twitter_fetch else None,
@@ -631,7 +620,6 @@ class SentimentWorkflow(ExceptionManager):
                 reddit_result=reddit_sentiment,
             )
 
-            # Supermemory storage removed.
 
             return {
                 "success": True,
@@ -644,7 +632,6 @@ class SentimentWorkflow(ExceptionManager):
                 "new_article_count": new_article_count,
                 "new_reddit_post_count": new_reddit_post_count,
                 "new_tweet_count": new_tweet_count,
-                "dominant_memory_sentiment": dominant_memory_sentiment,
                 "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                 "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
                 "last_twitter_fetch": self._last_twitter_fetch.isoformat() if self._last_twitter_fetch else None,
@@ -668,7 +655,6 @@ class SentimentWorkflow(ExceptionManager):
                 "new_article_count": 0,
                 "new_reddit_post_count": 0,
                 "new_tweet_count": 0,
-                "dominant_memory_sentiment": dominant_memory_sentiment,
                 "error": str(e),
                 "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                 "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
@@ -763,7 +749,7 @@ class SentimentWorkflow(ExceptionManager):
         2. Fetch financial tweets and analyse with chunk-then-synthesise LLM
         3. Fetch RSS news and macro indicators
         4. Compute combined sentiment score (Twitter weighted highest)
-        5. Persist results to MongoDB and Supermemory
+        5. Persist results to MongoDB
         6. Return structured result
 
         Returns:
@@ -810,7 +796,6 @@ class SentimentWorkflow(ExceptionManager):
                 historical_score=historical_score,
             )
 
-            # Store final combined result in Supermemory is removed.
 
             record_id = self._save_to_database(
                 reddit_result,
@@ -828,15 +813,11 @@ class SentimentWorkflow(ExceptionManager):
             # trend = self.mongodb.calculate_trends(hours=24)
             # signal = self.mongodb.get_trading_signals()
 
-            # Supermemory removed — dominant_memory_sentiment is always None.
-            dominant_memory_sentiment = None
-
             return {
                 "success": True,
                 "timestamp": get_indian_time().isoformat(),
                 "database_id": record_id,
                 **combined_result.model_dump(),
-                "dominant_memory_sentiment": dominant_memory_sentiment,
                 "reddit_sentiment": {
                     **reddit_result.model_dump()
                 },
