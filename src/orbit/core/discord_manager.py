@@ -171,7 +171,9 @@ class DiscordManager:
             else:
                 response = requests.post(url, json=payload)
 
-            if response.status_code != 204:
+            SUCCESS_CODES = {200, 204}
+
+            if response.status_code not in SUCCESS_CODES:
                 # For active_trade_prices and websocket webhooks, log a warning instead of an error
                 if key in ("active_trade_prices", "websocket", "active_trades"):
                     logger.warning(
