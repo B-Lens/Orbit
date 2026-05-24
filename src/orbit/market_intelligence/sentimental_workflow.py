@@ -23,13 +23,6 @@ Also provides a lightweight `run_news_update()` path that:
 - Re-scores sentiment when any source has new data.
 - Keeps LLM token usage low by skipping the call when nothing is new.
 
-Supermemory integration:
-- Every LLM prompt is prefixed with recent sentiment memories so the model
-  is grounded in what it concluded over the past several hours.
-- Every sentiment result (full analysis + incremental update) is stored back
-  into Supermemory so the memory grows over time.
-- The dominant memory sentiment is returned alongside each result so that
-  the Croner drift-detection layer can use it to suppress noisy flips.
 """
 
 import os
@@ -72,7 +65,6 @@ from orbit.market_intelligence.utils.utils import (
     SentimentType,
     MarketIndicators,
 )
-from orbit.market_intelligence.supermemory import SupermemoryClient
 from orbit.utils.utils import extract_json, get_indian_time, to_ist
 
 
@@ -129,8 +121,6 @@ class SentimentWorkflow(ExceptionManager):
     - Combine multiple sentiment signals into a unified score
     - Persist analysis results to MongoDB
     - Generate trends and trading signals
-    - Store every sentiment result in Supermemory and inject recent memory
-      context into every LLM prompt to reduce intra-day sentiment drift
 
     Signal weight priority (highest → lowest):
         Twitter (0.35) > News RSS (0.30) > Reddit (0.20) >
@@ -152,15 +142,12 @@ class SentimentWorkflow(ExceptionManager):
     - finance: Yahoo Finance Gold (GC=F), Yahoo Finance USD Index (DX-Y.NYB)
     """
 
-    def __init__(self, llm: LLM, supermemory: Optional[SupermemoryClient] = None) -> None:
+    def __init__(self, llm: LLM) -> None:
         """
         Initialize workflow dependencies.
 
         Args:
             llm: LLM wrapper used for news sentiment and reasoning generation.
-            supermemory: Optional pre-built :class:`SupermemoryClient`.  When
-                ``None`` a new client is created (it will self-disable if
-                ``SUPERMEMORY_API_KEY`` is not set).
         """
         self.llm: LLM = llm
         self.reddit_client: RedditClient = RedditClient()
@@ -168,7 +155,6 @@ class SentimentWorkflow(ExceptionManager):
         self.twitter_client: TwitterClient = TwitterClient()
         self.twitter_analyzer: TwitterSentimentAnalyzer = TwitterSentimentAnalyzer(llm)
         self.mongodb: MongoDBManager = MongoDBManager()
-        self.supermemory: SupermemoryClient = supermemory or SupermemoryClient()
         self.prompt_manager = PromptManager()
 
         # Timestamps managed here as in-process fallback.
@@ -179,64 +165,6 @@ class SentimentWorkflow(ExceptionManager):
 
         # Last news sentiment produced by any run — used for drift detection
         self.last_news_sentiment: Optional[NewsSentiment] = None
-
-    # ------------------------------------------------------------------
-    # SUPERMEMORY HELPERS
-    # ------------------------------------------------------------------
-
-    def _get_memory_context(self, query: str = "recent market sentiment analysis") -> str:
-        """Retrieve recent sentiment memories formatted as a prompt prefix.
-
-        Args:
-            query: Search query forwarded to Supermemory.
-
-        Returns:
-            Context string to prepend to LLM prompts, or empty string when
-            Supermemory is disabled or no memories exist yet.
-        """
-        try:
-            return self.supermemory.build_context_string(query=query, limit=8)
-        except Exception:
-            logger.warning("Supermemory: failed to retrieve context — continuing without it.")
-            return ""
-
-    def _store_sentiment_memory(
-        self,
-        combined_result: Sentiment,
-        source: str = "full_analysis",
-    ) -> None:
-        """Persist a sentiment result to Supermemory (best-effort).
-
-        Args:
-            sentiment: ``BULLISH``, ``BEARISH``, or ``NEUTRAL``.
-            confidence: Confidence score 0-1.
-            explanation: Human-readable reasoning.
-            source: Pipeline stage that produced this result.
-        """
-        try:
-            sentiment = combined_result.sentiment
-            confidence = combined_result.confidence
-            explanation = combined_result.explanation   
-            self.supermemory.add_sentiment(
-                sentiment=sentiment,
-                confidence=confidence,
-                explanation=explanation,
-                source=source,
-            )
-        except Exception:
-            logger.warning("Supermemory: failed to store sentiment — continuing.")
-
-    def get_dominant_memory_sentiment(self) -> Optional[str]:
-        """Return the majority sentiment label from recent Supermemory entries.
-
-        Returns:
-            ``"BULLISH"``, ``"BEARISH"``, ``"NEUTRAL"``, or ``None``.
-        """
-        try:
-            return self.supermemory.dominant_sentiment_from_memory()
-        except Exception:
-            logger.warning("Supermemory: dominant_sentiment_from_memory failed.")
-            return None
 
     # ------------------------------------------------------------------
     # FETCH STEPS
@@ -357,10 +285,6 @@ class SentimentWorkflow(ExceptionManager):
         """
         Use LLM to classify overall market sentiment from news articles.
 
-        Recent Supermemory context is prepended to the prompt so the model
-        is grounded in what it concluded over the past several hours, which
-        reduces intra-day sentiment flips caused by transient noise.
-
         Args:
             news_text: Formatted text containing recent news articles.
 
@@ -370,21 +294,7 @@ class SentimentWorkflow(ExceptionManager):
 
         base_prompt = self.prompt_manager.get_prompt("news_sentiment", news_text=news_text)
 
-        # Prepend Supermemory context so the LLM is aware of recent history
-        memory_context = self._get_memory_context(
-            query="recent market sentiment news analysis"
-        )
-        if memory_context:
-            full_prompt = (
-                memory_context
-                + "\n\nUsing the above recent sentiment history as context "
-                "(do NOT simply repeat it — use it to avoid unnecessary sentiment "
-                "flips unless the new evidence is clearly stronger), now analyse "
-                "the following:\n\n"
-                + base_prompt
-            )
-        else:
-            full_prompt = base_prompt
+        full_prompt = base_prompt
 
         try:
             raw_content = self.llm.invoke(full_prompt)
@@ -419,9 +329,6 @@ class SentimentWorkflow(ExceptionManager):
         """
         Generate LLM-based reasoning for final market sentiment.
 
-        Recent Supermemory context is included so the reasoning reflects
-        the trajectory of sentiment over the past several hours.
-
         Args:
             reddit_result: Overall Reddit sentiment result.
             news_sentiment: Structured news sentiment result.
@@ -454,15 +361,10 @@ class SentimentWorkflow(ExceptionManager):
             News Analysis:
              (sentiment={news_sentiment.sentiment}, confidence={news_sentiment.confidence})
              {news_sentiment.explanation}
-            """        
+            """
 
-
-        memory_context = self._get_memory_context(
-            query="recent market sentiment reasoning"
-        )
-        memory_section = (
-            f"\n{memory_context}\n" if memory_context else ""
-        )
+        # Supermemory context removed — always empty.
+        memory_section = ""
 
         prompt = self.prompt_manager.get_prompt(
             "final_sentiment",
@@ -596,10 +498,6 @@ class SentimentWorkflow(ExceptionManager):
 
         This is designed to be called every 10 minutes.
 
-        Supermemory context is injected into every LLM call so the model
-        is grounded in recent history.  The blended result is stored back
-        into Supermemory so future calls benefit from it.
-
         Args:
             last_news_fetch: Timestamp of the last news fetch (from Redis).
             last_reddit_fetch: Timestamp of the last Reddit fetch (from Redis).
@@ -612,7 +510,6 @@ class SentimentWorkflow(ExceptionManager):
                 ``new_article_count``, ``new_reddit_post_count``,
                 ``new_tweet_count``, ``last_news_fetch``, ``last_reddit_fetch``,
                 ``last_twitter_fetch``, ``timestamp``, ``success``,
-                ``dominant_memory_sentiment``.
         """
         effective_news_since: Optional[datetime] = last_news_fetch or self._last_news_fetch
         effective_reddit_since: Optional[datetime] = last_reddit_fetch or self._last_reddit_fetch
@@ -625,10 +522,6 @@ class SentimentWorkflow(ExceptionManager):
             f"last_reddit_fetch={effective_reddit_since}, "
             f"last_twitter_fetch={effective_twitter_since}"
         )
-
-        # Fetch dominant memory sentiment upfront — used by Croner for drift
-        dominant_memory_sentiment: Optional[str] = self.get_dominant_memory_sentiment()
-        logger.info(f"Supermemory dominant sentiment: {dominant_memory_sentiment}")
 
         try:
             # ---- RSS News ----
@@ -690,7 +583,6 @@ class SentimentWorkflow(ExceptionManager):
                     "new_article_count": 0,
                     "new_reddit_post_count": 0,
                     "new_tweet_count": 0,
-                    "dominant_memory_sentiment": dominant_memory_sentiment,
                     "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                     "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
                     "last_twitter_fetch": self._last_twitter_fetch.isoformat() if self._last_twitter_fetch else None,
@@ -707,7 +599,7 @@ class SentimentWorkflow(ExceptionManager):
             twitter_sentiment: Optional[TwitterSentimentResult] = None
             if has_new_tweets:
                 twitter_sentiment = self.analyze_twitter(new_tweets)
-  
+
 
             # ---- Reddit sentiment (chunk-then-synthesise) ----
             reddit_sentiment: Optional[RedditOverallResult] = None
@@ -728,12 +620,6 @@ class SentimentWorkflow(ExceptionManager):
                 reddit_result=reddit_sentiment,
             )
 
-            # Store blended sentiment in Supermemory
-            if blended_sentiment is not None and blended_sentiment.confidence != 0.0:
-                self._store_sentiment_memory(
-                    combined_result=blended_sentiment,
-                    source="blend_update",
-                )
 
             return {
                 "success": True,
@@ -746,7 +632,6 @@ class SentimentWorkflow(ExceptionManager):
                 "new_article_count": new_article_count,
                 "new_reddit_post_count": new_reddit_post_count,
                 "new_tweet_count": new_tweet_count,
-                "dominant_memory_sentiment": dominant_memory_sentiment,
                 "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                 "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
                 "last_twitter_fetch": self._last_twitter_fetch.isoformat() if self._last_twitter_fetch else None,
@@ -770,7 +655,6 @@ class SentimentWorkflow(ExceptionManager):
                 "new_article_count": 0,
                 "new_reddit_post_count": 0,
                 "new_tweet_count": 0,
-                "dominant_memory_sentiment": dominant_memory_sentiment,
                 "error": str(e),
                 "last_news_fetch": self._last_news_fetch.isoformat() if self._last_news_fetch else None,
                 "last_reddit_fetch": self._last_reddit_fetch.isoformat() if self._last_reddit_fetch else None,
@@ -802,7 +686,7 @@ class SentimentWorkflow(ExceptionManager):
         """
         if twitter_result is None and news_result is None and reddit_result is None:
             return None
-        
+
         twitter_section = ""
         reddit_section = ""
         news_section = ""
@@ -826,7 +710,7 @@ class SentimentWorkflow(ExceptionManager):
             News Analysis:
              (sentiment={news_result.sentiment}, confidence={news_result.confidence})
              {news_result.explanation}
-            """     
+            """
 
         prompt = self.prompt_manager.get_prompt(
             "blend_incremental",
@@ -865,7 +749,7 @@ class SentimentWorkflow(ExceptionManager):
         2. Fetch financial tweets and analyse with chunk-then-synthesise LLM
         3. Fetch RSS news and macro indicators
         4. Compute combined sentiment score (Twitter weighted highest)
-        5. Persist results to MongoDB and Supermemory
+        5. Persist results to MongoDB
         6. Return structured result
 
         Returns:
@@ -912,11 +796,6 @@ class SentimentWorkflow(ExceptionManager):
                 historical_score=historical_score,
             )
 
-            # Store final combined result in Supermemory
-            self._store_sentiment_memory(
-                combined_result=combined_result,
-                source="full_analysis",
-            )
 
             record_id = self._save_to_database(
                 reddit_result,
@@ -934,15 +813,11 @@ class SentimentWorkflow(ExceptionManager):
             # trend = self.mongodb.calculate_trends(hours=24)
             # signal = self.mongodb.get_trading_signals()
 
-            # Expose dominant memory sentiment for Croner
-            dominant_memory_sentiment = self.get_dominant_memory_sentiment()
-
             return {
                 "success": True,
                 "timestamp": get_indian_time().isoformat(),
                 "database_id": record_id,
                 **combined_result.model_dump(),
-                "dominant_memory_sentiment": dominant_memory_sentiment,
                 "reddit_sentiment": {
                     **reddit_result.model_dump()
                 },
