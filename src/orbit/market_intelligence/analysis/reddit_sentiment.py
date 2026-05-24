@@ -171,7 +171,7 @@ class WeightedRedditAnalyzer:
 
         try:
             raw = self.llm.invoke(prompt)
-            logger.info(f"Reddit chunk {chunk_id} LLM raw output: {raw}")
+            logger.info(f"Reddit chunk {chunk_id} LLM raw output: {repr(raw)}")
             data = extract_json(str(raw))
             return RedditSentimentResult(**data)
         except Exception as e:
@@ -216,7 +216,7 @@ class WeightedRedditAnalyzer:
 
         try:
             raw = self.llm.invoke(prompt)
-            logger.info(f"Reddit synthesis LLM raw output: {raw}")
+            logger.info(f"Reddit synthesis LLM raw output: {repr(raw)}")
             data = extract_json(str(raw))
             return RedditOverallResult(
                 **data,
