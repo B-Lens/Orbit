@@ -257,8 +257,7 @@ class Croner(ExceptionManager, RedisManager):
                     f"{new_tweet_count} new tweets — "
                     f"Blended Sentiment={news_sentiment.sentiment}, "
                     f"Confidence={news_sentiment.confidence:.2f} | "
-                    f"Twitter={twitter_label} (conf={twitter_conf}) | "
-                    f"Memory dominant={dominant_memory_sentiment} "
+                    f"Twitter={twitter_label} (conf={twitter_conf})"
                 ),
                 description=(
                     f"Sentiment drift detected: {sentiment_drifted} "
