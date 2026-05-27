@@ -6,7 +6,7 @@ from openai import OpenAI
 logger = logging.getLogger("Orbit")
 
 OPENROUTER_MODEL = "openrouter/free"
-RETRY_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428:free"
+RETRY_MODEL = ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428:free", "liquid/lfm-2.5-1.2b-thinking-20260120:free"]
 MAX_RETRIES = 3
 
 class OpenRouterClient:
@@ -59,13 +59,13 @@ class OpenRouterClient:
             logger.info("OpenRouter routed to model: %s (attempt %d)", routed_model, attempt)
 
             # If NOT the retry model, extract and return content immediately
-            if routed_model == RETRY_MODEL and attempt < MAX_RETRIES:
+            if routed_model in RETRY_MODEL and attempt < MAX_RETRIES:
                 logger.info(
                     "Response from %s – retrying (%d/%d)", RETRY_MODEL, attempt, MAX_RETRIES
                 )
                 continue
 
-            if routed_model == RETRY_MODEL and attempt == MAX_RETRIES:
+            if routed_model in RETRY_MODEL and attempt == MAX_RETRIES:
                 logger.warning(
                     "Final attempt also routed to %s – returning this response", RETRY_MODEL
                 )
