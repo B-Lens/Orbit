@@ -46,6 +46,9 @@ import websocket
 
 logger = logging.getLogger("Orbit")
 
+# Suppress duplicate error logging from the websocket library itself.
+logging.getLogger("websocket").setLevel(logging.CRITICAL)
+
 _INITIAL_BACKOFF: float = 1.0    # seconds
 _MAX_BACKOFF: float = 60.0       # seconds
 _BACKOFF_FACTOR: float = 2.0     # exponential multiplier
@@ -226,7 +229,7 @@ class BinanceWSManager:
         # Fix #4 — log the error once here, but do NOT call _notify_status
         # yet. _on_close always fires after _on_error, so we let _on_close
         # own the status notification to avoid duplicate callbacks.
-        logger.warning(f"[WSManager] WebSocket error: {error}")
+        logger.Warning(f"[WSManager] WebSocket Issue : {error}")
 
     def _on_close(
         self,
