@@ -229,7 +229,7 @@ class BinanceWSManager:
         # Fix #4 — log the error once here, but do NOT call _notify_status
         # yet. _on_close always fires after _on_error, so we let _on_close
         # own the status notification to avoid duplicate callbacks.
-        logger.debug(f"[WSManager] WebSocket error: {error}")
+        logger.Warning(f"[WSManager] WebSocket Issue : {error}")
 
     def _on_close(
         self,
