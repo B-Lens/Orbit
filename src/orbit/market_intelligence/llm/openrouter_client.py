@@ -6,7 +6,11 @@ from openai import OpenAI
 logger = logging.getLogger("Orbit")
 
 OPENROUTER_MODEL = "openrouter/free"
-RETRY_MODEL = ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428:free", "liquid/lfm-2.5-1.2b-thinking-20260120:free"]
+RETRY_MODEL = [
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428:free",
+    "liquid/lfm-2.5-1.2b-thinking-20260120:free",
+    "nvidia/nemotron-3.5-content-safety-20260604:free",
+]
 MAX_RETRIES = 3
 
 class OpenRouterClient:
@@ -15,10 +19,11 @@ class OpenRouterClient:
     Mimics the minimal interface used by the rest of the codebase:
         client.invoke(prompt: str) -> str | None
 
-    If the response is routed to ``RETRY_MODEL``, the client will re-call the
-    LLM up to ``MAX_RETRIES`` times hoping to be routed to a different model.
-    If after the retries the model is still the same, the last response is
-    returned.
+    If the response is routed to a model in ``RETRY_MODEL`` (including known
+    content-safety models that return non‑actionable text), the client will
+    re‑call the LLM up to ``MAX_RETRIES`` times hoping to be routed to a
+    different model.  If after the retries the model is still one of the
+    undesirable ones, the response is discarded and ``None`` is returned.
     """
 
     def __init__(
@@ -41,7 +46,7 @@ class OpenRouterClient:
 
     def invoke(self, prompt: str) -> Optional[str]:
         """Send a prompt and return text content, with retry logic for unwanted models."""
-        # We start with attempt 1 and go up to MAX_RETRIES + 1 (the final fallback).
+        # We start with attempt 0 and go up to MAX_RETRIES (the final fallback).
         for attempt in range(0, MAX_RETRIES + 1):
             try:
                 response = self.client.chat.completions.create(
@@ -50,7 +55,7 @@ class OpenRouterClient:
                 )
             except Exception as e:
                 logger.info(f"LLM Inference failed on attempt {attempt}")
-                if attempt == MAX_RETRIES + 1:
+                if attempt == MAX_RETRIES:
                     return None
                 continue
 
@@ -58,17 +63,23 @@ class OpenRouterClient:
             routed_model = getattr(response, "model", None)
             logger.info("OpenRouter routed to model: %s (attempt %d)", routed_model, attempt)
 
-            # If NOT the retry model, extract and return content immediately
+            # If the routed model is one we want to avoid, initiate a retry
+            # unless we are already on the final allowed attempt.
             if routed_model in RETRY_MODEL and attempt < MAX_RETRIES:
                 logger.info(
-                    "Response from %s – retrying (%d/%d)", RETRY_MODEL, attempt, MAX_RETRIES
+                    "Response from %s – retrying (%d/%d)",
+                    RETRY_MODEL,
+                    attempt,
+                    MAX_RETRIES,
                 )
                 continue
 
             if routed_model in RETRY_MODEL and attempt == MAX_RETRIES:
                 logger.warning(
-                    "Final attempt also routed to %s – returning this response", RETRY_MODEL
+                    "Final attempt also routed to %s – skipping this response",
+                    RETRY_MODEL,
                 )
+                continue
 
             extracted_response = self._extract_content(response)
             if extracted_response is None:
