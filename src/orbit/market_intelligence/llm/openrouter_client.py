@@ -65,7 +65,7 @@ class OpenRouterClient:
 
             # If the routed model is one we want to avoid, initiate a retry
             # unless we are already on the final allowed attempt.
-            if routed_model in RETRY_MODEL and attempt < MAX_RETRIES:
+            if routed_model in RETRY_MODEL and attempt < MAX_RETRIES + 1:
                 logger.info(
                     "Response from %s – retrying (%d/%d)",
                     RETRY_MODEL,
@@ -79,7 +79,6 @@ class OpenRouterClient:
                     "Final attempt also routed to %s – skipping this response",
                     RETRY_MODEL,
                 )
-                continue
 
             extracted_response = self._extract_content(response)
             if extracted_response is None:
