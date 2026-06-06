@@ -46,7 +46,7 @@ class OpenRouterClient:
 
     def invoke(self, prompt: str) -> Optional[str]:
         """Send a prompt and return text content, with retry logic for unwanted models."""
-        # We start with attempt 0 and go up to MAX_RETRIES (the final fallback).
+        # We start with attempt 1 and go up to MAX_RETRIES +1 (the final fallback).
         for attempt in range(0, MAX_RETRIES + 1):
             try:
                 response = self.client.chat.completions.create(
