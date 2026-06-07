@@ -104,9 +104,9 @@ class NewsSentiment(BaseModel):
         confidence: Confidence score between 0 and 1
         explanation: Brief textual explanation of reasoning
     """
-    sentiment: SentimentType
-    confidence: float = Field(ge=0.0, le=1.0)
-    explanation: str
+    sentiment: Optional[SentimentType] = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    explanation: Optional[str] = None
 
 
 class SentimentWorkflow(ExceptionManager):
