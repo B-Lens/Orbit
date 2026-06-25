@@ -39,7 +39,8 @@ class OpenRouterClient:
             base_url="https://openrouter.ai/api/v1",
             api_key=self.api_key,
             default_headers={
-                "X-Title": "Orbit_Market_Intelligence",
+                "HTTP-Referer": "https://orbit/market-intelligence",
+                "X-OpenRouter-Title": "Orbit Market Intelligence",
             },
         )
 
