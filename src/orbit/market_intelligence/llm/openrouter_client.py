@@ -38,6 +38,9 @@ class OpenRouterClient:
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=self.api_key,
+            default_headers={
+                "X-Title": "Orbit_Market_Intelligence",
+            },
         )
 
     # ------------------------------------------------------------------
