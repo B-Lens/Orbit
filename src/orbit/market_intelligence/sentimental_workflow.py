@@ -106,7 +106,14 @@ class NewsSentiment(BaseModel):
     """
     sentiment: SentimentType
     confidence: float = Field(ge=0.0, le=1.0)
-    explanation: str
+    explanation: Optional[str] = Field(default=None)
+
+    @classmethod
+    def from_llm_output(cls, raw_output: dict) -> "NewsSentiment":
+        # Normalise the key if LLM returns misspelled version
+        if "explanation didnt_translate" in raw_output and "explanation" not in raw_output:
+            raw_output["explanation"] = raw_output.pop("explanation didnt_translate")
+        return cls(**raw_output)
 
 
 class SentimentWorkflow(ExceptionManager):
