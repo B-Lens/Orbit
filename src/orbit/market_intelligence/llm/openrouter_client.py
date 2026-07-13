@@ -10,6 +10,7 @@ RETRY_MODEL = [
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428:free",
     "liquid/lfm-2.5-1.2b-thinking-20260120:free",
     "nvidia/nemotron-3.5-content-safety-20260604:free",
+    "nvidia/nemotron-3.5-content-safety:free"
 ]
 MAX_RETRIES = 3
 
