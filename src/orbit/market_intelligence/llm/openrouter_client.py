@@ -84,6 +84,8 @@ class OpenRouterClient:
             if extracted_response is None:
                 logger.warning("Extracted Response is None")
                 continue
+            # Sanitize known corrupted key(s) from LLM output
+            extracted_response = extracted_response.replace('"sentiment тәс"', '"sentiment"')
             return extracted_response
 
         # Should never be reached, but guard
