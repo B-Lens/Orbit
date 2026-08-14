@@ -58,7 +58,7 @@ class OpenRouterClient:
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                 )
-            except Exception as e:
+            except Exception:
                 logger.info(f"LLM Inference failed on attempt {attempt}")
                 if attempt == MAX_RETRIES + 1:
                     return None

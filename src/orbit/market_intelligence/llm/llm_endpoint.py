@@ -4,14 +4,12 @@ import logging
 import os
 from typing import Optional
 
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_groq import ChatGroq
 import redis
 from datetime import datetime
 from dotenv import load_dotenv
 from langfuse.langchain import CallbackHandler
 
-from orbit.utils.utils import require_env
 from orbit.core.exception_manager import ExceptionManager
 from orbit.market_intelligence.llm.openrouter_client import OpenRouterClient
 
@@ -110,7 +108,7 @@ class LLM(ExceptionManager):
                         )
                 return response.content if hasattr(response, "content") else response
 
-            except Exception as e:
+            except Exception:
                 logger.exception("Groq failed, falling back to OpenRouter")
 
                 if self.openrouter_llm:
@@ -128,7 +126,7 @@ class LLM(ExceptionManager):
         if self.openrouter_llm:
             try:
                 return self.openrouter_llm.invoke(prompt)
-            except Exception as e:
+            except Exception:
                 logger.exception(f"OpenRouter failed, falling back to Groq")
 
         

@@ -1,7 +1,7 @@
 # models/mongodb_models.py
 import os
 import pandas as pd
-from pymongo import MongoClient, ASCENDING, DESCENDING, TEXT
+from pymongo import MongoClient, ASCENDING, DESCENDING
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field

@@ -1,14 +1,12 @@
 # clients/reddit_client.py
 import os
 
-from httpx import post
 import praw
-import asyncio
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Any
 from datetime import datetime, timedelta
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from orbit.market_intelligence.config.reddit_config import WEIGHTED_SUBREDDITS, WeightedSubreddit, SubredditCategory
+from concurrent.futures import ThreadPoolExecutor
+from orbit.market_intelligence.config.reddit_config import WEIGHTED_SUBREDDITS, WeightedSubreddit
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
@@ -87,7 +85,7 @@ class RedditClient:
 
                     posts.append(post_data)
                         
-            except Exception as e:
+            except Exception:
                 logger.exception(f"Error fetching from r/{subreddit_name}")
             
             return posts

@@ -1,2 +1,9 @@
 .env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.log
+.mypy_cache/
+.pytest_cache/
 issue.txt

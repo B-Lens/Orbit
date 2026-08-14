@@ -15,7 +15,6 @@ Dependencies (:class:`MongoHandler`, Binance clients) can be **injected**
 through the constructor for easier testing and looser coupling.
 """
 
-import json
 import time
 import logging
 from datetime import datetime, timezone

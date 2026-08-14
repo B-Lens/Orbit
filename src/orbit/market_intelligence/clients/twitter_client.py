@@ -17,7 +17,7 @@ Queries are pre-configured for financial / crypto / gold topics.
 import json
 import logging
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 load_dotenv()
@@ -103,7 +103,7 @@ class TwitterClient:
         except subprocess.TimeoutExpired:
             logger.exception(f"twitter CLI timed out for query='{query}'")
             return []
-        except json.JSONDecodeError as exc:
+        except json.JSONDecodeError:
             logger.exception(f"twitter CLI JSON parse error for query='{query}'")
             return []
         except FileNotFoundError:
@@ -111,7 +111,7 @@ class TwitterClient:
                 "twitter CLI not found. Install it with: pip install twitter-search"
             )
             return []
-        except Exception as exc:
+        except Exception:
             logger.exception(f"Unexpected error fetching tweets for query='{query}'")
             return []
 

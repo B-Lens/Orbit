@@ -23,9 +23,7 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 """
 
 import time
-import json
 import logging
-import threading
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,7 +37,7 @@ from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.binance_ws_manager import BinanceWSManager
-from orbit.core.redis_manager import RedisManager, TRADE_KEY_PREFIX, ORDER_KEY_PREFIX
+from orbit.core.redis_manager import RedisManager, TRADE_KEY_PREFIX
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")

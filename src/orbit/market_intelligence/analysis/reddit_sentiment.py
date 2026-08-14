@@ -1,10 +1,6 @@
 # analysis/weighted_reddit_sentiment.py
-import json
 import logging
-import re
-from typing import List, Dict, Any, Optional
-import numpy as np
-from datetime import datetime
+from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
 from orbit.utils.utils import extract_json

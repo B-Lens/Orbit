@@ -1,12 +1,9 @@
 import os
-import sys
-import math
-import numpy as np
 import pandas as pd
 import redis
 from orbit.utils.utils import generate_chart
 from orbit.strategies.strategies_base import Strategy
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 import logging
 
@@ -200,12 +197,6 @@ class SwingStrategyBTC(Strategy):
 
         self.send_params(stock_df=df_4h, symbol=symbol, duration="4 HOURS")
 
-
-        # -----------------------
-        # EMA200 TREND FILTER
-        # -----------------------
-        ema200 = self.compute_ema(df_4h["close"], 200)
-        ema200_now = float(ema200.iloc[-1])
 
         # -----------------------
         # Pivots

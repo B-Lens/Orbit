@@ -40,8 +40,6 @@ class BollingerAdaptiveReversalStrategyBCH(Strategy):
         close = df['close'].iloc[-1]
         open_ = df['open'].iloc[-1]
         low = df['low'].iloc[-1]
-        high = df['high'].iloc[-1]
-
         prev_close = df['close'].iloc[-2]
         prev_open = df['open'].iloc[-2]
 
@@ -62,7 +60,6 @@ class BollingerAdaptiveReversalStrategyBCH(Strategy):
             
         close = df['close'].iloc[-1]
         open_ = df['open'].iloc[-1]
-        low = df['low'].iloc[-1]
         high = df['high'].iloc[-1]
 
         prev_close = df['close'].iloc[-2]
@@ -103,7 +100,6 @@ class BollingerAdaptiveReversalStrategyBCH(Strategy):
 
         current_bb_upper = bb_upper.iloc[-1]
         current_bb_lower = bb_lower.iloc[-1]
-        current_sma = sma.iloc[-1]
         prev_bb_upper = bb_upper.iloc[-2] if len(bb_upper) > 1 else current_bb_upper
         prev_bb_lower = bb_lower.iloc[-2] if len(bb_lower) > 1 else current_bb_lower
 

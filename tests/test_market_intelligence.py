@@ -1,25 +1,29 @@
+import asyncio
 import os
-import pytest
-from unittest.mock import AsyncMock, MagicMock
-from datetime import datetime
+from unittest.mock import MagicMock, patch
 os.environ["GROQ_API_KEY"] = "test_key"
 os.environ["LANGCHAIN_API_KEY"] = "test_key"
 os.environ["LANGSMITH_API_KEY"] = "test_key"
 
 
-from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
+from orbit.market_intelligence.sentimental_workflow import Sentiment, SentimentWorkflow
 from orbit.market_intelligence.analysis.reddit_sentiment import RedditOverallResult
+from orbit.market_intelligence.analysis.twitter_sentiment import TwitterSentimentResult
 
     
-@pytest.mark.asyncio
-async def test_run_analysis_success(monkeypatch):
+def test_run_analysis_success():
 
     # ----------------------------
     # Mock LLM
     # ----------------------------
     mock_llm = MagicMock()
 
-    workflow = SentimentWorkflow(llm=mock_llm)
+    with (
+        patch("orbit.market_intelligence.sentimental_workflow.RedditClient"),
+        patch("orbit.market_intelligence.sentimental_workflow.TwitterClient"),
+        patch("orbit.market_intelligence.sentimental_workflow.MongoDBManager"),
+    ):
+        workflow = SentimentWorkflow(llm=mock_llm)
 
     # ----------------------------
     # Mock reddit client
@@ -34,11 +38,6 @@ async def test_run_analysis_success(monkeypatch):
     }
 
     workflow.fetch_reddit = MagicMock(return_value=mock_reddit_data)
-    workflow.calculate_weights = MagicMock(return_value={"bitcoin": 0.8})
-
-    # ----------------------------
-    # Mock sentiment analyzer
-    # ----------------------------
     fake_sentiment = RedditOverallResult(
         sentiment="BEARISH",
         confidence=0.7,
@@ -47,14 +46,23 @@ async def test_run_analysis_success(monkeypatch):
         chunks_analyzed=1,
     )
 
-    workflow.reddit_analyzer.analyze_reddit = AsyncMock(
-        return_value=fake_sentiment
+    workflow.analyze_reddit = MagicMock(return_value=fake_sentiment)
+    workflow.fetch_twitter = MagicMock(return_value=[])
+    workflow.analyze_twitter = MagicMock(
+        return_value=TwitterSentimentResult(
+            sentiment="NEUTRAL",
+            confidence=0.3,
+            overall_score=0.0,
+            total_tweets_analyzed=0,
+            explanation="No tweets available.",
+        )
     )
 
     # ----------------------------
     # Mock news + indicators
     # ----------------------------
     workflow.fetch_news = MagicMock(return_value="Market looks weak")
+    workflow.get_market_sentiments = MagicMock()
 
     mock_indicators = MagicMock()
     mock_indicators.vix = 20
@@ -65,23 +73,26 @@ async def test_run_analysis_success(monkeypatch):
     # ----------------------------
     # Mock DB
     # ----------------------------
-    workflow.mongodb.save_sentiment = MagicMock(return_value="mock_id")
-    workflow.mongodb.calculate_trends = MagicMock(return_value=None)
-    workflow.mongodb.get_trading_signals = MagicMock(
-        return_value={"signal": "SELL"}
+    workflow.mongodb.get_recent_sentiments = MagicMock(return_value=[])
+    workflow._combine_results = MagicMock(
+        return_value=Sentiment(
+            sentiment="BEARISH",
+            confidence=0.7,
+            explanation="Market is bearish.",
+        )
     )
+    workflow._save_to_database = MagicMock(return_value="mock_id")
 
     # ----------------------------
     # Run workflow
     # ----------------------------
-    result = await workflow.run_analysis()
+    result = asyncio.run(workflow.run_analysis())
 
     # ----------------------------
     # Assertions
     # ----------------------------
     assert result["success"] is True
     assert result["database_id"] == "mock_id"
-    assert "sentiment" in result
-    assert result["sentiment"]["label"] in ["BEARISH", "NEUTRAL", "BULLISH"]
+    assert result["sentiment"] == "BEARISH"
 
-    workflow.mongodb.save_sentiment.assert_called_once()
+    workflow._save_to_database.assert_called_once()

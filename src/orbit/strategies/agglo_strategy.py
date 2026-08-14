@@ -1,6 +1,4 @@
 import os
-import sys
-import time
 import redis
 import json
 import numpy as np
@@ -372,7 +370,7 @@ class AggloBase(Strategy):
         rejection_points, rejection_types, rejection_volumes = [], [], []
 
         highs, lows = recent_data['high'].values, recent_data['low'].values
-        opens, closes = recent_data['open'].values, recent_data['close'].values
+        closes = recent_data['close'].values
         volumes = recent_data['volume'].values
 
         
@@ -693,8 +691,6 @@ class AggloBase(Strategy):
         
         # Calculate current price for relevance filtering
         current_price = df['close'].iloc[-1]
-        price_range = df['high'].max() - df['low'].min()
-        
         zones = []
         zone_scores = []
         
@@ -790,28 +786,15 @@ class AggloBase(Strategy):
         if len(data) < 3:
             return
 
-        o1, c1, h1, l1 = data.open.iloc[-1], data.close.iloc[-1], data.high.iloc[-1], data.low.iloc[-1]
+        o1, c1 = data.open.iloc[-1], data.close.iloc[-1]
         o2, c2, h2, l2 = data.open.iloc[-2], data.close.iloc[-2], data.high.iloc[-2], data.low.iloc[-2]
-        o3, c3, h3, l3 = data.open.iloc[-3], data.close.iloc[-3], data.high.iloc[-3], data.low.iloc[-3]
-
-        # print(f"Analyzing Bullish Reversal: O1={o1}, C1={c1}, H1={h1}, L1={l1} | O2={o2}, C2={c2}, H2={h2}, L2={l2} | O3={o3}, C3={c3}, H3={h3}, L3={l3}")
-
-        # Common measures
-        body = abs(c1 - o1)
-        lower_wick = min(o1, c1) - l1
-        upper_wick = h1 - max(o1, c1)
+        o3, c3 = data.open.iloc[-3], data.close.iloc[-3]
 
         # ---- PATTERNS ----
         # 1. Bullish Engulfing
         engulfing = (c2 < o2) and (c1 > o1) and (o1 <= c2) and (c1 >= o2)
 
-        bearish_trend = (c2 < o2) and (c3 < o3)
-
-        # # 2. Hammer / Pin Bar (small body, long lower wick)
-        # hammer_shape = lower_wick > body * 2 and upper_wick < body
-        # bullish_hammer = hammer_shape and bearish_trend
-
-        # 3. Morning Star (three-candle pattern)
+        # 2. Morning Star (three-candle pattern)
         # red -> small -> strong green closing into 1st candle’s body
         small_candle = abs(c2 - o2) < (abs(c3 - o3) * 0.5)
         morning_star = (
@@ -822,14 +805,12 @@ class AggloBase(Strategy):
             (o2 < c3)  # small gap down improves reliability
         )
 
-        # 4. Doji + Bullish confirmation
+        # 3. Doji + Bullish confirmation
         doji = abs(c2 - o2) <= (h2 - l2) * 0.1
         doji_reversal = doji and c1 > o1 and c1 > o2
 
         if engulfing:
             return 'engulfing' 
-        # if bullish_hammer:
-        #     return 'bullish_hammer'
         if morning_star:
             return 'morning_star'
         if doji_reversal:
@@ -845,9 +826,7 @@ class AggloBase(Strategy):
         
         o1, c1, h1, l1 = data.open.iloc[-1], data.close.iloc[-1], data.high.iloc[-1], data.low.iloc[-1]
         o2, c2, h2, l2 = data.open.iloc[-2], data.close.iloc[-2], data.high.iloc[-2], data.low.iloc[-2]
-        o3, c3, h3, l3 = data.open.iloc[-3], data.close.iloc[-3], data.high.iloc[-3], data.low.iloc[-3]
-
-        # print(f"Analyzing Bearish Reversal: O1={o1}, C1={c1}, H1={h1}, L1={l1} | O2={o2}, C2={c2}, H2={h2}, L2={l2} | O3={o3}, C3={c3}, H3={h3}, L3={l3}")
+        o3, c3 = data.open.iloc[-3], data.close.iloc[-3]
 
         body = abs(c1 - o1)
         upper_wick = h1 - max(o1, c1)
@@ -1020,4 +999,3 @@ class Agglo_ETHERIUM(AggloBase):
 
         return None
     
-

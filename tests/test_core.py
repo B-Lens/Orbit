@@ -1,7 +1,7 @@
 import os
 import unittest
 from timeout_decorator import timeout
-from unittest.mock import AsyncMock, patch, MagicMock, call
+from unittest.mock import AsyncMock, patch, MagicMock
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 
 os.environ["GROQ_API_KEY"] = "test_key"
@@ -538,7 +538,7 @@ class TestTradeCheckerSLUpdate(unittest.TestCase):
 
         trade = _trade_dict(sl_order_id=101)
         # Simulate cancelling old SL and placing new one
-        cancel_result = self.tc.order_manager.cancel_order(trade["symbol"], trade["sl_order_id"])
+        self.tc.order_manager.cancel_order(trade["symbol"], trade["sl_order_id"])
         new_sl = self.tc.order_manager.place_sl_order(
             symbol=trade["symbol"],
             side="SELL",

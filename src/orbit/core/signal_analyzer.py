@@ -151,7 +151,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     continue
 
                 signal = signal_dict.get("signal")
-                chart_path = signal_dict.get("chart_path")
                 chart_path_raw = signal_dict.get("chart_path_raw")
                 pattern = signal_dict.get("pattern") or "unknown"
 

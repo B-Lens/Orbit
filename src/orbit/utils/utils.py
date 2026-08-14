@@ -3,10 +3,8 @@ import re
 import json
 from json_repair import repair_json
 import requests
-from scipy.signal import argrelextrema
 import datetime
 import pytz
-import pandas as pd
 import tempfile
 import mplfinance as mpf
 from zoneinfo import ZoneInfo

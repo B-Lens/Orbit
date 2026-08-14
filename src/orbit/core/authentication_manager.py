@@ -10,7 +10,6 @@ Dependencies (Binance clients, application config) can be **injected**
 through the constructor for easier testing and looser coupling.
 """
 
-import os
 import locale
 import logging
 from dataclasses import dataclass

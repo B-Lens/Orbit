@@ -1,5 +1,4 @@
 import os
-import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
