@@ -153,6 +153,7 @@ jobs:
             --title "codex: $ISSUE_TITLE" \
             --body "$body" \
             --label ai-autonomous \
+            --label codex \
             --base main \
             --head "$BRANCH_NAME" \
             --reviewer ipankaj18

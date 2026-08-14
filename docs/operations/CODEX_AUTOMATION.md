@@ -26,7 +26,8 @@ before the job can access the credential. The job:
 3. Lets Codex edit and test the workspace without GitHub credentials; checkout
    persistence is disabled and push authentication is configured afterward.
 4. Commits and pushes changes only after Codex exits successfully.
-5. Opens a pull request targeting `main` and requests human review.
+5. Opens a pull request targeting `main`, applies the `ai-autonomous` and
+   `codex` labels, and requests human review.
 
 Removing and re-adding the label retries the workflow. Only one run per issue
 is allowed at a time. If the generated branch already exists, delete or rename
