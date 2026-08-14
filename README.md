@@ -47,6 +47,9 @@ mode is separately locked. See
 for accounting, risk policy, EC2 rollout, and strategy-promotion procedures.
 The strategy migration and ownership boundary are documented in
 [`docs/architecture/STRATEGY_CONSOLIDATION.md`](docs/architecture/STRATEGY_CONSOLIDATION.md).
+The OpenAI model choice, provider fallback order, and market-intelligence
+configuration are documented in
+[`docs/architecture/MARKET_INTELLIGENCE_LLM.md`](docs/architecture/MARKET_INTELLIGENCE_LLM.md).
 This command launches `BinanceAutomation`, the top-level trading automation controller found in `src/orbit/core/main.py`. It orchestrates three long-running daemon threads:
 
 1. **Signal Analysis** — aligns to 15-minute candle boundaries, generates and processes trading signals via `SignalAnalyzer`, and sleeps for 900 seconds (15 minutes) between cycles.

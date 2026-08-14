@@ -375,7 +375,7 @@ class SentimentWorkflow(ExceptionManager):
         )
 
         try:
-            content = self.llm.invoke(prompt, use_groq=True)
+            content = self.llm.invoke(prompt)
             return str(content).strip()
         except Exception as e:
             logger.exception("Reasoning generation failed")
@@ -719,7 +719,7 @@ class SentimentWorkflow(ExceptionManager):
         )
 
         try:
-            content = self.llm.invoke(prompt, use_groq=True)
+            content = self.llm.invoke(prompt)
             content = str(content).strip()
             blend_sentiment: Dict[str, Any] = extract_json(content)  # validate JSON format
             return Sentiment(**blend_sentiment)

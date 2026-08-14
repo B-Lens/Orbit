@@ -1,6 +1,5 @@
 
 
-import os
 import logging
 import time
 import requests
@@ -10,13 +9,9 @@ from functools import lru_cache
 from typing import Optional
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
-from orbit.utils.utils import require_env
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
-
-os.environ["GROQ_API_KEY"] = require_env("GROQ_API_KEY")
-GROQ_MODEL = "openai/gpt-oss-120b"
 
 logger = logging.getLogger("Orbit")
 
