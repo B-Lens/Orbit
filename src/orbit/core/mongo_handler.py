@@ -63,7 +63,7 @@ class MongoHandler(ExceptionManager):
 
     def __init__(
         self,
-        uri: Optional[str] = None,
+        uri: str = "mongodb://localhost:27017",
         db_name: str = "orbit",
         mongo_client: Any = None,
     ) -> None:
@@ -75,7 +75,6 @@ class MongoHandler(ExceptionManager):
             return
 
         try:
-            uri = uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
             self._mongo_client = mongo_client or MongoClient(uri, serverSelectionTimeoutMS=1000)
             self.db = self._mongo_client[db_name]
             self.collection = self.db[OHLCV_COLLECTION_NAME]
@@ -89,15 +88,6 @@ class MongoHandler(ExceptionManager):
             self.simulated_trades_collection = self.db["simulated_trades"]
             self.simulated_trades_collection.create_index(
                 [("symbol", ASCENDING), ("trade_timestamp", ASCENDING)]
-            )
-            self.decision_collection = self.db["trade_decisions"]
-            self.decision_collection.create_index("decision_id", unique=True)
-            self.decision_collection.create_index(
-                [("symbol", ASCENDING), ("timestamp", ASCENDING)]
-            )
-            self.income_collection = self.db["futures_income"]
-            self.income_collection.create_index(
-                [("tranId", ASCENDING), ("incomeType", ASCENDING)], unique=True
             )
         except Exception as exc:
             logger.exception(f"Error initializing MongoDB: {exc}")
@@ -306,68 +296,6 @@ class MongoHandler(ExceptionManager):
     # ------------------------------------------------------------------
     # Data persistence
     # ------------------------------------------------------------------
-
-    def store_trade_decision(self, record: Dict[str, Any]) -> None:
-        """Persist an immutable strategy decision, including rejected signals."""
-        collection = getattr(self, "decision_collection", None)
-        if collection is None:
-            logger.warning("Mongo trade_decisions collection not available.")
-            return
-        try:
-            collection.update_one(
-                {"decision_id": record["decision_id"]},
-                {"$setOnInsert": record},
-                upsert=True,
-            )
-        except Exception as exc:
-            self.handle_exception(exc, "Error storing trade decision")
-
-    def append_decision_event(self, decision_id: str, event: Dict[str, Any]) -> None:
-        """Append an execution transition without rewriting the original decision."""
-        collection = getattr(self, "decision_collection", None)
-        if collection is None or not decision_id:
-            return
-        event = {"timestamp": datetime.now(timezone.utc), **event}
-        try:
-            collection.update_one(
-                {"decision_id": decision_id}, {"$push": {"execution_events": event}}
-            )
-        except Exception as exc:
-            self.handle_exception(exc, "Error appending trade decision event")
-
-    def store_income_records(self, records: List[Dict[str, Any]]) -> None:
-        """Upsert Binance income rows used for fee-aware return accounting."""
-        collection = getattr(self, "income_collection", None)
-        if collection is None:
-            logger.warning("Mongo futures_income collection not available.")
-            return
-        for record in records:
-            try:
-                identity = {
-                    "tranId": record.get("tranId"),
-                    "incomeType": record.get("incomeType"),
-                }
-                collection.update_one(identity, {"$setOnInsert": record}, upsert=True)
-            except Exception as exc:
-                self.handle_exception(exc, "Error storing futures income record")
-
-    def get_daily_net_pnl(self) -> float:
-        """Return today's net Futures income from the locally synced ledger."""
-        collection = getattr(self, "income_collection", None)
-        if collection is None:
-            return 0.0
-        start_ms = int(
-            datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-            * 1000
-        )
-        try:
-            return sum(
-                float(row.get("income", 0) or 0)
-                for row in collection.find({"time": {"$gte": start_ms}}, {"income": 1})
-            )
-        except Exception as exc:
-            self.handle_exception(exc, "Error calculating daily net PnL")
-            return 0.0
 
     def store_historical_data(self, symbol: str, df: pd.DataFrame, interval: str = "15m") -> None:
         """Persist OHLCV rows into MongoDB with a 60-day TTL.
