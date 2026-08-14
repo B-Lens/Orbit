@@ -2,6 +2,7 @@ import os
 import unittest
 from timeout_decorator import timeout
 from unittest.mock import AsyncMock, patch, MagicMock, call
+from orbit.core.execution import ExecutionMode, ExecutionSettings
 
 os.environ["GROQ_API_KEY"] = "test_key"
 os.environ["LANGCHAIN_API_KEY"] = "test_key"
@@ -73,6 +74,9 @@ def _make_order_manager():
             redis_client=redis_client,
             spot_client=spot,
             futures_client=futures,
+            execution_settings=ExecutionSettings(
+                ExecutionMode.TESTNET, "test", "test", "https://demo-fapi.binance.com"
+            ),
         )
         # disable inherited discord calls
         om.send_to_webhook = MagicMock()
@@ -103,6 +107,9 @@ def _make_trade_checker():
             redis_client=redis_client,
             spot_client=spot,
             futures_client=futures,
+            execution_settings=ExecutionSettings(
+                ExecutionMode.TESTNET, "test", "test", "https://demo-fapi.binance.com"
+            ),
         )
     return tc
 

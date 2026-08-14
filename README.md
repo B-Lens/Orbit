@@ -38,6 +38,12 @@ Start the application with:
 ```
 poetry run orbit
 ```
+Orbit defaults to `paper` mode, which blocks exchange order submission. For a
+safe Binance Futures Testnet run, copy `.env.example`, set
+`ORBIT_EXECUTION_MODE=testnet`, and provide dedicated Testnet credentials. Live
+mode is separately locked. See
+[`docs/operations/SAFE_ADAPTIVE_TRADING.md`](docs/operations/SAFE_ADAPTIVE_TRADING.md)
+for accounting, risk policy, EC2 rollout, and strategy-promotion procedures.
 This command launches `BinanceAutomation`, the top-level trading automation controller found in `src/orbit/core/main.py`. It orchestrates three long-running daemon threads:
 
 1. **Signal Analysis** — aligns to 15-minute candle boundaries, generates and processes trading signals via `SignalAnalyzer`, and sleeps for 900 seconds (15 minutes) between cycles.

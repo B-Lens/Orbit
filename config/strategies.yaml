@@ -1,9 +1,12 @@
 strategies:
   BCHUSDT:
     strategy: orbit_strategies.strategies.reversal_strategy.BollingerAdaptiveReversalStrategyBCH
+    expected_package_version: "1.0.4"
 
   ETHUSDT:
     strategy: orbit_strategies.strategies.Agglo_strategy.Agglo_ETHERIUM
+    expected_package_version: "1.0.4"
 
   BTCUSDT:
     strategy: orbit_strategies.strategies.swing_strategy.SwingStrategyBTC
+    expected_package_version: "1.0.4"

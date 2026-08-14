@@ -21,6 +21,7 @@ from binance.um_futures import UMFutures
 
 from config.config import load_config
 from orbit.core.exception_manager import ExceptionManager
+from orbit.core.execution import ExecutionSettings
 
 logger = logging.getLogger("Orbit")
 
@@ -36,9 +37,14 @@ def _build_spot_client(api_key: Optional[str], secret_key: Optional[str]) -> Spo
     return client
 
 
-def _build_futures_client(api_key: Optional[str], secret_key: Optional[str]) -> UMFutures:
+def _build_futures_client(
+    api_key: Optional[str], secret_key: Optional[str], base_url: Optional[str] = None
+) -> UMFutures:
     """Create a :class:`UMFutures` client."""
-    return UMFutures(api_key, secret=secret_key)
+    kwargs: Dict[str, Any] = {"key": api_key, "secret": secret_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return UMFutures(**kwargs)
 
 
 @dataclass
@@ -70,16 +76,20 @@ class AuthenticationManager(ExceptionManager):
         spot_client: Optional[Spot] = None,
         futures_client: Optional[UMFutures] = None,
         config: Optional[Dict[str, Any]] = None,
+        execution_settings: Optional[ExecutionSettings] = None,
     ) -> None:
         super().__init__()
 
         self.config: Dict[str, Any] = config if config is not None else load_config()
 
-        api_key = os.getenv("BINANE_API_KEY")
-        secret_key = os.getenv("SECRET_KEY")
+        self.execution_settings = execution_settings or ExecutionSettings.from_env()
+        api_key = self.execution_settings.api_key
+        secret_key = self.execution_settings.secret_key
 
         self.client: Spot = spot_client or _build_spot_client(api_key, secret_key)
-        self.future_client: UMFutures = futures_client or _build_futures_client(api_key, secret_key)
+        self.future_client: UMFutures = futures_client or _build_futures_client(
+            api_key, secret_key, self.execution_settings.futures_base_url
+        )
 
         self.trading_pairs: List[str] = self.config["trading_pairs"]
         self.trade_checker_pair: List[str] = self.config["trade_checker_pair"]

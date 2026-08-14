@@ -1,0 +1,2 @@
+# Production strategy dependency pinned to the audited commit (package v1.0.4).
+orbit-strategies @ git+https://github.com/ipankaj18/Orbit-Strategies.git@c824fc9

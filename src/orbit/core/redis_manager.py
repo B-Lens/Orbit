@@ -30,6 +30,7 @@ Key schema
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, Optional
 
@@ -92,7 +93,10 @@ class RedisManager:
         redis_client: Optional[redis.StrictRedis] = None,
     ) -> None:
         self.redis_client: redis.StrictRedis = redis_client or redis.StrictRedis(
-            host="localhost", port=6379, db=0, decode_responses=True
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            db=int(os.getenv("REDIS_DB", "0")),
+            decode_responses=True,
         )
 
     # ------------------------------------------------------------------

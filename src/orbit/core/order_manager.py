@@ -18,6 +18,7 @@ through the constructor for easier testing and looser coupling.
 import json
 import time
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from binance.error import ClientError
@@ -27,6 +28,9 @@ from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import RedisManager
 from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
+from orbit.core.execution import ExecutionMode
+from orbit.core.risk_manager import PreTradeRiskGuard
+from orbit.core.performance import PerformanceTracker
 
 logger = logging.getLogger("Orbit")
 
@@ -68,6 +72,7 @@ class OrderManager(AuthenticationManager, RedisManager):
     ) -> None:
         AuthenticationManager.__init__(self, **auth_kwargs)
         RedisManager.__init__(self, redis_client=redis_client)
+        self.risk_guard = PreTradeRiskGuard(self.config.get("risk_policy"))
 
         if mongo_handler is not None:
             self.mongo_handler: Optional[MongoHandler] = mongo_handler
@@ -177,6 +182,17 @@ class OrderManager(AuthenticationManager, RedisManager):
         """Return the total USDT wallet balance on the Futures account."""
         account_info = self.future_client.account()
         return float(account_info["totalWalletBalance"])
+
+    def get_daily_net_pnl(self) -> float:
+        """Synchronize today's exchange income before applying the loss halt."""
+        start_ms = int(
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp()
+            * 1000
+        )
+        tracker = PerformanceTracker(self.future_client, self.mongo_handler)
+        return tracker.sync(start_ms).net_pnl
 
     def fixed_asset_allocated(self, symbol: str, price: float) -> float:
         """Compute the coin quantity affordable from the fixed USDT allocation.
@@ -447,34 +463,21 @@ class OrderManager(AuthenticationManager, RedisManager):
         Returns:
             A ``(quantity, required_margin)`` tuple.
         """
-        qty = 0.002  # temporary fixed quantity for testing
-        qty = self.adjust_quantity_step(symbol, qty)
-        required_margin = (entry_price * qty) / leverage
-        return qty, required_margin
-
-        # -----------------------------
-        # 1. Fetch equity
-        # -----------------------------
-        equity = self.config['FIXED_TRADE_AMOUNT'].get(symbol, self.FIXED_SPEND_USDT)
-        risk_value = equity * risk_perc
-
-        if entry_price <= 0 or stop_price <= 0:
+        if entry_price <= 0 or stop_price is None or stop_price <= 0 or leverage <= 0:
             return 0.0, 0.0
-
-        if entry_price > stop_price:
-            stop_distance = entry_price - stop_price
-        else:
-            stop_distance = stop_price - entry_price
-
+        equity = self.get_usdt_balance()
+        effective_risk = min(float(risk_perc), self.risk_guard.max_risk_per_trade_pct)
+        risk_value = equity * effective_risk
+        stop_distance = abs(entry_price - stop_price)
         if stop_distance <= 0:
             return 0.0, 0.0
-
         qty_risk = risk_value / stop_distance
 
         filters = self.get_symbol_filters(symbol)
         min_notional_filter = filters.get("MIN_NOTIONAL")
         min_notional = float(min_notional_filter["notional"]) if min_notional_filter else 5.0
         min_qty = min_notional / entry_price
+        # Reject later if the exchange minimum itself would violate policy.
         qty = max(qty_risk, min_qty)
         qty = self.adjust_quantity_step(symbol, qty)
         required_margin = (entry_price * qty) / leverage
@@ -524,12 +527,21 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 return None, None, None
 
+            if self.execution_settings.mode is ExecutionMode.PAPER:
+                logger.warning("Order blocked: ORBIT_EXECUTION_MODE=paper")
+                self.send_alerts(
+                    data=None,
+                    description="Order blocked in paper mode",
+                    fields={"symbol": symbol, "side": side},
+                )
+                return None, None, None
+
             effective_trade_id = trade_id or symbol
 
             balance_available = self.get_usdt_balance()
             qty_from_alloc: float = 0.0
 
-            if symbol == 'BTCUSDT':
+            if sl is not None and symbol in risk_management:
                 qty_from_alloc, req_margin = self.calculate_risk_position_size(
                     symbol=symbol, entry_price=price, stop_price=sl,
                     risk_perc=risk_management[symbol], leverage=leverage
@@ -570,6 +582,29 @@ class OrderManager(AuthenticationManager, RedisManager):
                 logger.warning(f"[{symbol}] Quantity adjusted for stepSize: {quantity} -> {qty_valid}")
             quantity = qty_valid
 
+            if sl is None:
+                logger.error("Order rejected: a stop loss is required by risk policy")
+                return None, None, None
+
+            risk_decision = self.risk_guard.evaluate(
+                equity=balance_available,
+                entry_price=price,
+                stop_loss=float(sl),
+                take_profit=float(target) if target is not None else None,
+                quantity=quantity,
+                leverage=leverage,
+                side=side,
+                daily_net_pnl=self.get_daily_net_pnl(),
+            )
+            if not risk_decision.allowed:
+                logger.warning("Order rejected by risk guard: %s", risk_decision.reason)
+                self.send_alerts(
+                    data=None,
+                    description=f"Order rejected by risk guard: {risk_decision.reason}",
+                    fields={"symbol": symbol, **risk_decision.metrics},
+                )
+                return None, None, None
+
             if not self.validate_notional(symbol, price, quantity):
                 filters = self.get_symbol_filters(symbol)
                 min_notional = filters["MIN_NOTIONAL"]["notional"] if filters.get("MIN_NOTIONAL") else "N/A"
@@ -608,6 +643,10 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "price": str(price),
                 "recvWindow": 60000,
             }
+            if trade_id:
+                # Binance client order IDs are capped at 36 characters.
+                compact_id = str(trade_id).replace("-", "")[:32]
+                params["newClientOrderId"] = f"o{compact_id}"
 
             order_response = self.future_client.new_order(**params)
             time.sleep(2)
@@ -676,6 +715,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             The API response dict, or ``None`` on failure.
         """
         try:
+            if self.execution_settings.mode is ExecutionMode.PAPER:
+                logger.warning("Market order blocked: ORBIT_EXECUTION_MODE=paper")
+                return None
             current_price = self.get_symbol_price(symbol)
 
             if quantity is None:

@@ -53,7 +53,8 @@ class URLS:
         """
         if key not in cls.WEBHOOKS:
             raise ValueError(f"Invalid webhook key: {key}")
-        return cls.WEBHOOKS[key]
+        env_key = f"ORBIT_WEBHOOK_{key.upper()}"
+        return os.getenv(env_key) or cls.WEBHOOKS[key]
 
 
 class DiscordManager:
@@ -105,6 +106,9 @@ class DiscordManager:
     def send_to_webhook(self, key: str, data: str, description: str, fields: dict = None, **kwargs):
         try:
             url = URLS.get_url(key)
+            if not url:
+                logger.debug("Webhook '%s' is not configured; notification skipped", key)
+                return None
             if data is None:
                 data = ""
 

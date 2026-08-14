@@ -41,6 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           poetry install --no-interaction --no-ansi
+          poetry run pip install -r strategy-requirements.txt
 
       - name: Analysing the code with pylint
         run: |
