@@ -17,7 +17,7 @@ import locale
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import requests
@@ -207,7 +207,7 @@ class MongoHandler(ExceptionManager):
                 response = requests.get(url, params=params, timeout=10)
                 response.raise_for_status()
                 return response.json()
-            except requests.RequestException as e:
+            except requests.RequestException:
                 retries += 1
                 logger.warning(f"Retrying Binance API call for {symbol}. Attempt {retries}")
                 time.sleep(1)

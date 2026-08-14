@@ -1,6 +1,6 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import feedparser
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dateutil import parser as dateparser
 from orbit.utils.utils import to_ist, get_indian_time
 

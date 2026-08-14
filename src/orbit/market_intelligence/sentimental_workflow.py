@@ -25,13 +25,11 @@ Also provides a lightweight `run_news_update()` path that:
 
 """
 
-import os
 import time
 import logging
 from pydantic import BaseModel, Field
-from tqdm import tqdm
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Literal, Optional
+from datetime import datetime
+from typing import Dict, Any, List, Optional
 from zoneinfo import ZoneInfo
 
 

@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 from orbit.core.exception_manager import ExceptionManager
 

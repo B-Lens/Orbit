@@ -141,7 +141,7 @@ def fetch_news_articles(query: str) -> str:
     try:
         response = requests.get(url, timeout=30)
         response.raise_for_status()
-    except requests.RequestException as e:
+    except requests.RequestException:
         logger.error(f"Failed to fetch news")
         return "No valid news content found."
 

@@ -158,10 +158,6 @@ class Croner(ExceptionManager, RedisManager):
         sentiment_reasoning = result.get("explanation")
         dominant_memory_sentiment = result.get("dominant_memory_sentiment")
 
-        twitter_info = result.get("twitter_sentiment", {})
-        twitter_label = twitter_info.get("sentiment", "N/A") if twitter_info else "N/A"
-        twitter_conf = twitter_info.get("confidence", "N/A") if twitter_info else "N/A"
-
         self.send_market_sentiment(
             data=(
                 f"Market Sentiment = {sentiment}, Confidence : {sentiment_confidence}, "

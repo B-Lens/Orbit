@@ -11,7 +11,7 @@ chunk summaries.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
 from orbit.utils.utils import extract_json
