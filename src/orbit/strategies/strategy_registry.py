@@ -2,7 +2,6 @@ import yaml
 import importlib
 import logging
 import os
-from importlib import metadata
 
 logger = logging.getLogger(__name__)
 
@@ -33,29 +32,15 @@ class _LazyStrategyRegistry(dict):
             symbol: item["strategy"]
             for symbol, item in config.get("strategies", {}).items()
         }
-        self._expected_versions = {
-            symbol: item.get("expected_package_version")
-            for symbol, item in config.get("strategies", {}).items()
-        }
 
     def _resolve(self, symbol: str):
         path = self._raw[symbol]
         try:
-            expected = self._expected_versions.get(symbol)
-            if expected:
-                try:
-                    installed = metadata.version("orbit-strategies")
-                except metadata.PackageNotFoundError:
-                    installed = "development"
-                if installed not in (expected, "development"):
-                    raise RuntimeError(
-                        f"orbit-strategies {installed} installed; {expected} required for {symbol}"
-                    )
             cls = load_class(path)
             # Cache the resolved class so we only import once
             super().__setitem__(symbol, cls)
             return cls
-        except (ModuleNotFoundError, AttributeError, RuntimeError) as exc:
+        except (ModuleNotFoundError, AttributeError) as exc:
             logger.error(
                 "Could not load strategy '%s' for symbol '%s': %s", path, symbol, exc
             )
@@ -90,7 +75,7 @@ class _LazyStrategyRegistry(dict):
         if symbol in self._raw:
             try:
                 return self[symbol]
-            except (ModuleNotFoundError, AttributeError, RuntimeError):
+            except (ModuleNotFoundError, AttributeError):
                 return default
         return default
 

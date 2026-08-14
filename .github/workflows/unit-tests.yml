@@ -55,7 +55,6 @@ jobs:
         run: |
           poetry config virtualenvs.in-project true
           poetry install --no-interaction --no-ansi
-          poetry run pip install -r strategy-requirements.txt
 
       - name: Run Unit Tests with Coverage
         run: |

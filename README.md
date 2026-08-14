@@ -8,6 +8,7 @@ Orbit is an AI-based trading framework that bridges research experimentation and
 - **Market Intelligence:** Harness Reddit and news sentiment data for actionable insights using LLM-powered analysis.
 - **Automated Trading:** Execute and monitor Binance Futures trades with precision, including SL/TP lifecycle management.
 - **Modular Design:** Easily integrate custom strategies via a lazy-loading strategy registry.
+- **Self-contained Strategies:** Production BTC, ETH, and BCH strategies are versioned and deployed with Orbit; no private runtime repository is required.
 - **Research to Production:** Smooth transition from trading ideas to live trading with contradict simulation support.
 
 ## Setup and Installation
@@ -44,6 +45,8 @@ safe Binance Futures Testnet run, copy `.env.example`, set
 mode is separately locked. See
 [`docs/operations/SAFE_ADAPTIVE_TRADING.md`](docs/operations/SAFE_ADAPTIVE_TRADING.md)
 for accounting, risk policy, EC2 rollout, and strategy-promotion procedures.
+The strategy migration and ownership boundary are documented in
+[`docs/architecture/STRATEGY_CONSOLIDATION.md`](docs/architecture/STRATEGY_CONSOLIDATION.md).
 This command launches `BinanceAutomation`, the top-level trading automation controller found in `src/orbit/core/main.py`. It orchestrates three long-running daemon threads:
 
 1. **Signal Analysis** — aligns to 15-minute candle boundaries, generates and processes trading signals via `SignalAnalyzer`, and sleeps for 900 seconds (15 minutes) between cycles.

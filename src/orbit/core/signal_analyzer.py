@@ -68,7 +68,7 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
     @staticmethod
     def _strategy_identity(strategy_class: type) -> Dict[str, str]:
         try:
-            package_version = metadata.version("orbit-strategies")
+            package_version = metadata.version("orbit")
         except metadata.PackageNotFoundError:
             package_version = "development"
         return {

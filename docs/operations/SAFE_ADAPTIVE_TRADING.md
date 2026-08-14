@@ -10,24 +10,17 @@ OHLCV + sentiment -> versioned strategy -> decision ledger -> risk guard
 -> Testnet order -> Binance income ledger -> performance report -> promotion review
 ```
 
-## Repositories
+## Repository ownership
 
-- `Orbit` owns data collection, sentiment filters, risk policy, order execution,
-  trade monitoring, accounting, and notifications.
-- `Orbit-Strategies` owns signal generation. Version 1.0.4 is currently expected.
+Orbit owns the complete production runtime: data collection, the three active
+strategies, sentiment filters, risk policy, execution, monitoring, accounting,
+notifications, and backtesting. `Orbit-Strategies` is a legacy research archive
+and is not installed by CI or EC2.
 
-Deploy both repositories at explicit commits. Do not use an unpinned editable
-checkout on EC2. The running commit and strategy package version must be included
-in deployment logs.
-
-Install the audited strategy commit inside Orbit's Poetry environment with:
-
-```bash
-poetry run pip install -r strategy-requirements.txt
-```
-
-When promoting a strategy release, update the commit in that file and the
-`expected_package_version` in `config/strategies.yaml` together.
+Production strategies live in `src/orbit/strategies/`. Every strategy change is
+therefore versioned by the same Orbit commit that executes it. Experimental
+research should not be imported into the runtime until it is reduced to the
+production strategy contract and reviewed in Orbit.
 
 ## Execution environments
 
@@ -84,10 +77,10 @@ order path fails closed instead of trading with a stale daily-loss value.
 ## EC2 rollout checklist
 
 1. Back up `.env`, MongoDB, and the current deployed commit IDs.
-2. Install the pinned `Orbit-Strategies` release and Orbit lockfile.
+2. Install Orbit from its lockfile; no second repository is required.
 3. Set `ORBIT_EXECUTION_MODE=testnet` and Testnet-only credentials.
 4. Start Redis and MongoDB, then start Orbit from the repository root.
-5. Confirm logs show the Testnet mode and expected strategy version.
+5. Confirm logs show Testnet mode and the expected Orbit commit.
 6. Confirm `trade_decisions` receives no-signal and rejected decisions.
 7. Place only deliberately triggered Testnet scenarios and reconcile orders in
    the Binance Testnet UI.
@@ -103,7 +96,7 @@ release symlink, restart, and verify process health. If startup or health checks
 fail, restore the prior symlink and restart the previous release. A webhook must
 not run `git pull` directly inside the active environment.
 
-Minimum deployment output should include deployment ID, both commit hashes,
+Minimum deployment output should include deployment ID, the Orbit commit hash,
 execution mode, test result, service restart result, and rollback result. Keep
 these events in journald/CloudWatch and send failures to `ORBIT_WEBHOOK_ALERTS`.
 
@@ -114,7 +107,7 @@ minimum profit factor, maximum daily loss, slippage allowance, and comparison
 benchmark. Promotion remains a human-approved configuration/version change.
 Automated rollback is allowed when a hard risk or health threshold is breached.
 
-Use `orbit_strategies.backtesting.WalkForwardBacktester` for the first validation
+Use `orbit.backtesting.WalkForwardBacktester` for the first validation
 stage. It exercises the production signal method using historical prefixes and
 includes fees, slippage, conservative same-candle exits, equity sizing, profit
 factor, and maximum drawdown. Strategy-specific research notebooks remain

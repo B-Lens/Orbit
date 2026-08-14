@@ -2,6 +2,13 @@ import os
 from openai import OpenAI
 import logging
 
+
+def _message_text(response) -> str:
+    """Return normalized model text; providers may legally return null content."""
+    if not response.choices:
+        return ""
+    return (response.choices[0].message.content or "").strip()
+
 class AIClient:
     def __init__(self, model="o3-mini"):
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -20,7 +27,7 @@ class AIClient:
             ],
         )
 
-        return response.choices[0].message.content.strip()
+        return _message_text(response)
 
 
 class GitHubModelClient:
@@ -48,7 +55,7 @@ class GitHubModelClient:
             top_p=1.0,
         )
 
-        return response.choices[0].message.content.strip()
+        return _message_text(response)
 
 
 class OpenRouterClient:
@@ -74,7 +81,7 @@ class OpenRouterClient:
             temperature=1.0,
         )
 
-        return response.choices[0].message.content.strip()
+        return _message_text(response)
 
 class FallbackClient:
     def __init__(self):
