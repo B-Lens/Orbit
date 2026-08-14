@@ -1,9 +1,9 @@
 strategies:
   BCHUSDT:
-    strategy: orbit_strategies.strategies.reversal_strategy.BollingerAdaptiveReversalStrategyBCH
+    strategy: orbit.strategies.reversal_strategy.BollingerAdaptiveReversalStrategyBCH
 
   ETHUSDT:
-    strategy: orbit_strategies.strategies.Agglo_strategy.Agglo_ETHERIUM
+    strategy: orbit.strategies.agglo_strategy.Agglo_ETHERIUM
 
   BTCUSDT:
-    strategy: orbit_strategies.strategies.swing_strategy.SwingStrategyBTC
+    strategy: orbit.strategies.swing_strategy.SwingStrategyBTC

@@ -15,6 +15,13 @@
       "stop_loss_percent":1
     },
     "FUTURE_LEVERAGE": 2,
+    "risk_policy": {
+      "max_leverage": 5,
+      "max_position_notional_pct": 0.25,
+      "max_risk_per_trade_pct": 0.01,
+      "max_daily_loss_pct": 0.02,
+      "min_reward_risk_ratio": 1.5
+    },
     "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT"], 
     "trade_checker_pair": [ "BCHUSDT", "BTCUSDT", "BNBUSDT", "ETHUSDT", "MKRUSDT", "LTCUSDT", "SOLUSDT", "ATOMUSDT", "XRPUSDT"],
     "trading_pairs_precision":{

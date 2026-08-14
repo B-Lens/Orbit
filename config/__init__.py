@@ -1,6 +1,7 @@
 from enum import Enum
 import logging
 import logging.config
+import os
 import yaml
 
 class TradeType(Enum):
@@ -29,9 +30,11 @@ TRAILING_STOPLOSS = {
     "XRPUSDT": False
 }
 
-# Load YAML config
-with open("config/logging_config.yaml", "r") as f:
+# Load YAML config independently of the process working directory.
+_CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(_CONFIG_DIR, "logging_config.yaml"), "r", encoding="utf-8") as f:
     config = yaml.safe_load(f.read())
+    config["handlers"]["file"]["filename"] = os.getenv("ORBIT_LOG_FILE", "app.log")
     logging.config.dictConfig(config)
 
 # Get your logger

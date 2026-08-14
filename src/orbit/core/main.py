@@ -39,6 +39,8 @@ from orbit.core.trade_checker import TradeChecker
 from orbit.core.order_manager import OrderManager
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
+from orbit.core.performance_reporter import PerformanceReporter
+from orbit.core.execution import ExecutionMode
 from orbit.utils.utils import get_indian_time
 
 # Constants
@@ -222,6 +224,7 @@ class BinanceAutomation(ExceptionManager):
         stop_loss = signal["stop_loss"]
         target = signal["take_profit"]
         meta_info = signal.get("Other Info", "")
+        decision_id = signal.get("decision_id")
 
         if meta_info:
             self.send_logs(data=f"{symbol} - {action}", description=f"Signal Info: {meta_info}", fields=None)
@@ -239,15 +242,29 @@ class BinanceAutomation(ExceptionManager):
             stop_loss,
             target,
             leverage,
+            trade_id=decision_id,
         )
 
         time.sleep(0.5)
 
         if not order_response:
+            if decision_id and self.order_manager.mongo_handler is not None:
+                self.order_manager.mongo_handler.append_decision_event(
+                    decision_id, {"status": "order_rejected"}
+                )
             self.send_alerts(data=None, description=f"Order failed for {symbol}")
             return
 
         order_id = order_response.get("orderId")
+        if decision_id and self.order_manager.mongo_handler is not None:
+            self.order_manager.mongo_handler.append_decision_event(
+                decision_id,
+                {
+                    "status": "order_submitted",
+                    "order_id": order_id,
+                    "client_order_id": order_response.get("clientOrderId"),
+                },
+            )
         monitor_thread = threading.Thread(
             target=self.monitor_order_execution,
             args=(symbol, order_id, action, quantity, order_request["price"]),
@@ -364,6 +381,18 @@ class BinanceAutomation(ExceptionManager):
                 logger.info(f"Worker {worker.name} is alive.")
             time.sleep(check_interval)
 
+    def report_performance(self, interval_seconds: int = 86400) -> None:
+        """Sync Binance income and emit a fee-aware report once per day."""
+        reporter = PerformanceReporter(
+            self.order_manager.future_client, self.order_manager.mongo_handler
+        )
+        while True:
+            try:
+                reporter.report_last_24_hours()
+            except Exception as exc:
+                self.handle_exception(exc, "Exception in performance reporter")
+            time.sleep(interval_seconds)
+
     # ------------------------------------------------------------------
     # Main runner
     # ------------------------------------------------------------------
@@ -380,6 +409,15 @@ class BinanceAutomation(ExceptionManager):
         trade_thread = threading.Thread(target=self.start_trade_checker, daemon=True, name="TradeCheckerThread")
         trade_thread.start()
         self.workers_to_monitor.append(trade_thread)
+
+        if self.order_manager.execution_settings.mode is not ExecutionMode.PAPER:
+            performance_thread = threading.Thread(
+                target=self.report_performance,
+                daemon=True,
+                name="PerformanceReporterThread",
+            )
+            performance_thread.start()
+            self.workers_to_monitor.append(performance_thread)
 
         logger.info("All automation threads started successfully")
         self.start_signal_analysis()

@@ -1,6 +1,7 @@
 import yaml
 import importlib
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,8 @@ def load_class(path: str):
 
 def _load_config():
     try:
-        with open("config/strategies.yaml") as f:
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        with open(os.path.join(project_root, "config", "strategies.yaml"), encoding="utf-8") as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
         logger.warning("config/strategies.yaml not found; strategy registry will be empty.")
