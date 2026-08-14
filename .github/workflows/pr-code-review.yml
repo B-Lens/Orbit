@@ -19,10 +19,11 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      CODEX_HOME: ${{ runner.temp }}/codex-home
 
     steps:
+      - name: Initialize Codex home
+        run: echo "CODEX_HOME=$RUNNER_TEMP/codex-home" >> "$GITHUB_ENV"
+
       - name: Checkout pull request head
         uses: actions/checkout@v4
         with:
