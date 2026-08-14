@@ -58,16 +58,17 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set +e
-          codex exec \
-            --sandbox read-only \
-            --ephemeral \
-            --ignore-user-config \
-            --output-schema .github/codex/review-schema.json \
-            --output-last-message codex-review.json \
-            review \
-            --base "$BASE_SHA" \
-            - < .github/codex/review-prompt.md \
-            > codex-run.log 2>&1
+          {
+            printf 'The supplied base commit is `%s`. Compare it to HEAD.\n\n' "$BASE_SHA"
+            cat .github/codex/review-prompt.md
+          } | codex exec \
+              --sandbox read-only \
+              --ephemeral \
+              --ignore-user-config \
+              --output-schema .github/codex/review-schema.json \
+              --output-last-message codex-review.json \
+              - \
+              > codex-run.log 2>&1
           status=$?
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0
