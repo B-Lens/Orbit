@@ -100,7 +100,16 @@ def test_codex_oauth_client_streams_responses(tmp_path) -> None:
     assert timeout == 60.0
     assert request.get_header("Authorization") == "Bearer secret"
     assert request.get_header("Chatgpt-account-id") == "acct"
-    assert json.loads(request.data)["stream"] is True
+    payload = json.loads(request.data)
+    assert payload["stream"] is True
+    assert payload["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Classify this market"}
+            ],
+        }
+    ]
 
 
 def test_codex_oauth_client_requires_access_token(tmp_path) -> None:

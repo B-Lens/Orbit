@@ -138,7 +138,12 @@ class CodexOAuthResponsesClient:
             {
                 "model": self.model,
                 "instructions": DEFAULT_INSTRUCTIONS,
-                "input": prompt,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": prompt}],
+                    }
+                ],
                 "max_output_tokens": self.max_output_tokens,
                 "stream": True,
                 "store": False,
