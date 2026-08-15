@@ -9,6 +9,9 @@ class BollingerAdaptiveReversalStrategyBCH(Strategy):
     Bollinger Band Reversal Strategy for BCH based on backtesting results.
     Uses Bollinger Bands with reversal patterns (engulfing, hammer, shooting star).
     """
+
+    tp_rr = 2.0
+
     
     def __init__(self, data: pd.DataFrame, 
                  bb_period=20, bb_devfactor=3.0, sma_period=20, sl_pct=0.015):
@@ -17,7 +20,6 @@ class BollingerAdaptiveReversalStrategyBCH(Strategy):
         self.bb_devfactor = bb_devfactor
         self.sma_period = sma_period
         self.sl_pct = sl_pct
-        print("BollingerReversalStrategyBCH initialized")
 
     def compute_bollinger_bands(self, close_series):
         """Compute Bollinger Bands"""
@@ -110,13 +112,14 @@ class BollingerAdaptiveReversalStrategyBCH(Strategy):
             
             entry_price = current_close
             stop_loss = entry_price * (1 - self.sl_pct)
+            take_profit = entry_price + self.tp_rr * (entry_price - stop_loss)
             
             chart_path_raw = generate_chart(df_15min)
             return {
                 "signal": "BUY",
                 "entry_price": entry_price,
                 "stop_loss": stop_loss,
-                "take_profit": None,
+                "take_profit": take_profit,
                 "pattern": "Bollinger Band Bullish Reversal",
                 "chart_path": None,
                 "chart_path_raw": chart_path_raw
@@ -128,14 +131,15 @@ class BollingerAdaptiveReversalStrategyBCH(Strategy):
               self.is_bearish_reversal(df_15min)):
             
             entry_price = current_close
-            stop_loss = entry_price * (1 + self.sl_pct)            
+            stop_loss = entry_price * (1 + self.sl_pct)
+            take_profit = entry_price - self.tp_rr * (stop_loss - entry_price)
 
             chart_path_raw = generate_chart(df_15min)
             return {
                 "signal": "SELL",
                 "entry_price": entry_price,
                 "stop_loss": stop_loss,
-                "take_profit": None,
+                "take_profit": take_profit,
                 "pattern": "Bollinger Band Bearish Reversal",
                 "chart_path": None,
                 "chart_path_raw": chart_path_raw

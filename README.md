@@ -39,10 +39,10 @@ Start the application with:
 ```
 poetry run orbit
 ```
-Orbit defaults to `paper` mode, which blocks exchange order submission. For a
-safe Binance Futures Testnet run, copy `.env.example`, set
-`ORBIT_EXECUTION_MODE=testnet`, and provide dedicated Testnet credentials. Live
-mode is separately locked. See
+Orbit defaults every asset to `paper`, which blocks exchange order submission.
+Promote one symbol at a time with, for example,
+`ORBIT_ASSET_EXECUTION_MODES=BCHUSDT:testnet` and dedicated Testnet credentials.
+Live approval must name exactly the live symbols. See
 [`docs/operations/SAFE_ADAPTIVE_TRADING.md`](docs/operations/SAFE_ADAPTIVE_TRADING.md)
 for accounting, risk policy, EC2 rollout, and strategy-promotion procedures.
 The strategy migration and ownership boundary are documented in
