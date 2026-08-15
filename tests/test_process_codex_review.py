@@ -54,6 +54,17 @@ class TestCodexReviewProcessing(unittest.TestCase):
                 }
             )
 
+    def test_incomplete_failure_has_actionable_error(self):
+        with self.assertRaisesRegex(ValueError, "Codex review did not complete") as error:
+            MODULE._validate(
+                {
+                    "verdict": "FAIL",
+                    "summary": "Sandbox initialization failed.",
+                    "findings": [],
+                }
+            )
+        self.assertIn("Sandbox initialization failed", str(error.exception))
+
     def test_parent_path_is_rejected(self):
         with self.assertRaises(ValueError):
             MODULE._validate(

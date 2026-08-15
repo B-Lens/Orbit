@@ -26,7 +26,10 @@ def _validate(data: Any) -> dict[str, Any]:
     if verdict == "PASS" and findings:
         raise ValueError("PASS cannot contain findings")
     if verdict == "FAIL" and not findings:
-        raise ValueError("FAIL must contain findings")
+        raise ValueError(
+            "Codex review did not complete: FAIL contained no actionable findings. "
+            f"Reviewer summary: {summary.strip()}"
+        )
 
     required = {"priority", "path", "line", "title", "body"}
     for index, finding in enumerate(findings, start=1):
