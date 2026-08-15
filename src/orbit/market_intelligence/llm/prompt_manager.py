@@ -28,6 +28,27 @@ class PromptManager:
     # Local prompt templates (identical to the current hard‑coded prompts)
     # ------------------------------------------------------------------
     _LOCAL_TEMPLATES = {
+        "hourly_web_search_sentiment": (
+            "You are Orbit's institutional market-intelligence analyst. The current "
+            "UTC time is {current_time_utc}. Use live web search to assess information "
+            "published or materially updated during the last four hours.\n\n"
+            "Cover global financial markets and cryptocurrency futures, prioritizing:\n"
+            "- central banks, inflation, rates, bonds, USD, equities, gold, and oil\n"
+            "- Bitcoin, Ethereum, major crypto assets, ETFs, regulation, and institutional flows\n"
+            "- futures funding, open interest, liquidations, basis, leverage, and exchange incidents\n"
+            "- geopolitical or macro events with immediate risk-on/risk-off impact\n\n"
+            "Use credible, recent sources. Treat rumors and unsupported social posts as noise. "
+            "Do not infer a directional signal when evidence is stale, mixed, or immaterial. "
+            "This is a market sentiment input, not an instruction to place a trade.\n\n"
+            "Return ONLY valid JSON with this exact shape and no markdown:\n"
+            "{{\n"
+            '  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",\n'
+            '  "confidence": <float from 0.0 to 1.0>,\n'
+            '  "explanation": "concise evidence-based synthesis",\n'
+            '  "sources": ["https://source.example/article"]\n'
+            "}}\n"
+            "Include 2-8 source URLs actually consulted."
+        ),
         "reddit_chunk_analysis": (
             "You are a financial sentiment analyst.\n\n"
             "Analyse the following Reddit posts (separated by ---) and determine the\n"

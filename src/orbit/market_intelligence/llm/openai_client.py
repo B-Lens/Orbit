@@ -6,13 +6,14 @@ import os
 from pathlib import Path
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any, Callable, Optional
 
 from openai import OpenAI
 
 logger = logging.getLogger("Orbit")
 
-DEFAULT_OPENAI_MODEL = "gpt-5.6-terra"
+DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_OUTPUT_TOKENS = 2_000
 DEFAULT_INSTRUCTIONS = (
     "You are Orbit's market-intelligence analyst. Follow the requested output "
@@ -68,6 +69,29 @@ class OpenAIResponsesClient:
         logger.info("OpenAI market-intelligence response generated with %s", self.model)
         return output_text.strip()
 
+    def invoke_web_search(self, prompt: str) -> str:
+        """Generate a response grounded by OpenAI's web-search tool."""
+        if not prompt or not prompt.strip():
+            raise ValueError("prompt must not be empty")
+
+        response = self.client.responses.create(
+            model=self.model,
+            instructions=DEFAULT_INSTRUCTIONS,
+            input=prompt,
+            tools=[{"type": "web_search"}],
+            max_output_tokens=self.max_output_tokens,
+        )
+        if response.status != "completed":
+            details = getattr(response, "incomplete_details", None)
+            raise RuntimeError(
+                f"OpenAI web-search response ended with status {response.status!r}: "
+                f"{details}"
+            )
+        output_text = response.output_text
+        if not output_text or not output_text.strip():
+            raise RuntimeError("OpenAI web search returned an empty response")
+        return output_text.strip()
+
 
 def default_auth_file() -> Path:
     """Return the Codex credential file location without requiring it to exist."""
@@ -94,6 +118,7 @@ class CodexOAuthResponsesClient:
         auth_file: Optional[os.PathLike[str] | str] = None,
         model: Optional[str] = None,
         timeout: float = 60.0,
+        web_search_timeout: Optional[float] = None,
         max_output_tokens: Optional[int] = None,
         endpoint: Optional[str] = None,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
@@ -101,6 +126,11 @@ class CodexOAuthResponsesClient:
         self.auth_file = Path(auth_file).expanduser() if auth_file else default_auth_file()
         self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
         self.timeout = timeout
+        self.web_search_timeout = web_search_timeout or float(
+            os.getenv("OPENAI_WEB_SEARCH_TIMEOUT", "300")
+        )
+        if self.web_search_timeout <= 0:
+            raise ValueError("OPENAI_WEB_SEARCH_TIMEOUT must be positive")
         self.max_output_tokens = max_output_tokens or int(
             os.getenv("OPENAI_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
         )
@@ -130,30 +160,53 @@ class CodexOAuthResponsesClient:
 
     def invoke(self, prompt: str) -> str:
         """Stream one sentiment-analysis response and return its complete text."""
+        return self._invoke(prompt, web_search=False)
+
+    def invoke_web_search(self, prompt: str) -> str:
+        """Stream one response with live external web search enabled."""
+        return self._invoke(prompt, web_search=True)
+
+    def _invoke(self, prompt: str, web_search: bool) -> str:
         if not prompt or not prompt.strip():
             raise ValueError("prompt must not be empty")
 
         access_token, account_id = self._credentials()
-        payload = json.dumps(
-            {
-                "model": self.model,
-                "instructions": DEFAULT_INSTRUCTIONS,
-                "input": [
-                    {
-                        "role": "user",
-                        "content": [{"type": "input_text", "text": prompt}],
-                    }
-                ],
-                "stream": True,
-                "store": False,
-            }
-        ).encode("utf-8")
+        request_id = str(uuid.uuid4())
+        payload_data: dict[str, Any] = {
+            "model": self.model,
+            "instructions": DEFAULT_INSTRUCTIONS,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                }
+            ],
+            "stream": True,
+            "store": False,
+        }
+        if web_search:
+            payload_data.update(
+                {
+                    "tools": [{"type": "web_search", "external_web_access": True}],
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": False,
+                    "reasoning": {"effort": "medium", "summary": "auto"},
+                    "include": [
+                        "reasoning.encrypted_content",
+                        "web_search_call.action.sources",
+                    ],
+                }
+            )
+        payload = json.dumps(payload_data).encode("utf-8")
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
             "OpenAI-Beta": "responses=experimental",
             "originator": "orbit",
+            "session-id": request_id,
+            "thread-id": request_id,
+            "x-client-request-id": request_id,
         }
         if account_id:
             headers["ChatGPT-Account-Id"] = account_id
@@ -164,7 +217,8 @@ class CodexOAuthResponsesClient:
         assistant_text: list[str] = []
         completed = False
         try:
-            with self._urlopen(request, timeout=self.timeout) as response:
+            request_timeout = self.web_search_timeout if web_search else self.timeout
+            with self._urlopen(request, timeout=request_timeout) as response:
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data: "):
@@ -180,7 +234,7 @@ class CodexOAuthResponsesClient:
                             assistant_text.append(delta)
                     elif event_type == "response.completed":
                         completed = True
-                    elif event_type == "error":
+                    elif event_type in {"error", "response.failed", "response.incomplete"}:
                         raise RuntimeError(f"OpenAI streaming error: {event}")
         except urllib.error.HTTPError as error:
             details = error.read().decode("utf-8", errors="replace")

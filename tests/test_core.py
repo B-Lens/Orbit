@@ -20,7 +20,8 @@ class TestCore(unittest.TestCase):
     @patch("orbit.core.sentimen_cron.SentimentWorkflow")
     def test_sentiment(self, MockWorkflow):
         mock_workflow_instance = MagicMock()
-        mock_workflow_instance.run_analysis = AsyncMock(return_value={
+        mock_workflow_instance.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
             "sentiment": "BULLISH",
             "confidence": 0.9,
             "reasoning": "Strong buying pressure"
@@ -39,6 +40,20 @@ class TestCore(unittest.TestCase):
         mock_redis.set.assert_any_call("market_sentiments", "BULLISH")
 
         assert result["sentiment"] == "BULLISH"
+
+    @timeout(30)
+    def test_failed_hourly_web_search_preserves_cached_sentiment(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(
+            return_value={"success": False, "error": "web search unavailable"}
+        )
+        mock_redis = MagicMock()
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        result = asyncio.run(croner.run_once())
+
+        self.assertFalse(result["success"])
+        mock_redis.set.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

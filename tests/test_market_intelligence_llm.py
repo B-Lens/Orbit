@@ -66,6 +66,23 @@ def test_openai_client_rejects_nonempty_incomplete_output() -> None:
         client.invoke("Classify this market")
 
 
+def test_openai_client_uses_web_search_tool() -> None:
+    sdk_client = MagicMock()
+    sdk_client.responses.create.return_value = SimpleNamespace(
+        status="completed", incomplete_details=None, output_text="web result"
+    )
+    client = OpenAIResponsesClient(client=sdk_client)
+
+    assert client.invoke_web_search("Assess markets") == "web result"
+    sdk_client.responses.create.assert_called_once_with(
+        model=DEFAULT_OPENAI_MODEL,
+        instructions=DEFAULT_INSTRUCTIONS,
+        input="Assess markets",
+        tools=[{"type": "web_search"}],
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+    )
+
+
 def test_codex_oauth_client_streams_responses(tmp_path) -> None:
     auth_file = tmp_path / "auth.json"
     auth_file.write_text(
@@ -126,6 +143,49 @@ def test_codex_oauth_client_requires_access_token(tmp_path) -> None:
         client.invoke("Classify this market")
 
 
+def test_codex_oauth_client_enables_external_web_search(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret", "account_id": "acct"}}),
+        encoding="utf-8",
+    )
+
+    class StreamingResponse:
+        def __enter__(self):
+            return iter(
+                [
+                    b'data: {"type":"response.output_text.delta","delta":"result"}\n',
+                    b'data: {"type":"response.completed"}\n',
+                    b"data: [DONE]\n",
+                ]
+            )
+
+        def __exit__(self, *_args):
+            return False
+
+    requests = []
+
+    def urlopen(request, timeout):
+        requests.append((request, timeout))
+        return StreamingResponse()
+
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    assert client.invoke_web_search("Assess markets") == "result"
+    request, timeout = requests[0]
+    payload = json.loads(request.data)
+    assert timeout == 300.0
+    assert payload["tools"] == [
+        {"type": "web_search", "external_web_access": True}
+    ]
+    assert payload["include"] == [
+        "reasoning.encrypted_content",
+        "web_search_call.action.sources",
+    ]
+    assert request.get_header("Session-id")
+    assert request.get_header("Thread-id")
+
+
 def test_llm_prefers_openai_without_startup_request() -> None:
     openai_client = MagicMock()
     openai_client.invoke.return_value = "primary"
@@ -140,6 +200,22 @@ def test_llm_prefers_openai_without_startup_request() -> None:
 
     openai_client.invoke.assert_not_called()
     assert llm.invoke("market prompt") == "primary"
+    fallback.invoke.assert_not_called()
+
+
+def test_llm_web_search_uses_only_openai_provider() -> None:
+    openai_client = MagicMock()
+    openai_client.invoke_web_search.return_value = "grounded result"
+    fallback = MagicMock()
+    llm = LLM(
+        openai_client=openai_client,
+        openrouter_client=fallback,
+        groq_client=fallback,
+        redis_client=_redis_mock(),
+    )
+
+    assert llm.invoke_web_search("market prompt") == "grounded result"
+    openai_client.invoke_web_search.assert_called_once_with("market prompt")
     fallback.invoke.assert_not_called()
 
 

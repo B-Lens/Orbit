@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Optional, Protocol, cast
 
 from langchain_groq import ChatGroq
 import redis
@@ -22,11 +22,19 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Model configuration
 # ---------------------------------------------------------------------------
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-terra")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
 GROQ_MODELS = ["openai/gpt-oss-120b", "llama-3.1-8b-instant", "gemma2-9b-it"]
 
 logger = logging.getLogger("Orbit")
+
+
+class WebSearchProvider(Protocol):
+    """Structural type for providers that support grounded web queries."""
+
+    def invoke_web_search(self, prompt: str) -> Any:
+        """Return a web-grounded response for ``prompt``."""
+
 
 class LLM(ExceptionManager):
     """Use OpenAI first, with optional OpenRouter and Groq fallbacks."""
@@ -123,6 +131,23 @@ class LLM(ExceptionManager):
                 logger.exception("%s market-intelligence provider failed", provider_name)
 
         raise RuntimeError("All configured market-intelligence providers failed") from last_error
+
+    def invoke_web_search(self, prompt: str) -> str:
+        """Run a web-grounded query through the primary OpenAI provider only."""
+        prompt_token_length = len(prompt.split())
+        self._track_token_usage(prompt_token_length)
+        provider = self.openai_llm
+        web_invoke = getattr(provider, "invoke_web_search", None)
+        if not callable(web_invoke):
+            raise RuntimeError(
+                "The configured OpenAI provider does not support live web search"
+            )
+        web_provider = cast(WebSearchProvider, provider)
+        response = web_provider.invoke_web_search(prompt)
+        content = response.content if hasattr(response, "content") else response
+        if not content or not str(content).strip():
+            raise RuntimeError("OpenAI web search returned an empty response")
+        return str(content).strip()
 
     # -----------------------------------------------------------------------
     # Helpers
