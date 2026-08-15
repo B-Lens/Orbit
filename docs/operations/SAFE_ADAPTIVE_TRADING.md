@@ -83,8 +83,9 @@ order path fails closed instead of trading with a stale daily-loss value.
 
 1. Back up `.env`, MongoDB, and the current deployed commit IDs.
 2. Install Orbit from its lockfile; no second repository is required.
-3. Set one asset such as `ORBIT_ASSET_EXECUTION_MODES=BCHUSDT:testnet` and load
-   Testnet-only credentials. Omitted assets remain paper-only.
+3. For the current rollout, set
+   `ORBIT_ASSET_EXECUTION_MODES=BTCUSDT:testnet,ETHUSDT:testnet,BCHUSDT:testnet`
+   and load Testnet-only credentials. Omitted assets remain paper-only.
 4. Start Redis and MongoDB, then start Orbit from the repository root.
 5. Confirm logs show Testnet mode and the expected Orbit commit.
 6. Confirm `trade_decisions` receives no-signal and rejected decisions.

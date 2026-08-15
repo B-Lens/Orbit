@@ -40,9 +40,9 @@ Start the application with:
 poetry run orbit
 ```
 Assets omitted from the execution map are `paper`-only, which blocks exchange
-order submission. Promote one symbol at a time with, for example,
-`ORBIT_ASSET_EXECUTION_MODES=BCHUSDT:testnet` and dedicated Testnet credentials.
-Live approval must name exactly the live symbols. See
+order submission. The current rollout maps BTC, ETH, and BCH to Testnet with
+`ORBIT_ASSET_EXECUTION_MODES=BTCUSDT:testnet,ETHUSDT:testnet,BCHUSDT:testnet`.
+Live approval must still name exactly the live symbols. See
 [`docs/operations/SAFE_ADAPTIVE_TRADING.md`](docs/operations/SAFE_ADAPTIVE_TRADING.md)
 for accounting, risk policy, EC2 rollout, and strategy-promotion procedures.
 The strategy migration and ownership boundary are documented in
