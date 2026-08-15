@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from orbit.core.authentication_manager import AuthenticationManager
-from orbit.core.execution import ExecutionMode, ExecutionSettings, FUTURES_TESTNET_URL
+from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.performance import PerformanceTracker
 from orbit.core.risk_manager import PreTradeRiskGuard
 
@@ -12,35 +12,24 @@ class TestExecutionSettings(unittest.TestCase):
     def test_safe_default_is_paper(self):
         with patch.dict(os.environ, {}, clear=True):
             settings = ExecutionSettings.from_env()
-        self.assertEqual(settings.mode, ExecutionMode.PAPER)
         self.assertFalse(settings.can_submit_orders)
+        self.assertEqual(settings.mode_for("BTCUSDT"), ExecutionMode.PAPER)
 
     def test_single_asset_can_use_testnet(self):
         env = {
-            "ORBIT_EXECUTION_MODE": "paper",
             "ORBIT_ASSET_EXECUTION_MODES": "BCHUSDT:testnet",
             "BINANCE_TESTNET_API_KEY": "key",
             "BINANCE_TESTNET_SECRET_KEY": "secret",
         }
         with patch.dict(os.environ, env, clear=True):
             settings = ExecutionSettings.from_env()
-        self.assertEqual(settings.futures_base_url, FUTURES_TESTNET_URL)
         self.assertTrue(settings.can_submit_orders)
         self.assertTrue(settings.can_submit_orders_for("BCHUSDT"))
         self.assertFalse(settings.can_submit_orders_for("BTCUSDT"))
         self.assertEqual(settings.mode_for("BCHUSDT"), ExecutionMode.TESTNET)
 
-    def test_global_non_paper_mode_is_rejected(self):
-        env = {
-            "ORBIT_EXECUTION_MODE": "testnet",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            with self.assertRaises(RuntimeError):
-                ExecutionSettings.from_env()
-
     def test_live_approval_must_exactly_match_live_assets(self):
         env = {
-            "ORBIT_EXECUTION_MODE": "paper",
             "ORBIT_ASSET_EXECUTION_MODES": "BCHUSDT:live",
             "ORBIT_LIVE_ASSETS": "BTCUSDT",
             "BINANCE_API_KEY": "key",
@@ -52,7 +41,6 @@ class TestExecutionSettings(unittest.TestCase):
 
     def test_exact_live_asset_approval_is_accepted(self):
         env = {
-            "ORBIT_EXECUTION_MODE": "paper",
             "ORBIT_ASSET_EXECUTION_MODES": "BCHUSDT:live",
             "ORBIT_LIVE_ASSETS": "BCHUSDT",
             "BINANCE_API_KEY": "key",
@@ -67,10 +55,6 @@ class TestExecutionSettings(unittest.TestCase):
         paper_client = MagicMock()
         testnet_client = MagicMock()
         settings = ExecutionSettings(
-            ExecutionMode.PAPER,
-            None,
-            None,
-            None,
             {"BCHUSDT": ExecutionMode.TESTNET},
         )
         manager = AuthenticationManager(
@@ -87,10 +71,6 @@ class TestExecutionSettings(unittest.TestCase):
 
     def test_unknown_asset_configuration_is_rejected(self):
         settings = ExecutionSettings(
-            ExecutionMode.PAPER,
-            None,
-            None,
-            None,
             {"DOGEUSDT": ExecutionMode.TESTNET},
         )
         with self.assertRaises(ValueError):

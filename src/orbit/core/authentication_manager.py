@@ -84,10 +84,11 @@ class AuthenticationManager(ExceptionManager):
         self.config: Dict[str, Any] = config if config is not None else load_config()
 
         self.execution_settings = execution_settings or ExecutionSettings.from_env()
-        api_key = self.execution_settings.api_key
-        secret_key = self.execution_settings.secret_key
-
-        self.client: Spot = spot_client or _build_spot_client(api_key, secret_key)
+        live_enabled = ExecutionMode.LIVE in self.execution_settings.active_modes
+        self.client: Spot = spot_client or _build_spot_client(
+            os.getenv("BINANCE_API_KEY") if live_enabled else None,
+            os.getenv("BINANCE_SECRET_KEY") if live_enabled else None,
+        )
         self.futures_clients: Dict[ExecutionMode, UMFutures] = dict(futures_clients or {})
         if futures_client is not None:
             for mode in self.execution_settings.active_modes:
@@ -112,7 +113,7 @@ class AuthenticationManager(ExceptionManager):
                     os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_SECRET_KEY")
                 ),
             )
-        self.future_client: UMFutures = self.futures_clients[self.execution_settings.mode]
+        self.future_client: UMFutures = self.futures_clients[ExecutionMode.PAPER]
 
         self.trading_pairs: List[str] = self.config["trading_pairs"]
         self.trade_checker_pair: List[str] = self.config["trade_checker_pair"]

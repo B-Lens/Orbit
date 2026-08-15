@@ -39,8 +39,8 @@ Start the application with:
 ```
 poetry run orbit
 ```
-Orbit defaults every asset to `paper`, which blocks exchange order submission.
-Promote one symbol at a time with, for example,
+Assets omitted from the execution map are `paper`-only, which blocks exchange
+order submission. Promote one symbol at a time with, for example,
 `ORBIT_ASSET_EXECUTION_MODES=BCHUSDT:testnet` and dedicated Testnet credentials.
 Live approval must name exactly the live symbols. See
 [`docs/operations/SAFE_ADAPTIVE_TRADING.md`](docs/operations/SAFE_ADAPTIVE_TRADING.md)
