@@ -25,7 +25,9 @@ def _redis_mock() -> MagicMock:
 def test_openai_client_uses_responses_api() -> None:
     sdk_client = MagicMock()
     sdk_client.responses.create.return_value = SimpleNamespace(
-        output_text='{"sentiment":"NEUTRAL"}'
+        status="completed",
+        incomplete_details=None,
+        output_text='{"sentiment":"NEUTRAL"}',
     )
     client = OpenAIResponsesClient(client=sdk_client)
 
@@ -42,10 +44,25 @@ def test_openai_client_uses_responses_api() -> None:
 
 def test_openai_client_rejects_empty_output() -> None:
     sdk_client = MagicMock()
-    sdk_client.responses.create.return_value = SimpleNamespace(output_text=" ")
+    sdk_client.responses.create.return_value = SimpleNamespace(
+        status="completed", incomplete_details=None, output_text=" "
+    )
     client = OpenAIResponsesClient(client=sdk_client)
 
     with pytest.raises(RuntimeError, match="empty response"):
+        client.invoke("Classify this market")
+
+
+def test_openai_client_rejects_nonempty_incomplete_output() -> None:
+    sdk_client = MagicMock()
+    sdk_client.responses.create.return_value = SimpleNamespace(
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        output_text='{"sentiment":"BULLISH"',
+    )
+    client = OpenAIResponsesClient(client=sdk_client)
+
+    with pytest.raises(RuntimeError, match="status 'incomplete'"):
         client.invoke("Classify this market")
 
 
@@ -127,6 +144,37 @@ def test_llm_falls_back_when_openai_fails() -> None:
 
     assert llm.invoke("market prompt") == "fallback"
     openrouter_client.invoke.assert_called_once_with("market prompt")
+
+
+def test_llm_tries_each_configured_groq_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    first = MagicMock()
+    first.invoke.side_effect = RuntimeError("model unavailable")
+    second = MagicMock()
+    second.invoke.return_value = SimpleNamespace(content="second model")
+    third = MagicMock()
+    candidates = iter((first, second, third))
+    monkeypatch.setattr(
+        "orbit.market_intelligence.llm.llm_endpoint.ChatGroq",
+        lambda **_kwargs: next(candidates),
+    )
+
+    openai_client = MagicMock()
+    openai_client.invoke.side_effect = RuntimeError("OpenAI unavailable")
+    openrouter_client = MagicMock()
+    openrouter_client.invoke.side_effect = RuntimeError("OpenRouter unavailable")
+    llm = LLM(
+        openai_client=openai_client,
+        openrouter_client=openrouter_client,
+        redis_client=_redis_mock(),
+    )
+
+    assert llm.invoke("market prompt") == "second model"
+    first.invoke.assert_called_once_with("market prompt")
+    second.invoke.assert_called_once_with("market prompt")
+    third.invoke.assert_not_called()
 
 
 def test_llm_requires_at_least_one_provider(

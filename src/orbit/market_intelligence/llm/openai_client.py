@@ -56,6 +56,11 @@ class OpenAIResponsesClient:
             input=prompt,
             max_output_tokens=self.max_output_tokens,
         )
+        if response.status != "completed":
+            details = getattr(response, "incomplete_details", None)
+            raise RuntimeError(
+                f"OpenAI response ended with status {response.status!r}: {details}"
+            )
         output_text = response.output_text
         if not output_text or not output_text.strip():
             raise RuntimeError("OpenAI returned an empty response")

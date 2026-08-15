@@ -50,6 +50,7 @@ class LLM(ExceptionManager):
         self.openai_llm = openai_client
         self.openrouter_llm = openrouter_client
         self.groq_llm = groq_client
+        self._groq_providers = [("Groq", groq_client)] if groq_client is not None else []
 
         # ------------------------------------------------------------------
         # 1. OpenAI Responses API (PRIMARY)
@@ -76,13 +77,15 @@ class LLM(ExceptionManager):
         if self.groq_llm is None and os.getenv("GROQ_API_KEY"):
             for model_name in GROQ_MODELS:
                 try:
-                    self.groq_llm = ChatGroq(
+                    candidate = ChatGroq(
                         model=model_name,
                         temperature=0,
                         timeout=30,
                     )
-                    logger.info("Groq model '%s' configured as final fallback", model_name)
-                    break
+                    self._groq_providers.append((f"Groq ({model_name})", candidate))
+                    if self.groq_llm is None:
+                        self.groq_llm = candidate
+                    logger.info("Groq model '%s' configured as a fallback", model_name)
                 except Exception as error:
                     logger.warning("Could not configure Groq model '%s': %s", model_name, error)
 
@@ -99,11 +102,11 @@ class LLM(ExceptionManager):
         logger.info("Invoking market-intelligence LLM with about %d words", prompt_token_length)
         self._track_token_usage(prompt_token_length)
 
-        providers = (
+        providers = [
             ("OpenAI", self.openai_llm),
             ("OpenRouter", self.openrouter_llm),
-            ("Groq", self.groq_llm),
-        )
+            *self._groq_providers,
+        ]
         last_error: Optional[Exception] = None
 
         for provider_name, provider in providers:
