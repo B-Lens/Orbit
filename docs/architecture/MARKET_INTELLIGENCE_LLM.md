@@ -20,7 +20,7 @@ Official references:
 
 ## Provider order
 
-1. OpenAI Responses API (`OPENAI_API_KEY`)
+1. OpenAI Responses API (`OPENAI_API_KEY`, or a provisioned Codex `auth.json`)
 2. OpenRouter, when `OPENROUTER_API_KEY` is configured
 3. Groq, when `GROQ_API_KEY` is configured
 
@@ -33,13 +33,18 @@ sentiment worker during application boot.
 
 ```dotenv
 OPENAI_API_KEY=...
+# Alternative to OPENAI_API_KEY:
+OPENAI_AUTH_FILE=/run/secrets/codex/auth.json
 OPENAI_MODEL=gpt-5.6-terra
 OPENAI_MAX_OUTPUT_TOKENS=2000
 ```
 
 `OPENAI_MODEL` is configurable so a model can be evaluated and promoted without
 a code deployment. `OPENAI_MAX_OUTPUT_TOKENS` bounds response cost and must be a
-positive integer. `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and `GROQ_API_KEY`
+positive integer. When both authentication methods are present, the API key is
+preferred. OAuth credentials are re-read before each call so replacing the
+provisioned file refreshes the running worker; the credential must never be
+committed to the repository. `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and `GROQ_API_KEY`
 are optional resilience settings. Production should alert when a fallback is
 used because different providers may produce different sentiment distributions.
 

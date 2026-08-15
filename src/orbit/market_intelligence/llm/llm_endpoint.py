@@ -10,7 +10,11 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from orbit.core.exception_manager import ExceptionManager
-from orbit.market_intelligence.llm.openai_client import OpenAIResponsesClient
+from orbit.market_intelligence.llm.openai_client import (
+    CodexOAuthResponsesClient,
+    OpenAIResponsesClient,
+    default_auth_file,
+)
 from orbit.market_intelligence.llm.openrouter_client import OpenRouterClient
 
 load_dotenv()
@@ -53,6 +57,9 @@ class LLM(ExceptionManager):
         if self.openai_llm is None and os.getenv("OPENAI_API_KEY"):
             self.openai_llm = OpenAIResponsesClient(model=OPENAI_MODEL)
             logger.info("OpenAI model '%s' configured as primary", OPENAI_MODEL)
+        elif self.openai_llm is None and default_auth_file().is_file():
+            self.openai_llm = CodexOAuthResponsesClient(model=OPENAI_MODEL)
+            logger.info("OpenAI model '%s' configured with Codex OAuth", OPENAI_MODEL)
 
         # ------------------------------------------------------------------
         # 2. OpenRouter (FALLBACK)
@@ -81,7 +88,8 @@ class LLM(ExceptionManager):
 
         if not any((self.openai_llm, self.openrouter_llm, self.groq_llm)):
             raise RuntimeError(
-                "No market-intelligence LLM configured. Set OPENAI_API_KEY "
+                "No market-intelligence LLM configured. Set OPENAI_API_KEY, "
+                "provide OPENAI_AUTH_FILE, "
                 "or configure an optional fallback provider."
             )
 
