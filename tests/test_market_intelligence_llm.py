@@ -101,15 +101,20 @@ def test_codex_oauth_client_streams_responses(tmp_path) -> None:
     assert request.get_header("Authorization") == "Bearer secret"
     assert request.get_header("Chatgpt-account-id") == "acct"
     payload = json.loads(request.data)
-    assert payload["stream"] is True
-    assert payload["input"] == [
-        {
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": "Classify this market"}
-            ],
-        }
-    ]
+    assert payload == {
+        "model": DEFAULT_OPENAI_MODEL,
+        "instructions": DEFAULT_INSTRUCTIONS,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Classify this market"}
+                ],
+            }
+        ],
+        "stream": True,
+        "store": False,
+    }
 
 
 def test_codex_oauth_client_requires_access_token(tmp_path) -> None:

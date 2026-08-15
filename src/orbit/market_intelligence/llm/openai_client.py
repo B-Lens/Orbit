@@ -144,7 +144,6 @@ class CodexOAuthResponsesClient:
                         "content": [{"type": "input_text", "text": prompt}],
                     }
                 ],
-                "max_output_tokens": self.max_output_tokens,
                 "stream": True,
                 "store": False,
             }
