@@ -1,7 +1,8 @@
 # Market-intelligence LLM
 
-Orbit uses the OpenAI Responses API as the primary inference path for Reddit,
-Twitter, news, and combined sentiment analysis.
+Orbit uses one live, web-grounded OpenAI Responses analysis as the primary
+hourly market-intelligence path. It covers global finance, cryptocurrency, and
+futures positioning without placing orders or bypassing trading controls.
 
 ## Decision
 
@@ -29,6 +30,12 @@ tries providers in that fixed order and falls back only after an error or empty
 response. This prevents startup probes from consuming tokens or blocking the
 sentiment worker during application boot.
 
+The hourly web-search call is intentionally OpenAI-only because OpenRouter and
+Groq fallbacks cannot guarantee live web grounding. If it fails, the hourly run
+fails closed: the existing Redis sentiment is preserved and the scheduler
+retries rather than publishing an ungrounded replacement. Provider fallback
+continues to apply to legacy non-web calls.
+
 ## Configuration
 
 ```dotenv
@@ -37,6 +44,8 @@ OPENAI_API_KEY=...
 OPENAI_AUTH_FILE=/run/secrets/codex/auth.json
 OPENAI_MODEL=gpt-5.6-terra
 OPENAI_MAX_OUTPUT_TOKENS=2000
+OPENAI_WEB_SEARCH_TIMEOUT=300
+ORBIT_LEGACY_SENTIMENT_UPDATES=false
 ```
 
 `OPENAI_MODEL` is configurable so a model can be evaluated and promoted without
@@ -47,6 +56,21 @@ provisioned file refreshes the running worker; the credential must never be
 committed to the repository. `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and `GROQ_API_KEY`
 are optional resilience settings. Production should alert when a fallback is
 used because different providers may produce different sentiment distributions.
+
+## Hourly web-search flow
+
+Once per hour, `Croner.run_once()` asks `SentimentWorkflow` for a fresh web
+assessment covering the latest four hours of macro, rates, currencies,
+equities, commodities, crypto, futures funding, open interest, liquidations,
+regulation, exchange incidents, and geopolitical risk. The result must be valid
+JSON with a `BULLISH`, `BEARISH`, or `NEUTRAL` label, bounded confidence,
+evidence-based explanation, and up to eight consulted source URLs.
+
+Validated results are stored in MongoDB with `chatgpt_web_search` provenance and
+cached in Redis for the trading signal filter. The old RSS, Reddit, and Twitter
+poller remains available only when `ORBIT_LEGACY_SENTIMENT_UPDATES=true`; it is
+disabled by default to avoid duplicate analysis and uncontrolled web-search
+fan-out.
 
 ## Operational boundary
 

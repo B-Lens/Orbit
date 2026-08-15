@@ -124,6 +124,22 @@ class LLM(ExceptionManager):
 
         raise RuntimeError("All configured market-intelligence providers failed") from last_error
 
+    def invoke_web_search(self, prompt: str) -> str:
+        """Run a web-grounded query through the primary OpenAI provider only."""
+        prompt_token_length = len(prompt.split())
+        self._track_token_usage(prompt_token_length)
+        provider = self.openai_llm
+        web_invoke = getattr(provider, "invoke_web_search", None)
+        if not callable(web_invoke):
+            raise RuntimeError(
+                "The configured OpenAI provider does not support live web search"
+            )
+        response = web_invoke(prompt)
+        content = response.content if hasattr(response, "content") else response
+        if not content or not str(content).strip():
+            raise RuntimeError("OpenAI web search returned an empty response")
+        return str(content).strip()
+
     # -----------------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------------

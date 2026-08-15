@@ -2,12 +2,11 @@
 sentimen_cron
 =============
 
-Provides :class:`Croner`, a simple scheduler that runs the
-:class:`SentimentWorkflow` on two cadences:
+Provides :class:`Croner`, a scheduler that runs live web-grounded sentiment
+hourly. The legacy source poller can be enabled explicitly:
 
-1. **Full analysis** — once per hour (top of the hour).
-2. **News + Reddit + Twitter update** — every ``NEWS_POLL_INTERVAL_SECONDS``
-   seconds (default 10 minutes).
+1. **ChatGPT web-search analysis** — once per hour.
+2. **Legacy News + Reddit + Twitter update** — disabled by default.
 
 Last-fetch timestamps are persisted in Redis so they survive process
 restarts.  All heavy dependencies (LLM, workflow, Redis) can be **injected**
@@ -17,6 +16,7 @@ through the constructor.
 import time
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
@@ -44,7 +44,7 @@ DRIFT_WINDOW_SECONDS: int = 86_400  # 24 hours
 
 
 class Croner(ExceptionManager, RedisManager):
-    """Hourly full-analysis + 10-minute news+Reddit+Twitter update scheduler.
+    """Hourly web-search sentiment scheduler with optional legacy updates.
 
     Args:
         sentiment_workflow: Pre-built :class:`SentimentWorkflow`.  When
@@ -55,6 +55,7 @@ class Croner(ExceptionManager, RedisManager):
         news_poll_interval: Override the news-polling interval in seconds.
         sentiment_drift_threshold: Override the confidence threshold that
             triggers an immediate full analysis on sentiment drift.
+        legacy_updates_enabled: Enable the legacy 10-minute source poller.
     """
 
     def __init__(
@@ -64,6 +65,7 @@ class Croner(ExceptionManager, RedisManager):
         custom_logger: Optional[logging.Logger] = None,
         news_poll_interval: int = NEWS_POLL_INTERVAL_SECONDS,
         sentiment_drift_threshold: float = SENTIMENT_DRIFT_THRESHOLD,
+        legacy_updates_enabled: Optional[bool] = None,
     ) -> None:
         ExceptionManager.__init__(self, custom_logger)
         RedisManager.__init__(self, redis_client=redis_client)
@@ -76,6 +78,12 @@ class Croner(ExceptionManager, RedisManager):
 
         self.news_poll_interval: int = news_poll_interval
         self.sentiment_drift_threshold: float = sentiment_drift_threshold
+        self.legacy_updates_enabled = (
+            legacy_updates_enabled
+            if legacy_updates_enabled is not None
+            else os.getenv("ORBIT_LEGACY_SENTIMENT_UPDATES", "false").lower()
+            in {"1", "true", "yes"}
+        )
 
     # ------------------------------------------------------------------
     # DRIFT WINDOW MANAGEMENT
@@ -151,8 +159,11 @@ class Croner(ExceptionManager, RedisManager):
         Returns:
             The analysis result dict.
         """
-        result = await self.sentimental_workflow.run_analysis()
+        result = await self.sentimental_workflow.run_web_search_analysis()
         logger.info(f"Sentiment Analysis Result: {result}")
+        if not result.get("success"):
+            logger.error("Hourly web-search sentiment failed: %s", result.get("error"))
+            return result
         sentiment = result.get("sentiment")
         sentiment_confidence = result.get("confidence")
         sentiment_reasoning = result.get("explanation")
@@ -306,15 +317,16 @@ class Croner(ExceptionManager, RedisManager):
                 last_run = self.get_hourly_last_run()
 
                 if last_run != current_hour:
-                    asyncio.run(self.run_once())
-                    self.set_hourly_last_run(current_hour)
-                    time.sleep(self.news_poll_interval)
+                    result = asyncio.run(self.run_once())
+                    if result.get("success"):
+                        self.set_hourly_last_run(current_hour)
 
                 # Check whether the 24-hour drift window has elapsed and
                 # reset the counter (sending a Discord alert) if so.
                 self._check_and_reset_drift_window()
 
-                asyncio.run(self.run_news_update_once())
+                if self.legacy_updates_enabled:
+                    asyncio.run(self.run_news_update_once())
                 time.sleep(self.news_poll_interval)
             except Exception as e:
                 self.handle_exception(

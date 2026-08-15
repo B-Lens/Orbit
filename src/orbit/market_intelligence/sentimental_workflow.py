@@ -27,8 +27,8 @@ Also provides a lightweight `run_news_update()` path that:
 
 import time
 import logging
-from pydantic import BaseModel, Field
-from datetime import datetime
+from pydantic import BaseModel, Field, field_validator
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -105,6 +105,20 @@ class NewsSentiment(BaseModel):
     sentiment: SentimentType
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str
+
+
+class WebSearchSentiment(Sentiment):
+    """Validated hourly sentiment grounded in live web sources."""
+
+    sources: List[str] = Field(min_length=1, max_length=8)
+
+    @field_validator("sources")
+    @classmethod
+    def validate_sources(cls, sources: List[str]) -> List[str]:
+        unique_sources = list(dict.fromkeys(sources))
+        if any(not source.startswith(("https://", "http://")) for source in unique_sources):
+            raise ValueError("web-search sources must be HTTP URLs")
+        return unique_sources
 
 
 class SentimentWorkflow(ExceptionManager):
@@ -838,6 +852,52 @@ class SentimentWorkflow(ExceptionManager):
                 "success": False,
                 "error": str(e),
                 "timestamp": get_indian_time().isoformat(),
+            }
+
+    async def run_web_search_analysis(self) -> Dict[str, Any]:
+        """Run the hourly live-web market assessment and persist its result."""
+        start_time = time.time()
+        try:
+            current_time = datetime.now(timezone.utc).isoformat()
+            prompt = self.prompt_manager.get_prompt(
+                "hourly_web_search_sentiment", current_time_utc=current_time
+            )
+            raw_content = self.llm.invoke_web_search(prompt)
+            data = extract_json(str(raw_content))
+            result = WebSearchSentiment(**data)
+            processing_time = int((time.time() - start_time) * 1000)
+            record = SentimentRecord(
+                combined_sentiment={
+                    "sentiment": result.sentiment,
+                    "confidence": result.confidence,
+                    "explanation": result.explanation,
+                },
+                reddit_sentiment={"source": "disabled_for_hourly_web_search"},
+                news_sentiment={
+                    "source": "chatgpt_web_search",
+                    "sources": result.sources,
+                    "summary": result.explanation,
+                },
+                market_indicators={},
+                twitter_sentiment={"source": "disabled_for_hourly_web_search"},
+                processing_time_ms=processing_time,
+            )
+            record_id = self.mongodb.save_sentiment(record)
+            return {
+                "success": True,
+                "timestamp": get_indian_time().isoformat(),
+                "database_id": record_id,
+                "source": "chatgpt_web_search",
+                **result.model_dump(),
+                "processing_time_ms": processing_time,
+            }
+        except Exception as error:
+            self.handle_exception(error, context_description="run_web_search_analysis")
+            return {
+                "success": False,
+                "error": str(error),
+                "timestamp": get_indian_time().isoformat(),
+                "source": "chatgpt_web_search",
             }
 
     # ------------------------------------------------------------------

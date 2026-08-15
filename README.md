@@ -5,7 +5,7 @@
 Orbit is an AI-based trading framework that bridges research experimentation and production trading. It integrates classical strategies, machine learning models, and reinforcement learning experiments into a modular, automation-friendly architecture for both market intelligence and trading operations.
 
 ### Key Features
-- **Market Intelligence:** Harness Reddit and news sentiment data for actionable insights using LLM-powered analysis.
+- **Market Intelligence:** Run hourly, web-grounded financial and crypto-futures sentiment analysis with validated sources.
 - **Automated Trading:** Execute and monitor Binance Futures trades with precision, including SL/TP lifecycle management.
 - **Modular Design:** Easily integrate custom strategies via a lazy-loading strategy registry.
 - **Self-contained Strategies:** Production BTC, ETH, and BCH strategies are versioned and deployed with Orbit; no private runtime repository is required.

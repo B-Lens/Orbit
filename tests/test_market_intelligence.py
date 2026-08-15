@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from unittest.mock import MagicMock, patch
 os.environ["GROQ_API_KEY"] = "test_key"
@@ -96,3 +97,57 @@ def test_run_analysis_success():
     assert result["sentiment"] == "BEARISH"
 
     workflow._save_to_database.assert_called_once()
+
+
+def test_hourly_web_search_analysis_is_validated_and_persisted():
+    mock_llm = MagicMock()
+    mock_llm.invoke_web_search.return_value = json.dumps(
+        {
+            "sentiment": "BULLISH",
+            "confidence": 0.82,
+            "explanation": "Rates eased while crypto flows strengthened.",
+            "sources": ["https://example.com/market-update"],
+        }
+    )
+    with (
+        patch("orbit.market_intelligence.sentimental_workflow.RedditClient"),
+        patch("orbit.market_intelligence.sentimental_workflow.TwitterClient"),
+        patch("orbit.market_intelligence.sentimental_workflow.MongoDBManager"),
+    ):
+        workflow = SentimentWorkflow(llm=mock_llm)
+    workflow.mongodb.save_sentiment.return_value = "record-id"
+
+    result = asyncio.run(workflow.run_web_search_analysis())
+
+    assert result["success"] is True
+    assert result["sentiment"] == "BULLISH"
+    assert result["source"] == "chatgpt_web_search"
+    record = workflow.mongodb.save_sentiment.call_args.args[0]
+    assert record.news_sentiment["source"] == "chatgpt_web_search"
+    assert record.news_sentiment["sources"] == [
+        "https://example.com/market-update"
+    ]
+
+
+def test_hourly_web_search_analysis_rejects_missing_sources():
+    mock_llm = MagicMock()
+    mock_llm.invoke_web_search.return_value = json.dumps(
+        {
+            "sentiment": "NEUTRAL",
+            "confidence": 0.2,
+            "explanation": "No sourced evidence.",
+            "sources": [],
+        }
+    )
+    with (
+        patch("orbit.market_intelligence.sentimental_workflow.RedditClient"),
+        patch("orbit.market_intelligence.sentimental_workflow.TwitterClient"),
+        patch("orbit.market_intelligence.sentimental_workflow.MongoDBManager"),
+    ):
+        workflow = SentimentWorkflow(llm=mock_llm)
+    workflow.handle_exception = MagicMock()
+
+    result = asyncio.run(workflow.run_web_search_analysis())
+
+    assert result["success"] is False
+    workflow.mongodb.save_sentiment.assert_not_called()
