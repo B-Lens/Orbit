@@ -6,8 +6,8 @@ futures positioning without placing orders or bypassing trading controls.
 
 ## Decision
 
-The runtime uses `gpt-5.6-terra` by default. It is a general-purpose production
-model that balances intelligence and cost. A Codex model or the Codex CLI is
+The runtime uses `gpt-5.6-luna` by default. It is a lower-cost model that passed
+the live, sourced hourly sentiment schema check. A Codex model or the Codex CLI is
 not used in the trading process because Codex is optimized for agentic software
 engineering rather than recurring market classification. OpenAI also recommends
 GPT-5.6 rather than the rolling ChatGPT `chat-latest` alias for production API
@@ -42,7 +42,7 @@ continues to apply to legacy non-web calls.
 OPENAI_API_KEY=...
 # Alternative to OPENAI_API_KEY:
 OPENAI_AUTH_FILE=/run/secrets/codex/auth.json
-OPENAI_MODEL=gpt-5.6-terra
+OPENAI_MODEL=gpt-5.6-luna
 OPENAI_MAX_OUTPUT_TOKENS=2000
 OPENAI_WEB_SEARCH_TIMEOUT=300
 ORBIT_LEGACY_SENTIMENT_UPDATES=false
