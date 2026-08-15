@@ -383,14 +383,17 @@ class BinanceAutomation(ExceptionManager):
 
     def report_performance(self, interval_seconds: int = 86400) -> None:
         """Sync Binance income and emit a fee-aware report once per day."""
-        reporter = PerformanceReporter(
-            self.order_manager.future_client, self.order_manager.mongo_handler
-        )
+        reporters = [
+            PerformanceReporter(client, self.order_manager.mongo_handler)
+            for mode, client in self.order_manager.futures_clients.items()
+            if mode is not ExecutionMode.PAPER
+        ]
         while True:
-            try:
-                reporter.report_last_24_hours()
-            except Exception as exc:
-                self.handle_exception(exc, "Exception in performance reporter")
+            for reporter in reporters:
+                try:
+                    reporter.report_last_24_hours()
+                except Exception as exc:
+                    self.handle_exception(exc, "Exception in performance reporter")
             time.sleep(interval_seconds)
 
     # ------------------------------------------------------------------
@@ -410,7 +413,7 @@ class BinanceAutomation(ExceptionManager):
         trade_thread.start()
         self.workers_to_monitor.append(trade_thread)
 
-        if self.order_manager.execution_settings.mode is not ExecutionMode.PAPER:
+        if self.order_manager.execution_settings.can_submit_orders:
             performance_thread = threading.Thread(
                 target=self.report_performance,
                 daemon=True,

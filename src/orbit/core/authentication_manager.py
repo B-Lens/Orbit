@@ -12,6 +12,7 @@ through the constructor for easier testing and looser coupling.
 
 import locale
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +21,7 @@ from binance.um_futures import UMFutures
 
 from config.config import load_config
 from orbit.core.exception_manager import ExceptionManager
-from orbit.core.execution import ExecutionSettings
+from orbit.core.execution import ExecutionMode, ExecutionSettings, FUTURES_TESTNET_URL
 
 logger = logging.getLogger("Orbit")
 
@@ -74,6 +75,7 @@ class AuthenticationManager(ExceptionManager):
         self,
         spot_client: Optional[Spot] = None,
         futures_client: Optional[UMFutures] = None,
+        futures_clients: Optional[Dict[ExecutionMode, UMFutures]] = None,
         config: Optional[Dict[str, Any]] = None,
         execution_settings: Optional[ExecutionSettings] = None,
     ) -> None:
@@ -82,16 +84,52 @@ class AuthenticationManager(ExceptionManager):
         self.config: Dict[str, Any] = config if config is not None else load_config()
 
         self.execution_settings = execution_settings or ExecutionSettings.from_env()
-        api_key = self.execution_settings.api_key
-        secret_key = self.execution_settings.secret_key
-
-        self.client: Spot = spot_client or _build_spot_client(api_key, secret_key)
-        self.future_client: UMFutures = futures_client or _build_futures_client(
-            api_key, secret_key, self.execution_settings.futures_base_url
+        live_enabled = ExecutionMode.LIVE in self.execution_settings.active_modes
+        self.client: Spot = spot_client or _build_spot_client(
+            os.getenv("BINANCE_API_KEY") if live_enabled else None,
+            os.getenv("BINANCE_SECRET_KEY") if live_enabled else None,
         )
+        self.futures_clients: Dict[ExecutionMode, UMFutures] = dict(futures_clients or {})
+        if futures_client is not None:
+            for mode in self.execution_settings.active_modes:
+                self.futures_clients.setdefault(mode, futures_client)
+        if ExecutionMode.PAPER in self.execution_settings.active_modes:
+            self.futures_clients.setdefault(
+                ExecutionMode.PAPER, _build_futures_client(None, None)
+            )
+        if ExecutionMode.TESTNET in self.execution_settings.active_modes:
+            self.futures_clients.setdefault(
+                ExecutionMode.TESTNET,
+                _build_futures_client(
+                    os.getenv("BINANCE_TESTNET_API_KEY"),
+                    os.getenv("BINANCE_TESTNET_SECRET_KEY"),
+                    os.getenv("BINANCE_FUTURES_TESTNET_URL", FUTURES_TESTNET_URL),
+                ),
+            )
+        if ExecutionMode.LIVE in self.execution_settings.active_modes:
+            self.futures_clients.setdefault(
+                ExecutionMode.LIVE,
+                _build_futures_client(
+                    os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_SECRET_KEY")
+                ),
+            )
+        self.future_client: UMFutures = self.futures_clients[ExecutionMode.PAPER]
 
         self.trading_pairs: List[str] = self.config["trading_pairs"]
         self.trade_checker_pair: List[str] = self.config["trade_checker_pair"]
+        unknown_assets = set(self.execution_settings.asset_modes) - set(self.trading_pairs)
+        if unknown_assets:
+            raise ValueError(
+                "Execution modes configured for unknown trading assets: "
+                + ", ".join(sorted(unknown_assets))
+            )
+        logger.info(
+            "Asset execution modes: %s",
+            {
+                symbol: self.execution_settings.mode_for(symbol).value
+                for symbol in self.trading_pairs
+            },
+        )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -108,5 +146,15 @@ class AuthenticationManager(ExceptionManager):
 
     def get_future_symbol_price(self, symbol: str) -> float:
         """Return the current Futures mark price for *symbol*."""
-        ticker = self.future_client.ticker_price(symbol=symbol)
+        ticker = self.future_client_for(symbol).ticker_price(symbol=symbol)
         return float(ticker["price"])
+
+    def future_client_for(self, symbol: str) -> UMFutures:
+        """Return the Binance client for the symbol's configured environment."""
+        return self.futures_clients[self.execution_settings.mode_for(symbol)]
+
+    def _order_client_for(self, symbol: str) -> UMFutures:
+        """Return an authorized order client or fail closed for paper assets."""
+        if not self.execution_settings.can_submit_orders_for(symbol):
+            raise RuntimeError(f"Order submission is disabled for {symbol} in paper mode")
+        return self.future_client_for(symbol)

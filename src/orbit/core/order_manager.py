@@ -99,7 +99,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         if symbol in self._exchange_filters_cache:
             return self._exchange_filters_cache[symbol]
 
-        info = self.future_client.exchange_info()
+        info = self.future_client_for(symbol).exchange_info()
         for s in info["symbols"]:
             if s["symbol"] == symbol:
                 filters = s["filters"]
@@ -170,19 +170,20 @@ class OrderManager(AuthenticationManager, RedisManager):
 
     def get_symbol_price(self, symbol: str) -> float:
         """Return the current Futures ticker price for *symbol*."""
-        ticker = self.future_client.ticker_price(symbol=symbol)
+        ticker = self.future_client_for(symbol).ticker_price(symbol=symbol)
         return float(ticker["price"])
 
     def get_future_symbol_price(self, symbol: str) -> float:
         """Backwards-compatible alias for :meth:`get_symbol_price`."""
         return self.get_symbol_price(symbol)
 
-    def get_usdt_balance(self) -> float:
+    def get_usdt_balance(self, symbol: Optional[str] = None) -> float:
         """Return the total USDT wallet balance on the Futures account."""
-        account_info = self.future_client.account()
+        client = self.future_client_for(symbol) if symbol else self.future_client
+        account_info = client.account()
         return float(account_info["totalWalletBalance"])
 
-    def get_daily_net_pnl(self) -> float:
+    def get_daily_net_pnl(self, symbol: Optional[str] = None) -> float:
         """Synchronize today's exchange income before applying the loss halt."""
         start_ms = int(
             datetime.now(timezone.utc)
@@ -190,7 +191,8 @@ class OrderManager(AuthenticationManager, RedisManager):
             .timestamp()
             * 1000
         )
-        tracker = PerformanceTracker(self.future_client, self.mongo_handler)
+        client = self.future_client_for(symbol) if symbol else self.future_client
+        tracker = PerformanceTracker(client, self.mongo_handler)
         return tracker.sync(start_ms).net_pnl
 
     def fixed_asset_allocated(self, symbol: str, price: float) -> float:
@@ -204,7 +206,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             The computed coin quantity.  Returns ``0.0`` when the wallet
             balance is insufficient.
         """
-        usdt_balance = self.get_usdt_balance()
+        usdt_balance = self.get_usdt_balance(symbol)
         amount_to_spend = self.config["FIXED_TRADE_AMOUNT"].get(symbol, self.FIXED_SPEND_USDT)
 
         if usdt_balance <= 0 or usdt_balance < amount_to_spend:
@@ -279,7 +281,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             params["positionSide"] = position_side
 
         logger.info(f"[ALGO ORDER REQUEST] {params}")
-        resp = self.future_client.sign_request("POST", "/fapi/v1/algoOrder", params)
+        resp = self._order_client_for(symbol).sign_request(
+            "POST", "/fapi/v1/algoOrder", params
+        )
         logger.info(f"[ALGO ORDER RESPONSE] {resp}")
 
         # Register order → trade mapping via RedisManager
@@ -308,7 +312,9 @@ class OrderManager(AuthenticationManager, RedisManager):
         """
         params = {"symbol": symbol, "algoId": algo_id, "recvWindow": 60000}
         logger.info(f"[ALGO CANCEL REQUEST] {params}")
-        resp = self.future_client.sign_request("DELETE", "/fapi/v1/algoOrder", params)
+        resp = self.future_client_for(symbol).sign_request(
+            "DELETE", "/fapi/v1/algoOrder", params
+        )
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
 
         self.deregister_order(str(algo_id))
@@ -464,7 +470,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         """
         if entry_price <= 0 or stop_price is None or stop_price <= 0 or leverage <= 0:
             return 0.0, 0.0
-        equity = self.get_usdt_balance()
+        equity = self.get_usdt_balance(symbol)
         effective_risk = min(float(risk_perc), self.risk_guard.max_risk_per_trade_pct)
         risk_value = equity * effective_risk
         stop_distance = abs(entry_price - stop_price)
@@ -526,8 +532,9 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 return None, None, None
 
-            if self.execution_settings.mode is ExecutionMode.PAPER:
-                logger.warning("Order blocked: ORBIT_EXECUTION_MODE=paper")
+            execution_mode = self.execution_settings.mode_for(symbol)
+            if execution_mode is ExecutionMode.PAPER:
+                logger.warning("Order blocked: %s is configured for paper mode", symbol)
                 self.send_alerts(
                     data=None,
                     description="Order blocked in paper mode",
@@ -537,7 +544,7 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             effective_trade_id = trade_id or symbol
 
-            balance_available = self.get_usdt_balance()
+            balance_available = self.get_usdt_balance(symbol)
             qty_from_alloc: float = 0.0
 
             if sl is not None and symbol in risk_management:
@@ -593,7 +600,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 quantity=quantity,
                 leverage=leverage,
                 side=side,
-                daily_net_pnl=self.get_daily_net_pnl(),
+                daily_net_pnl=self.get_daily_net_pnl(symbol),
             )
             if not risk_decision.allowed:
                 logger.warning("Order rejected by risk guard: %s", risk_decision.reason)
@@ -631,7 +638,8 @@ class OrderManager(AuthenticationManager, RedisManager):
                 fields=field_params,
             )
 
-            self.future_client.change_leverage(symbol=symbol, leverage=leverage, recvWindow=60000)
+            futures_client = self._order_client_for(symbol)
+            futures_client.change_leverage(symbol=symbol, leverage=leverage, recvWindow=60000)
 
             params = {
                 "symbol": symbol,
@@ -647,7 +655,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 compact_id = str(trade_id).replace("-", "")[:32]
                 params["newClientOrderId"] = f"o{compact_id}"
 
-            order_response = self.future_client.new_order(**params)
+            order_response = futures_client.new_order(**params)
             time.sleep(2)
 
             if not order_response:
@@ -714,14 +722,14 @@ class OrderManager(AuthenticationManager, RedisManager):
             The API response dict, or ``None`` on failure.
         """
         try:
-            if self.execution_settings.mode is ExecutionMode.PAPER:
-                logger.warning("Market order blocked: ORBIT_EXECUTION_MODE=paper")
+            if self.execution_settings.mode_for(symbol) is ExecutionMode.PAPER:
+                logger.warning("Market order blocked: %s is configured for paper mode", symbol)
                 return None
             current_price = self.get_symbol_price(symbol)
 
             if quantity is None:
                 qty_alloc = self.fixed_asset_allocated(symbol=symbol, price=current_price)
-                balance = self.get_usdt_balance()
+                balance = self.get_usdt_balance(symbol)
                 if balance < self.FIXED_SPEND_USDT or qty_alloc <= 0:
                     self.send_alerts(
                         data=None,
@@ -764,7 +772,7 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             self.send_signal_updates(data=None, description=f"Market Order request for {symbol}", fields=market_order_params)
 
-            order_response = self.future_client.new_order(**market_order_params)
+            order_response = self._order_client_for(symbol).new_order(**market_order_params)
 
             if order_response:
                 self.send_signal_updates(data=None, description=f"{symbol} market order placed successfully", fields=order_response)
@@ -793,7 +801,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             The cancellation response dict, or ``None`` on failure.
         """
         try:
-            result = self.future_client.cancel_order(symbol=symbol, orderId=order_id, recvWindow=60000)
+            result = self.future_client_for(symbol).cancel_order(
+                symbol=symbol, orderId=order_id, recvWindow=60000
+            )
             logger.info(f"Order canceled: {result}")
             return result
         except ClientError as error:
@@ -813,7 +823,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             A list of order dicts (may be empty on error).
         """
         try:
-            orders = self.future_client.get_all_orders(symbol=symbol, orderId=orderId, recvWindow=60000)
+            orders = self.future_client_for(symbol).get_all_orders(
+                symbol=symbol, orderId=orderId, recvWindow=60000
+            )
             logger.info(f"Open orders: {orders} for symbol {symbol}")
             return orders
         except ClientError as error:
@@ -838,7 +850,7 @@ class OrderManager(AuthenticationManager, RedisManager):
 
         for attempt in range(1, max_retries + 1):
             try:
-                orders = self.future_client.sign_request(
+                orders = self.future_client_for(symbol).sign_request(
                     "GET",
                     "/fapi/v1/allAlgoOrders",
                     {"symbol": symbol, "recvWindow": 60000},
@@ -951,7 +963,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             timeout = 300
 
             while True:
-                order_status = self.future_client.get_orders(symbol=symbol, orderId=order_id, recvWindow=60000)
+                order_status = self.future_client_for(symbol).get_orders(
+                    symbol=symbol, orderId=order_id, recvWindow=60000
+                )
                 status: Optional[str] = None
                 if isinstance(order_status, dict):
                     status = order_status.get("status")
@@ -1014,7 +1028,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             price = self.adjust_price_tick(symbol, price)
             quantity = self.adjust_quantity_step(symbol, quantity)
 
-            modified_order = self.future_client.modify_order(
+            modified_order = self._order_client_for(symbol).modify_order(
                 symbol=symbol, side=side, orderId=orderId, price=price, quantity=quantity, recvWindow=60000,
             )
 

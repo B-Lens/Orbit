@@ -34,6 +34,7 @@ from binance.error import ClientError
 from config import COIN_TRADE_TYPE, TradeType, TRAILING_STOPLOSS
 from orbit.utils.utils import get_indian_time
 from orbit.core.authentication_manager import AuthenticationManager
+from orbit.core.execution import ExecutionMode
 from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.binance_ws_manager import BinanceWSManager
@@ -720,7 +721,16 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
         """Discover all active Futures positions and set cooldowns."""
-        positions = self.future_client.get_position_risk()
+        clients = {
+            id(self.order_manager.futures_clients[mode]): self.order_manager.futures_clients[mode]
+            for mode in self.order_manager.execution_settings.active_modes
+            if mode is not ExecutionMode.PAPER
+        }
+        positions = [
+            position
+            for client in clients.values()
+            for position in client.get_position_risk()
+        ]
         trades: Dict[str, Dict[str, Any]] = {}
 
         active_symbols = set()

@@ -78,10 +78,11 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
 
     def _record_decision(self, **values: Any) -> str:
         decision_id = str(values.pop("decision_id", uuid.uuid4()))
+        symbol = str(values.get("symbol", ""))
         record = {
             "decision_id": decision_id,
             "timestamp": get_indian_time(),
-            "execution_mode": self.execution_settings.mode.value,
+            "execution_mode": self.execution_settings.mode_for(symbol).value,
             **values,
         }
         if getattr(self, "mongo_handler", None) is not None:

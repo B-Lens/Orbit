@@ -90,7 +90,10 @@ def _make_order_manager():
             spot_client=spot,
             futures_client=futures,
             execution_settings=ExecutionSettings(
-                ExecutionMode.TESTNET, "test", "test", "https://demo-fapi.binance.com"
+                {
+                    symbol: ExecutionMode.TESTNET
+                    for symbol in ("BTCUSDT", "ETHUSDT", "BCHUSDT")
+                }
             ),
         )
         # disable inherited discord calls
@@ -123,7 +126,10 @@ def _make_trade_checker():
             spot_client=spot,
             futures_client=futures,
             execution_settings=ExecutionSettings(
-                ExecutionMode.TESTNET, "test", "test", "https://demo-fapi.binance.com"
+                {
+                    symbol: ExecutionMode.TESTNET
+                    for symbol in ("BTCUSDT", "ETHUSDT", "BCHUSDT")
+                }
             ),
         )
     return tc
