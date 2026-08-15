@@ -115,14 +115,15 @@ def test_hourly_web_search_analysis_is_validated_and_persisted():
         patch("orbit.market_intelligence.sentimental_workflow.MongoDBManager"),
     ):
         workflow = SentimentWorkflow(llm=mock_llm)
-    workflow.mongodb.save_sentiment.return_value = "record-id"
+    save_sentiment = MagicMock(return_value="record-id")
+    workflow.mongodb.save_sentiment = save_sentiment
 
     result = asyncio.run(workflow.run_web_search_analysis())
 
     assert result["success"] is True
     assert result["sentiment"] == "BULLISH"
     assert result["source"] == "chatgpt_web_search"
-    record = workflow.mongodb.save_sentiment.call_args.args[0]
+    record = save_sentiment.call_args.args[0]
     assert record.news_sentiment["source"] == "chatgpt_web_search"
     assert record.news_sentiment["sources"] == [
         "https://example.com/market-update"
@@ -146,8 +147,10 @@ def test_hourly_web_search_analysis_rejects_missing_sources():
     ):
         workflow = SentimentWorkflow(llm=mock_llm)
     workflow.handle_exception = MagicMock()
+    save_sentiment = MagicMock()
+    workflow.mongodb.save_sentiment = save_sentiment
 
     result = asyncio.run(workflow.run_web_search_analysis())
 
     assert result["success"] is False
-    workflow.mongodb.save_sentiment.assert_not_called()
+    save_sentiment.assert_not_called()
