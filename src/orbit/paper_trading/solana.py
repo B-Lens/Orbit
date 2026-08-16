@@ -1,8 +1,8 @@
 """SOLUSDT forward-test and backtest runner.
 
-This module is intentionally isolated from Orbit's production order path.  It
-uses the same strategy implementation and OHLCV pipeline, but writes virtual
-trades to MongoDB and never calls a Binance order endpoint.
+This module is intentionally isolated from Orbit's production order path. It
+uses the researched SOL strategy and OHLCV pipeline, writes virtual trades to
+MongoDB, accounts for fees, and never calls a Binance order endpoint.
 """
 
 from __future__ import annotations
@@ -17,14 +17,16 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pandas as pd
 
 from orbit.core.mongo_handler import MongoHandler
-from orbit.strategies.sol_strategy import BollingerAdaptiveReversalStrategySOL
+from orbit.strategies.sol_strategy import SolanaMeanReversionStrategy
 
 SYMBOL = "SOLUSDT"
+STRATEGY_NAME = "SolanaMeanReversionStrategy"
 DEFAULT_MARGIN_USDT = 30.0
 DEFAULT_LEVERAGE = 2
-DEFAULT_COOLDOWN_HOURS = 8
+# The researched SOL candidate used a two-hour cooldown after an exit.
+DEFAULT_COOLDOWN_HOURS = 2
 DEFAULT_MAX_HOLD_HOURS = 48
-DEFAULT_FEE_RATE = 0.0004  # conservative per-side assumption; configurable
+DEFAULT_FEE_RATE = 0.0004  # 4 bps per side; configurable for venue/account tier
 
 
 def _as_utc_datetime(value: Any) -> datetime:
@@ -36,16 +38,14 @@ def _as_utc_datetime(value: Any) -> datetime:
     return ts.to_pydatetime()
 
 
-def _new_strategy(data: pd.DataFrame) -> BollingerAdaptiveReversalStrategySOL:
-    strategy = BollingerAdaptiveReversalStrategySOL(data)
-    # Backtests/forward tests should not emit a Discord parameter message every
-    # candle.  Signals still use the exact production strategy logic.
+def _new_strategy(data: pd.DataFrame) -> SolanaMeanReversionStrategy:
+    strategy = SolanaMeanReversionStrategy(data)
     strategy.send_parameters = lambda *args, **kwargs: None  # type: ignore[method-assign]
     return strategy
 
 
 def evaluate_exit(trade: Dict[str, Any], bar: pd.Series) -> Tuple[Optional[str], Optional[float]]:
-    """Resolve SL/TP for one candle, conservatively preferring SL on ambiguity."""
+    """Resolve hard SL/TP for a candle, preferring SL when intrabar order is unknown."""
     side = trade["signal"]
     sl = float(trade["stop_loss"])
     tp = float(trade["take_profit"])
@@ -63,6 +63,70 @@ def evaluate_exit(trade: Dict[str, Any], bar: pd.Series) -> Tuple[Optional[str],
         if low <= tp:
             return "Target", tp
     return None, None
+
+
+def _atr(data: pd.DataFrame, period: int = 14) -> Optional[float]:
+    if data.empty or len(data) < period + 1:
+        return None
+    previous_close = data["close"].shift(1)
+    true_range = pd.concat(
+        [
+            data["high"] - data["low"],
+            (data["high"] - previous_close).abs(),
+            (data["low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    value = true_range.rolling(period).mean().iloc[-1]
+    return None if pd.isna(value) else float(value)
+
+
+def apply_researched_dynamic_exit(
+    trade: Dict[str, Any], data: pd.DataFrame
+) -> Tuple[Optional[str], Optional[float], Dict[str, Any]]:
+    """Apply the research strategy's profitable SMA exit and trailing-stop update.
+
+    Hard SL/TP should be evaluated first. A trailing stop derived from a closed
+    candle becomes effective for the *next* candle, avoiding look-ahead bias
+    about the intrabar order of high/low/close.
+    """
+    if data.empty:
+        return None, None, {}
+
+    close = float(data["close"].iloc[-1])
+    sma = float(data["close"].rolling(20).mean().iloc[-1])
+    current_atr = _atr(data)
+    if pd.isna(sma):
+        return None, None, {}
+
+    side = trade["signal"]
+    entry = float(trade["entry_price"])
+    updates: Dict[str, Any] = {}
+
+    if side == "BUY":
+        pnl_fraction = (close - entry) / entry
+        if close > sma * 1.005 and pnl_fraction > 0.005:
+            return "SMA-Profit", close, updates
+        if current_atr is not None:
+            best_price = max(float(trade.get("best_price", entry)), close)
+            new_stop = best_price - current_atr
+            updates["best_price"] = best_price
+            if new_stop > float(trade["stop_loss"]):
+                updates["stop_loss"] = new_stop
+                updates["trailing_stop_active"] = True
+    else:
+        pnl_fraction = (entry - close) / entry
+        if close < sma * 0.995 and pnl_fraction > 0.005:
+            return "SMA-Profit", close, updates
+        if current_atr is not None:
+            best_price = min(float(trade.get("best_price", entry)), close)
+            new_stop = best_price + current_atr
+            updates["best_price"] = best_price
+            if new_stop < float(trade["stop_loss"]):
+                updates["stop_loss"] = new_stop
+                updates["trailing_stop_active"] = True
+
+    return None, None, updates
 
 
 def close_trade_values(
@@ -85,7 +149,8 @@ def close_trade_values(
     fees = (entry * quantity + exit_price * quantity) * fee_rate
     net_pnl = gross_pnl - fees
     return_on_margin_pct = (net_pnl / margin * 100.0) if margin else 0.0
-    risk_usdt = abs(entry - float(trade["stop_loss"])) * quantity
+    initial_stop = float(trade.get("initial_stop_loss", trade["stop_loss"]))
+    risk_usdt = abs(entry - initial_stop) * quantity
     r_multiple = (net_pnl / risk_usdt) if risk_usdt else 0.0
 
     return {
@@ -124,6 +189,7 @@ def summarize_trades(trades: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "wins": len(winners),
         "losses": len(losers),
         "timeouts": sum(1 for row in rows if row.get("outcome") == "Timeout"),
+        "sma_profit_exits": sum(1 for row in rows if row.get("outcome") == "SMA-Profit"),
         "win_rate_pct": (len(winners) / len(rows) * 100.0) if rows else 0.0,
         "net_pnl_usdt": sum(pnls),
         "total_fees_usdt": sum(float(row.get("fees_usdt", 0.0)) for row in rows),
@@ -137,6 +203,34 @@ def summarize_trades(trades: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _paper_trade_from_signal(
+    signal: Dict[str, Any], *, margin_usdt: float, leverage: int, opened_at: datetime, mode: str
+) -> Dict[str, Any]:
+    entry = float(signal["entry_price"])
+    stop = float(signal["stop_loss"])
+    notional = margin_usdt * leverage
+    return {
+        "symbol": SYMBOL,
+        "mode": mode,
+        "status": "OPEN",
+        "signal": signal["signal"],
+        "entry_price": entry,
+        "initial_stop_loss": stop,
+        "stop_loss": stop,
+        "take_profit": float(signal["take_profit"]),
+        "margin_usdt": margin_usdt,
+        "leverage": leverage,
+        "notional_usdt": notional,
+        "quantity": notional / entry,
+        "opened_at": opened_at,
+        "best_price": entry,
+        "trailing_stop_active": False,
+        "pattern": signal.get("pattern"),
+        "strategy": STRATEGY_NAME,
+        "strategy_meta": signal.get("strategy_meta", {}),
+    }
+
+
 def backtest_solana(
     data: pd.DataFrame,
     *,
@@ -146,7 +240,7 @@ def backtest_solana(
     max_hold_hours: int = DEFAULT_MAX_HOLD_HOURS,
     fee_rate: float = DEFAULT_FEE_RATE,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Replay the SOL candidate strategy without touching exchange order APIs."""
+    """Replay the SOL research candidate without touching exchange APIs."""
     if data.empty or len(data) < 170:
         return [], summarize_trades([])
 
@@ -161,6 +255,11 @@ def backtest_solana(
 
         if active is not None:
             outcome, exit_price = evaluate_exit(active, bar)
+            updates: Dict[str, Any] = {}
+            if outcome is None:
+                outcome, exit_price, updates = apply_researched_dynamic_exit(active, data.iloc[: i + 1])
+            if updates:
+                active.update(updates)
             if outcome is None and now - active["opened_at"] >= timedelta(hours=max_hold_hours):
                 outcome, exit_price = "Timeout", float(bar["close"])
             if outcome is not None and exit_price is not None:
@@ -175,35 +274,21 @@ def backtest_solana(
                 )
                 trades.append(active)
                 active = None
+                cooldown_until = now + timedelta(hours=cooldown_hours)
             continue
 
         if cooldown_until is not None and now < cooldown_until:
             continue
 
-        strategy = _new_strategy(data.iloc[: i + 1])
-        signal = strategy.generate_signals(symbol=SYMBOL)
-        if not signal:
-            continue
-
-        entry = float(signal["entry_price"])
-        notional = margin_usdt * leverage
-        quantity = notional / entry
-        active = {
-            "symbol": SYMBOL,
-            "mode": "paper_backtest",
-            "status": "OPEN",
-            "signal": signal["signal"],
-            "entry_price": entry,
-            "stop_loss": float(signal["stop_loss"]),
-            "take_profit": float(signal["take_profit"]),
-            "margin_usdt": margin_usdt,
-            "leverage": leverage,
-            "notional_usdt": notional,
-            "quantity": quantity,
-            "opened_at": now,
-            "pattern": signal.get("pattern"),
-        }
-        cooldown_until = now + timedelta(hours=cooldown_hours)
+        signal = _new_strategy(data.iloc[: i + 1]).generate_signals(symbol=SYMBOL)
+        if signal:
+            active = _paper_trade_from_signal(
+                signal,
+                margin_usdt=margin_usdt,
+                leverage=leverage,
+                opened_at=now,
+                mode="paper_backtest",
+            )
 
     if active is not None:
         final_time = _as_utc_datetime(data.index[-1])
@@ -250,10 +335,12 @@ class SolanaPaperTrader:
         return self.collection.find_one({"symbol": SYMBOL, "status": "OPEN"})
 
     def _cooldown_active(self, now: datetime) -> bool:
-        latest = self.collection.find_one({"symbol": SYMBOL}, sort=[("opened_at", -1)])
-        if not latest:
+        latest = self.collection.find_one(
+            {"symbol": SYMBOL, "status": "CLOSED"}, sort=[("closed_at", -1)]
+        )
+        if not latest or not latest.get("closed_at"):
             return False
-        return now < latest["opened_at"] + timedelta(hours=self.cooldown_hours)
+        return now < latest["closed_at"] + timedelta(hours=self.cooldown_hours)
 
     def run_once(self) -> Dict[str, Any]:
         data = self.mongo.handle_mongo_data(SYMBOL)
@@ -266,19 +353,31 @@ class SolanaPaperTrader:
 
         if active:
             outcome, exit_price = evaluate_exit(active, bar)
+            dynamic_updates: Dict[str, Any] = {}
+            if outcome is None:
+                outcome, exit_price, dynamic_updates = apply_researched_dynamic_exit(active, data)
             if outcome is None and now - active["opened_at"] >= timedelta(hours=self.max_hold_hours):
                 outcome, exit_price = "Timeout", float(bar["close"])
             if outcome is not None and exit_price is not None:
                 values = close_trade_values(
-                    active,
+                    {**active, **dynamic_updates},
                     outcome=outcome,
                     exit_price=exit_price,
                     closed_at=now,
                     fee_rate=self.fee_rate,
                 )
-                self.collection.update_one({"_id": active["_id"]}, {"$set": values})
+                self.collection.update_one(
+                    {"_id": active["_id"]}, {"$set": {**dynamic_updates, **values}}
+                )
                 return {"status": "closed", "symbol": SYMBOL, **values}
-            return {"status": "open", "symbol": SYMBOL, "entry_price": active["entry_price"]}
+            if dynamic_updates:
+                self.collection.update_one({"_id": active["_id"]}, {"$set": dynamic_updates})
+            return {
+                "status": "open",
+                "symbol": SYMBOL,
+                "entry_price": active["entry_price"],
+                "stop_loss": dynamic_updates.get("stop_loss", active["stop_loss"]),
+            }
 
         if self._cooldown_active(now):
             return {"status": "cooldown", "symbol": SYMBOL}
@@ -287,31 +386,22 @@ class SolanaPaperTrader:
         if not signal:
             return {"status": "no_signal", "symbol": SYMBOL}
 
-        entry = float(signal["entry_price"])
-        notional = self.margin_usdt * self.leverage
-        document = {
-            "symbol": SYMBOL,
-            "mode": "paper_forward",
-            "status": "OPEN",
-            "signal": signal["signal"],
-            "entry_price": entry,
-            "stop_loss": float(signal["stop_loss"]),
-            "take_profit": float(signal["take_profit"]),
-            "margin_usdt": self.margin_usdt,
-            "leverage": self.leverage,
-            "notional_usdt": notional,
-            "quantity": notional / entry,
-            "fee_rate": self.fee_rate,
-            "opened_at": now,
-            "pattern": signal.get("pattern"),
-            "strategy": "BollingerAdaptiveReversalStrategySOL",
-        }
+        document = _paper_trade_from_signal(
+            signal,
+            margin_usdt=self.margin_usdt,
+            leverage=self.leverage,
+            opened_at=now,
+            mode="paper_forward",
+        )
+        document["fee_rate"] = self.fee_rate
         result = self.collection.insert_one(document)
         return {"status": "opened", "paper_trade_id": str(result.inserted_id), **document}
 
     def stats(self) -> Dict[str, Any]:
-        rows = list(self.collection.find({"symbol": SYMBOL, "status": "CLOSED"}).sort("closed_at", 1))
-        return {"symbol": SYMBOL, **summarize_trades(rows)}
+        rows = list(
+            self.collection.find({"symbol": SYMBOL, "status": "CLOSED"}).sort("closed_at", 1)
+        )
+        return {"symbol": SYMBOL, "strategy": STRATEGY_NAME, **summarize_trades(rows)}
 
 
 def _print_json(value: Dict[str, Any]) -> None:
@@ -320,7 +410,11 @@ def _print_json(value: Dict[str, Any]) -> None:
             return obj.isoformat()
         return str(obj)
 
-    print(json.dumps(value, indent=2, default=default, allow_nan=False))
+    # JSON has no representation for Infinity.
+    safe = dict(value)
+    if safe.get("profit_factor") == float("inf"):
+        safe["profit_factor"] = "Infinity"
+    print(json.dumps(safe, indent=2, default=default, allow_nan=False))
 
 
 def main() -> None:
@@ -334,17 +428,33 @@ def main() -> None:
     fee_rate = float(os.getenv("ORBIT_PAPER_FEE_RATE", str(DEFAULT_FEE_RATE)))
     margin = float(os.getenv("ORBIT_SOL_PAPER_MARGIN_USDT", str(DEFAULT_MARGIN_USDT)))
     leverage = int(os.getenv("ORBIT_SOL_PAPER_LEVERAGE", str(DEFAULT_LEVERAGE)))
+    cooldown = int(os.getenv("ORBIT_SOL_PAPER_COOLDOWN_HOURS", str(DEFAULT_COOLDOWN_HOURS)))
+    max_hold = int(os.getenv("ORBIT_SOL_PAPER_MAX_HOLD_HOURS", str(DEFAULT_MAX_HOLD_HOURS)))
 
     mongo = MongoHandler()
     if args.backtest_days:
         end_ms = int(time.time() * 1000)
         start_ms = end_ms - args.backtest_days * 24 * 60 * 60 * 1000
         data = mongo.data_collector(SYMBOL, interval="15m", start_time=start_ms)
-        _, stats = backtest_solana(data, margin_usdt=margin, leverage=leverage, fee_rate=fee_rate)
-        _print_json({"symbol": SYMBOL, "days": args.backtest_days, **stats})
+        _, stats = backtest_solana(
+            data,
+            margin_usdt=margin,
+            leverage=leverage,
+            cooldown_hours=cooldown,
+            max_hold_hours=max_hold,
+            fee_rate=fee_rate,
+        )
+        _print_json({"symbol": SYMBOL, "strategy": STRATEGY_NAME, "days": args.backtest_days, **stats})
         return
 
-    trader = SolanaPaperTrader(mongo, margin_usdt=margin, leverage=leverage, fee_rate=fee_rate)
+    trader = SolanaPaperTrader(
+        mongo,
+        margin_usdt=margin,
+        leverage=leverage,
+        cooldown_hours=cooldown,
+        max_hold_hours=max_hold,
+        fee_rate=fee_rate,
+    )
     if args.stats:
         _print_json(trader.stats())
         return
