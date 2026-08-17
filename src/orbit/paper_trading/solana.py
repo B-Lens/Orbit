@@ -17,10 +17,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pandas as pd
 
 from orbit.core.mongo_handler import MongoHandler
-from orbit.strategies.sol_strategy import SolanaMeanReversionStrategy
+from orbit.strategies.sol_strategy import SolanaVolatilityMomentumStrategy
 
 SYMBOL = "SOLUSDT"
-STRATEGY_NAME = "SolanaMeanReversionStrategy"
+STRATEGY_NAME = "SolanaVolatilityMomentumStrategy"
 DEFAULT_MARGIN_USDT = 30.0
 DEFAULT_LEVERAGE = 2
 # The researched SOL candidate used a two-hour cooldown after an exit.
@@ -38,8 +38,8 @@ def _as_utc_datetime(value: Any) -> datetime:
     return ts.to_pydatetime()
 
 
-def _new_strategy(data: pd.DataFrame) -> SolanaMeanReversionStrategy:
-    strategy = SolanaMeanReversionStrategy(data)
+def _new_strategy(data: pd.DataFrame) -> SolanaVolatilityMomentumStrategy:
+    strategy = SolanaVolatilityMomentumStrategy(data)
     strategy.send_parameters = lambda *args, **kwargs: None  # type: ignore[method-assign]
     return strategy
 
@@ -84,7 +84,7 @@ def _atr(data: pd.DataFrame, period: int = 14) -> Optional[float]:
 def apply_researched_dynamic_exit(
     trade: Dict[str, Any], data: pd.DataFrame
 ) -> Tuple[Optional[str], Optional[float], Dict[str, Any]]:
-    """Apply the research strategy's profitable SMA exit and trailing-stop update.
+    """Apply momentum reversal exit and an ATR trailing-stop update.
 
     Hard SL/TP should be evaluated first. A trailing stop derived from a closed
     candle becomes effective for the *next* candle, avoiding look-ahead bias
@@ -94,33 +94,43 @@ def apply_researched_dynamic_exit(
         return None, None, {}
 
     close = float(data["close"].iloc[-1])
-    sma = float(data["close"].rolling(20).mean().iloc[-1])
-    current_atr = _atr(data)
-    if pd.isna(sma):
-        return None, None, {}
-
     side = trade["signal"]
     entry = float(trade["entry_price"])
+    latest = pd.Timestamp(data.index[-1])
+    trend_reversal = False
+    if latest.minute == 45 and latest.hour % 6 == 5:
+        trend_data = data.resample("6h").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+        ).dropna()
+        if len(trend_data) >= 10:
+            trend_fast = trend_data["close"].ewm(span=8, adjust=False).mean()
+            fast_ema = float(trend_fast.iloc[-1])
+            previous_fast_ema = float(trend_fast.iloc[-2])
+            trend_reversal = (
+                side == "BUY" and close < fast_ema and fast_ema < previous_fast_ema
+            ) or (
+                side == "SELL" and close > fast_ema and fast_ema > previous_fast_ema
+            )
+    current_atr = _atr(data)
     updates: Dict[str, Any] = {}
+    initial_risk = abs(entry - float(trade.get("initial_stop_loss", trade["stop_loss"])))
 
     if side == "BUY":
-        pnl_fraction = (close - entry) / entry
-        if close > sma * 1.005 and pnl_fraction > 0.005:
-            return "SMA-Profit", close, updates
+        if trend_reversal:
+            return "Momentum-Reversal", close, updates
         if current_atr is not None:
             best_price = max(float(trade.get("best_price", entry)), close)
-            new_stop = best_price - current_atr
+            new_stop = best_price - max(initial_risk, 2.0 * current_atr)
             updates["best_price"] = best_price
             if new_stop > float(trade["stop_loss"]):
                 updates["stop_loss"] = new_stop
                 updates["trailing_stop_active"] = True
     else:
-        pnl_fraction = (entry - close) / entry
-        if close < sma * 0.995 and pnl_fraction > 0.005:
-            return "SMA-Profit", close, updates
+        if trend_reversal:
+            return "Momentum-Reversal", close, updates
         if current_atr is not None:
             best_price = min(float(trade.get("best_price", entry)), close)
-            new_stop = best_price + current_atr
+            new_stop = best_price + max(initial_risk, 2.0 * current_atr)
             updates["best_price"] = best_price
             if new_stop < float(trade["stop_loss"]):
                 updates["stop_loss"] = new_stop
@@ -189,7 +199,9 @@ def summarize_trades(trades: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "wins": len(winners),
         "losses": len(losers),
         "timeouts": sum(1 for row in rows if row.get("outcome") == "Timeout"),
-        "sma_profit_exits": sum(1 for row in rows if row.get("outcome") == "SMA-Profit"),
+        "momentum_reversal_exits": sum(
+            1 for row in rows if row.get("outcome") == "Momentum-Reversal"
+        ),
         "win_rate_pct": (len(winners) / len(rows) * 100.0) if rows else 0.0,
         "net_pnl_usdt": sum(pnls),
         "total_fees_usdt": sum(float(row.get("fees_usdt", 0.0)) for row in rows),

@@ -55,10 +55,8 @@ def test_close_trade_values_is_fee_aware_and_uses_initial_risk():
     assert result["r_multiple"] == pytest.approx(result["net_pnl_usdt"] / expected_initial_risk)
 
 
-def test_dynamic_exit_takes_profitable_sma_reversion():
-    # A profitable long closing >0.5% above its SMA matches the researched
-    # mean-reversion exit, without needing to hit the original 2.5R target.
-    closes = [100.0] * 24 + [101.0]
+def test_dynamic_exit_closes_on_momentum_reversal():
+    closes = [100.0] * 239 + [99.0]
     data = pd.DataFrame(
         {
             "open": closes,
@@ -66,11 +64,12 @@ def test_dynamic_exit_takes_profitable_sma_reversion():
             "low": [value - 0.2 for value in closes],
             "close": closes,
             "volume": [1000.0] * len(closes),
-        }
+        },
+        index=pd.date_range(end="2026-08-17 05:45", periods=len(closes), freq="15min", tz="UTC"),
     )
     outcome, price, updates = apply_researched_dynamic_exit(_trade("BUY"), data)
-    assert outcome == "SMA-Profit"
-    assert price == pytest.approx(101.0)
+    assert outcome == "Momentum-Reversal"
+    assert price == pytest.approx(99.0)
     assert updates == {}
 
 
@@ -97,7 +96,7 @@ def test_summarize_trades_reports_win_rate_profit_factor_and_drawdown():
     rows = [
         {"status": "CLOSED", "outcome": "Target", "net_pnl_usdt": 2.0, "fees_usdt": 0.1, "r_multiple": 1.8},
         {"status": "CLOSED", "outcome": "SL", "net_pnl_usdt": -1.0, "fees_usdt": 0.1, "r_multiple": -1.1},
-        {"status": "CLOSED", "outcome": "SMA-Profit", "net_pnl_usdt": 1.0, "fees_usdt": 0.1, "r_multiple": 0.9},
+        {"status": "CLOSED", "outcome": "Momentum-Reversal", "net_pnl_usdt": 1.0, "fees_usdt": 0.1, "r_multiple": 0.9},
     ]
 
     stats = summarize_trades(rows)
@@ -105,7 +104,7 @@ def test_summarize_trades_reports_win_rate_profit_factor_and_drawdown():
     assert stats["closed_trades"] == 3
     assert stats["wins"] == 2
     assert stats["losses"] == 1
-    assert stats["sma_profit_exits"] == 1
+    assert stats["momentum_reversal_exits"] == 1
     assert stats["win_rate_pct"] == pytest.approx(66.666666, rel=1e-5)
     assert stats["net_pnl_usdt"] == pytest.approx(2.0)
     assert stats["profit_factor"] == pytest.approx(3.0)
