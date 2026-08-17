@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   review:
-    uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@main
+    uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@056867a00859225c4c1c36ed05b4b7637bbf07fe
     with:
       review_prompt: >-
         Review this pull request as a strict production-safety gate for a
@@ -21,4 +21,5 @@ jobs:
         deployment defects introduced by the diff. Preserve paper/Testnet/live
         environment separation. Ignore style, documentation preferences,
         speculative concerns, and pre-existing issues outside the diff.
-    secrets: inherit
+    secrets:
+      CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
