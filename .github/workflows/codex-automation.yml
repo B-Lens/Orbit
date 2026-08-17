@@ -88,6 +88,11 @@ jobs:
             `;
             fs.writeFileSync(process.env.TASK_FILE, prompt);
 
+      - name: Install Codex sandbox dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+
       - name: Install pinned Codex CLI
         run: npm install --global @openai/codex@0.147.0
 
@@ -253,6 +258,11 @@ jobs:
             ${inline}
             `;
             fs.writeFileSync(process.env.TASK_FILE, prompt);
+
+      - name: Install Codex sandbox dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
 
       - name: Install pinned Codex CLI
         run: npm install --global @openai/codex@0.147.0
