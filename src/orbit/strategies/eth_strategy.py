@@ -19,7 +19,18 @@ class ETHStrategy(Strategy):
     """
 
     def __init__(self, data: pd.DataFrame):
-        super().__init__(data)
+        # Orbit's production feed uses 15m candles, but this strategy requires 1h candles
+        if not data.empty and isinstance(data.index, pd.DatetimeIndex):
+            resampled = data.resample('1h').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
+            super().__init__(resampled)
+        else:
+            super().__init__(data)
         
     def _calculate_rsi(self, period: int = 14) -> pd.Series:
         delta = self.data['close'].diff()
@@ -97,6 +108,7 @@ class ETHStrategy(Strategy):
             entry = current['close']
             return {
                 "signal": "BUY",
+                "entry_price": float(entry),
                 "stop_loss": float(entry - 2.0 * current['atr']),
                 "take_profit": float(entry + 3.0 * current['atr']),
                 "pattern": pattern
@@ -107,6 +119,7 @@ class ETHStrategy(Strategy):
             entry = current['close']
             return {
                 "signal": "SELL",
+                "entry_price": float(entry),
                 "stop_loss": float(entry + 2.0 * current['atr']),
                 "take_profit": float(entry - 3.0 * current['atr']),
                 "pattern": pattern

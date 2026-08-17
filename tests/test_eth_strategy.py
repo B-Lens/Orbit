@@ -70,11 +70,12 @@ class TestETHStrategy(unittest.TestCase):
         if signal is not None:
             self.assertIn("signal", signal)
             self.assertEqual(signal["signal"], "BUY")
+            self.assertIn("entry_price", signal)
             self.assertIn("stop_loss", signal)
             self.assertIn("take_profit", signal)
             self.assertIn("pattern", signal)
             
-            # Check risk structure
+            # Check risk structure relative to evaluation fill
             entry = data['close'].iloc[-1]
             self.assertLess(signal["stop_loss"], entry)
             self.assertGreater(signal["take_profit"], entry)
@@ -89,11 +90,12 @@ class TestETHStrategy(unittest.TestCase):
         if signal is not None:
             self.assertIn("signal", signal)
             self.assertEqual(signal["signal"], "SELL")
+            self.assertIn("entry_price", signal)
             self.assertIn("stop_loss", signal)
             self.assertIn("take_profit", signal)
             self.assertIn("pattern", signal)
             
-            # Check risk structure
+            # Check risk structure relative to evaluation fill
             entry = data['close'].iloc[-1]
             self.assertGreater(signal["stop_loss"], entry)
             self.assertLess(signal["take_profit"], entry)
