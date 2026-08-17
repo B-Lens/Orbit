@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   review:
-    uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@6e0369a34466e2b33ccd130eb81d8bb0233574d8
+    uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@main
     with:
       review_prompt: >-
         Review this pull request as a strict production-safety gate for a
