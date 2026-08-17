@@ -12,10 +12,11 @@ unencoded contents of Codex CLI `auth.json`. Configure a GitHub environment name
 
 The workflow writes the credential to `$RUNNER_TEMP/codex-home/auth.json` with a
 restrictive umask, validates it as JSON, and removes it in an `always()` cleanup
-step. Each job installs the host `bubblewrap` package before installing Codex so
-the CLI can initialize its Linux sandbox without falling back to the bundled
-binary. Codex CLI is pinned to `0.147.0` and runs ephemerally in a
-`workspace-write` sandbox.
+step. Each job installs the host `bubblewrap` package and loads Ubuntu 24.04's
+extra `bwrap-userns-restrict` AppArmor profile before installing Codex. This lets
+the CLI create the user namespace required by its Linux sandbox without
+disabling the AppArmor restriction globally. Codex CLI is pinned to `0.147.0`
+and runs ephemerally in a `workspace-write` sandbox.
 
 ## Autonomous issue implementation
 
