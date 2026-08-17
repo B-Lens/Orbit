@@ -5,150 +5,21 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
-concurrency:
-  group: codex-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
   review:
-    name: Production safety review
-    if: github.event.pull_request.draft == false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-
-    steps:
-      - name: Initialize Codex home
-        run: echo "CODEX_HOME=$RUNNER_TEMP/codex-home" >> "$GITHUB_ENV"
-
-      - name: Checkout pull request head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install Codex sandbox dependency
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap
-
-      - name: Install pinned Codex CLI
-        run: npm install --global @openai/codex@0.147.0
-
-      - name: Install Codex authentication
-        env:
-          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
-        run: |
-          if [ -z "$CODEX_AUTH_JSON" ]; then
-            echo "CODEX_AUTH_JSON repository secret is required" >&2
-            exit 1
-          fi
-          mkdir -p "$CODEX_HOME"
-          umask 077
-          printf '%s' "$CODEX_AUTH_JSON" > "$CODEX_HOME/auth.json"
-          python3 -m json.tool "$CODEX_HOME/auth.json" >/dev/null
-
-      - name: Run strict Codex review
-        id: codex
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set +e
-          {
-            printf 'The supplied base commit is `%s`. Compare it to HEAD.\n\n' "$BASE_SHA"
-            cat .github/codex/review-prompt.md
-          } | codex exec \
-              --sandbox read-only \
-              --ephemeral \
-              --ignore-user-config \
-              --output-schema .github/codex/review-schema.json \
-              --output-last-message codex-review.json \
-              - \
-              > codex-run.log 2>&1
-          status=$?
-          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          exit 0
-
-      - name: Validate and render review
-        id: result
-        env:
-          CODEX_EXIT_CODE: ${{ steps.codex.outputs.exit_code }}
-        run: |
-          if [ "$CODEX_EXIT_CODE" != "0" ]; then
-            echo "Codex exited with status $CODEX_EXIT_CODE" >&2
-            exit 1
-          fi
-          test -s codex-review.json
-          python3 .github/scripts/process_codex_review.py \
-            codex-review.json codex-review.md >> "$GITHUB_OUTPUT"
-
-      - name: Post review comment
-        uses: actions/github-script@v7
-        env:
-          REVIEW_FILE: codex-review.md
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require("fs");
-            const marker = "## Codex production-safety review";
-            const body = fs.readFileSync(process.env.REVIEW_FILE, "utf8");
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              per_page: 100,
-            });
-            const previous = comments.find(
-              (comment) => comment.user.type === "Bot" && comment.body.includes(marker)
-            );
-            if (previous) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: previous.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
-
-      - name: Enforce Codex verdict
-        env:
-          VERDICT: ${{ steps.result.outputs.verdict }}
-        run: |
-          if [ "$VERDICT" != "PASS" ]; then
-            echo "Codex found production-blocking issues" >&2
-            exit 1
-          fi
-
-      - name: Upload review diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: codex-review-${{ github.event.pull_request.number }}
-          path: |
-            codex-review.json
-            codex-review.md
-            codex-run.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Remove Codex authentication
-        if: always()
-        run: |
-          test -n "$CODEX_HOME"
-          rm -f "$CODEX_HOME/auth.json"
+    uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@056867a00859225c4c1c36ed05b4b7637bbf07fe
+    with:
+      review_prompt: >-
+        Review this pull request as a strict production-safety gate for a
+        continuously running automated cryptocurrency trading system. Inspect the
+        complete diff and enough surrounding code to prove each finding. Focus only
+        on actionable correctness, security, data-integrity, trading-risk, and
+        deployment defects introduced by the diff. Preserve paper/Testnet/live
+        environment separation. Ignore style, documentation preferences,
+        speculative concerns, and pre-existing issues outside the diff.
+    secrets:
+      CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
