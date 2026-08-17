@@ -86,7 +86,7 @@ class WalkForwardBacktester:
                 continue
 
             side = signal["signal"]
-            raw_entry = float(signal.get("entry_price") or data["close"].iloc[index])
+            raw_entry = float(signal.get("entry_price") or data["open"].iloc[index + 1])
             stop = float(signal["stop_loss"])
             target = float(signal["take_profit"])
             if (side == "BUY" and not stop < raw_entry < target) or (

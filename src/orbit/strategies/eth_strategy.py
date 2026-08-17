@@ -97,7 +97,6 @@ class ETHStrategy(Strategy):
             entry = current['close']
             return {
                 "signal": "BUY",
-                "entry_price": float(entry),
                 "stop_loss": float(entry - 2.0 * current['atr']),
                 "take_profit": float(entry + 3.0 * current['atr']),
                 "pattern": pattern
@@ -108,7 +107,6 @@ class ETHStrategy(Strategy):
             entry = current['close']
             return {
                 "signal": "SELL",
-                "entry_price": float(entry),
                 "stop_loss": float(entry + 2.0 * current['atr']),
                 "take_profit": float(entry - 3.0 * current['atr']),
                 "pattern": pattern

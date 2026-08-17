@@ -253,7 +253,7 @@ drop-in replacement or alongside the existing `Agglo_ETHERIUM` strategy:
 ```yaml
 strategies:
   ETHUSDT:
-    strategy: orbit.strategies.eth_ema_confluence_strategy.EMAConfluenceETH
+    strategy: orbit.strategies.eth_strategy.ETHStrategy
 ```
 
 ### 5.3 Running the Backtest

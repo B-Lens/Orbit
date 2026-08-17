@@ -70,14 +70,14 @@ class TestETHStrategy(unittest.TestCase):
         if signal is not None:
             self.assertIn("signal", signal)
             self.assertEqual(signal["signal"], "BUY")
-            self.assertIn("entry_price", signal)
             self.assertIn("stop_loss", signal)
             self.assertIn("take_profit", signal)
             self.assertIn("pattern", signal)
             
             # Check risk structure
-            self.assertLess(signal["stop_loss"], signal["entry_price"])
-            self.assertGreater(signal["take_profit"], signal["entry_price"])
+            entry = data['close'].iloc[-1]
+            self.assertLess(signal["stop_loss"], entry)
+            self.assertGreater(signal["take_profit"], entry)
 
     @patch('orbit.core.discord_manager.DiscordManager.__init__', return_value=None)
     def test_sell_signal_structure(self, mock_discord):
@@ -89,14 +89,14 @@ class TestETHStrategy(unittest.TestCase):
         if signal is not None:
             self.assertIn("signal", signal)
             self.assertEqual(signal["signal"], "SELL")
-            self.assertIn("entry_price", signal)
             self.assertIn("stop_loss", signal)
             self.assertIn("take_profit", signal)
             self.assertIn("pattern", signal)
             
             # Check risk structure
-            self.assertGreater(signal["stop_loss"], signal["entry_price"])
-            self.assertLess(signal["take_profit"], signal["entry_price"])
+            entry = data['close'].iloc[-1]
+            self.assertGreater(signal["stop_loss"], entry)
+            self.assertLess(signal["take_profit"], entry)
 
     @patch('orbit.core.discord_manager.DiscordManager.__init__', return_value=None)
     def test_buy_signal_risk_reward(self, mock_discord):
@@ -106,8 +106,9 @@ class TestETHStrategy(unittest.TestCase):
         signal = strategy.generate_signals()
         
         if signal is not None and signal["signal"] == "BUY":
-            risk = signal["entry_price"] - signal["stop_loss"]
-            reward = signal["take_profit"] - signal["entry_price"]
+            entry = data['close'].iloc[-1]
+            risk = entry - signal["stop_loss"]
+            reward = signal["take_profit"] - entry
             self.assertAlmostEqual(reward / risk, 1.5, places=2)
 
     @patch('orbit.core.discord_manager.DiscordManager.__init__', return_value=None)
@@ -118,8 +119,9 @@ class TestETHStrategy(unittest.TestCase):
         signal = strategy.generate_signals()
         
         if signal is not None and signal["signal"] == "SELL":
-            risk = signal["stop_loss"] - signal["entry_price"]
-            reward = signal["entry_price"] - signal["take_profit"]
+            entry = data['close'].iloc[-1]
+            risk = signal["stop_loss"] - entry
+            reward = entry - signal["take_profit"]
             self.assertAlmostEqual(reward / risk, 1.5, places=2)
         
     @patch('orbit.core.discord_manager.DiscordManager.__init__', return_value=None)
