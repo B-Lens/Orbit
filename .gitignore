@@ -7,3 +7,5 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 issue.txt
+data/
+results/
