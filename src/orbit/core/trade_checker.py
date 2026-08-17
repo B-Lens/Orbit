@@ -43,6 +43,9 @@ from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
 
+_POSITION_RISK_MAX_ATTEMPTS = 3
+_POSITION_RISK_INITIAL_RETRY_DELAY = 1.0
+
 
 def is_stop_order(order: Optional[Dict[str, Any]]) -> bool:
     """Return ``True`` if *order* represents a stop-loss conditional/algo order."""
@@ -719,8 +722,40 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Active-position discovery
     # ------------------------------------------------------------------
 
+    def _get_position_risk(self, client: Any) -> List[Dict[str, Any]]:
+        """Fetch a complete position snapshot, retrying Binance timeouts only.
+
+        Position risk is a read-only request, so retrying ``408/-1007`` cannot
+        duplicate an order.  Other API errors are raised immediately.  If all
+        attempts time out, the error is deliberately propagated so callers do
+        not mistake an unavailable snapshot for an empty account.
+        """
+        retry_delay = _POSITION_RISK_INITIAL_RETRY_DELAY
+        for attempt in range(1, _POSITION_RISK_MAX_ATTEMPTS + 1):
+            try:
+                return client.get_position_risk()
+            except ClientError as error:
+                is_timeout = (
+                    getattr(error, "status_code", None) == 408
+                    or getattr(error, "error_code", None) == -1007
+                )
+                if not is_timeout or attempt == _POSITION_RISK_MAX_ATTEMPTS:
+                    raise
+
+                logger.warning(
+                    "Position risk request timed out (attempt %d/%d); "
+                    "retrying in %.1fs",
+                    attempt,
+                    _POSITION_RISK_MAX_ATTEMPTS,
+                    retry_delay,
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2
+
+        raise RuntimeError("Position risk retry loop exited unexpectedly")
+
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
-        """Discover all active Futures positions and set cooldowns."""
+        """Discover all active Futures positions from a complete snapshot."""
         clients = {
             id(self.order_manager.futures_clients[mode]): self.order_manager.futures_clients[mode]
             for mode in self.order_manager.execution_settings.active_modes
@@ -729,7 +764,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         positions = [
             position
             for client in clients.values()
-            for position in client.get_position_risk()
+            for position in self._get_position_risk(client)
         ]
         trades: Dict[str, Dict[str, Any]] = {}
 

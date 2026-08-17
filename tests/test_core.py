@@ -498,6 +498,75 @@ class TestTradeCheckerLoadTrades(unittest.TestCase):
         self.assertEqual(len(keys), 3)
 
 
+class TestTradeCheckerPositionRisk(unittest.TestCase):
+    """Position snapshots tolerate transient timeouts without failing open."""
+
+    def setUp(self):
+        self.tc = _make_trade_checker()
+
+    @staticmethod
+    def _timeout_error():
+        from binance.error import ClientError
+
+        return ClientError(408, -1007, "Timeout waiting for response", {}, None)
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_retries_timeout_then_returns_complete_snapshot(self, mock_sleep):
+        client = MagicMock()
+        positions = [{"symbol": "BTCUSDT", "entryPrice": "1", "positionAmt": "2"}]
+        client.get_position_risk.side_effect = [self._timeout_error(), positions]
+
+        result = self.tc._get_position_risk(client)
+
+        self.assertEqual(result, positions)
+        self.assertEqual(client.get_position_risk.call_count, 2)
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_exhausted_timeouts_are_raised(self, mock_sleep):
+        client = MagicMock()
+        client.get_position_risk.side_effect = self._timeout_error()
+
+        with self.assertRaises(Exception) as raised:
+            self.tc._get_position_risk(client)
+
+        self.assertEqual(getattr(raised.exception, "error_code", None), -1007)
+        self.assertEqual(client.get_position_risk.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in mock_sleep.call_args_list],
+            [1.0, 2.0],
+        )
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_failed_snapshot_does_not_clean_persisted_trades(self, _mock_sleep):
+        clients = set(self.tc.order_manager.futures_clients.values())
+        for client in clients:
+            client.get_position_risk.side_effect = self._timeout_error()
+        self.tc.scan_trade_keys = MagicMock(return_value=["trade:BTCUSDT"])
+        self.tc.delete_trade_with_orders = MagicMock()
+
+        with self.assertRaises(Exception):
+            self.tc.activePosition_coolMaker()
+
+        self.tc.scan_trade_keys.assert_not_called()
+        self.tc.delete_trade_with_orders.assert_not_called()
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_non_timeout_client_error_is_not_retried(self, mock_sleep):
+        from binance.error import ClientError
+
+        client = MagicMock()
+        client.get_position_risk.side_effect = ClientError(
+            401, -2015, "Invalid API-key", {}, None
+        )
+
+        with self.assertRaises(Exception):
+            self.tc._get_position_risk(client)
+
+        client.get_position_risk.assert_called_once_with()
+        mock_sleep.assert_not_called()
+
+
 class TestTradeCheckerOrderStatusTransitions(unittest.TestCase):
     """Tests for order status transitions (FILLED, CANCELED, NEW)."""
 

@@ -56,6 +56,10 @@ This command launches `BinanceAutomation`, the top-level trading automation cont
 2. **Trade Checker** — monitors active Binance Futures positions and manages SL/TP lifecycle via `TradeChecker`.
 3. **Sentiment Cron** — runs hourly sentiment analysis via `Croner` and `SentimentWorkflow`.
 
+Position-risk reads retry Binance `408/-1007` timeouts with bounded backoff. If
+all attempts fail, the snapshot is rejected so persisted trades are not cleaned
+up based on an incomplete broker response.
+
 A fourth daemon thread, **MonitorThread**, periodically checks all worker threads every 300 seconds and sends Discord alerts if any have stopped.
 
 Configuration is loaded from `config/config.json` via `config/config.py`. Key configuration fields include:
