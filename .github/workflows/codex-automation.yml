@@ -88,10 +88,14 @@ jobs:
             `;
             fs.writeFileSync(process.env.TASK_FILE, prompt);
 
-      - name: Install Codex sandbox dependency
+      - name: Install Codex sandbox prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 
       - name: Install pinned Codex CLI
         run: npm install --global @openai/codex@0.147.0
@@ -259,10 +263,14 @@ jobs:
             `;
             fs.writeFileSync(process.env.TASK_FILE, prompt);
 
-      - name: Install Codex sandbox dependency
+      - name: Install Codex sandbox prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 
       - name: Install pinned Codex CLI
         run: npm install --global @openai/codex@0.147.0

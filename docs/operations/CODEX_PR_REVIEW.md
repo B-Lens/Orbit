@@ -20,6 +20,8 @@ commits, caches, or pull-request content.
 - Draft PRs are not reviewed until marked ready.
 - A new commit cancels the obsolete review and starts a new one.
 - Codex CLI is pinned to `0.147.0` for reproducibility.
+- The job installs `bubblewrap` and loads Ubuntu 24.04's extra AppArmor profile
+  so Codex can create the user namespace required by its Linux sandbox.
 - Repository/user Codex configuration is ignored; authentication still comes
   from the temporary `CODEX_HOME`.
 - Codex cannot modify the checkout because the sandbox is read-only.
