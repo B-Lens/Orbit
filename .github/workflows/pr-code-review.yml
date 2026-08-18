@@ -23,3 +23,4 @@ jobs:
         speculative concerns, and pre-existing issues outside the diff.
     secrets:
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+      ANTIGRAVITY_OAUTH_TOKEN: ${{ secrets.ANTIGRAVITY_OAUTH_TOKEN }}
