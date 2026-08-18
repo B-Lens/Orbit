@@ -9,3 +9,6 @@ strategies:
 
   BTCUSDT:
     strategy: orbit.strategies.swing_strategy.SwingStrategyBTC
+
+  SOLUSDT:
+    strategy: orbit.strategies.sol_strategy.SolanaVolatilityMomentumStrategy
