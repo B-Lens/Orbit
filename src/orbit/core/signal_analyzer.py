@@ -156,12 +156,13 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                 pattern = signal_dict.get("pattern") or "unknown"
 
                 if 'breakout' in pattern.lower():
-                    self.send_alerts(data=f"{symbol}", description=f"Pattern identified as Breakout: {pattern}", fields=None)
-                    self._record_decision(
-                        symbol=symbol, signal=signal, pattern=pattern,
-                        outcome="rejected", reason="breakout_filter", **strategy_identity,
-                    )
-                    continue
+                    if symbol != 'XAUUSDT':
+                        self.send_alerts(data=f"{symbol}", description=f"Pattern identified as Breakout: {pattern}", fields=None)
+                        self._record_decision(
+                            symbol=symbol, signal=signal, pattern=pattern,
+                            outcome="rejected", reason="breakout_filter", **strategy_identity,
+                        )
+                        continue
 
                 sentiment = self.get_market_sentiment()
                 if self._should_skip_due_to_sentiment(signal, symbol, signal_dict, sentiment=sentiment):

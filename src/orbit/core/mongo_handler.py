@@ -124,8 +124,9 @@ class MongoHandler(ExceptionManager):
             logger.warning("Mongo collection not available.")
             return
         try:
-            result = self.collection.delete_many({"symbol": symbol, "interval": interval})
-            logger.info(f"Deleted {result.deleted_count} records for {symbol} ({interval}).")
+            db_symbol = self._get_db_symbol(symbol)
+            result = self.collection.delete_many({"symbol": db_symbol, "interval": interval})
+            logger.info(f"Deleted {result.deleted_count} records for {db_symbol} ({interval}).")
         except Exception as exc:
             self.handle_exception(exc, f"Error clearing data for {symbol}")
 
@@ -145,6 +146,19 @@ class MongoHandler(ExceptionManager):
     # Data retrieval
     # ------------------------------------------------------------------
 
+
+    def _get_db_symbol(self, symbol: str) -> str:
+        if symbol == "XAUUSDT":
+            mode_env = os.getenv("ORBIT_ASSET_EXECUTION_MODES", "")
+            for entry in filter(None, (item.strip() for item in mode_env.split(","))):
+                try:
+                    s, m = (part.strip() for part in entry.split(":", 1))
+                    if s.upper() == "XAUUSDT" and m.lower() == "testnet":
+                        return f"{symbol}_TESTNET"
+                except ValueError:
+                    continue
+        return symbol
+
     def get_mongo_historical_data(self, symbol: str, interval: str = "15m") -> pd.DataFrame:
         """Retrieve the last 15 days of OHLCV data from MongoDB.
 
@@ -162,7 +176,7 @@ class MongoHandler(ExceptionManager):
             end_ts = int(time.time())
             start_ts = end_ts - 15 * 24 * 3600
             query = {
-                "symbol": symbol,
+                "symbol": self._get_db_symbol(symbol),
                 "interval": interval,
                 "timestamp": {"$gte": start_ts},
             }
@@ -171,7 +185,10 @@ class MongoHandler(ExceptionManager):
             if not items:
                 logger.info(f"No historical data found in MongoDB for {symbol} ({interval}).")
                 return pd.DataFrame()
-            return pd.DataFrame(items)
+            df = pd.DataFrame(items)
+            if "symbol" in df.columns:
+                df["symbol"] = symbol
+            return df
         except Exception as exc:
             self.handle_exception(exc, f"Error retrieving historical data for {symbol}")
             return pd.DataFrame()
@@ -199,6 +216,11 @@ class MongoHandler(ExceptionManager):
         """
         lang, _ = locale.getdefaultlocale()
         url = "https://api.binance.us/api/v3/klines" if lang == "en_US" else "https://api.binance.com/api/v3/klines"
+        if symbol == "XAUUSDT":
+            if self._get_db_symbol(symbol) == f"{symbol}_TESTNET":
+                url = "https://demo-fapi.binance.com/fapi/v1/klines"
+            else:
+                url = "https://fapi.binance.com/fapi/v1/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 1000, "startTime": start_time, "endTime": end_time}
 
         retries, max_retries = 0, 5
@@ -390,8 +412,9 @@ class MongoHandler(ExceptionManager):
             for _, row in df.iterrows():
                 ts_sec = _epoch_to_seconds(row["timestamp"])
                 expire_at = datetime.fromtimestamp(ts_sec, tz=timezone.utc) + timedelta(days=60)
+                db_symbol = self._get_db_symbol(symbol)
                 records.append({
-                    "symbol": symbol,
+                    "symbol": db_symbol,
                     "interval": interval,
                     "timestamp": int(row["timestamp"]),
                     "open": float(row["open"]),
