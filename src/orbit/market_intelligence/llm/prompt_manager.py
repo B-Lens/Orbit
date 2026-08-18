@@ -28,7 +28,9 @@ class PromptManager:
     # Local prompt templates (identical to the current hard‑coded prompts)
     # ------------------------------------------------------------------
     _LOCAL_TEMPLATES = {
-        "hourly_web_search_sentiment": (
+        # Version the production prompt name so an older Langfuse prompt cannot
+        # silently override these signal-quality rules after deployment.
+        "hourly_web_search_sentiment_v2": (
             "You are Orbit's institutional market-intelligence analyst. The current "
             "UTC time is {current_time_utc}. Use live web search to assess information "
             "published or materially updated during the last four hours.\n\n"
@@ -38,13 +40,20 @@ class PromptManager:
             "- futures funding, open interest, liquidations, basis, leverage, and exchange incidents\n"
             "- geopolitical or macro events with immediate risk-on/risk-off impact\n\n"
             "Use credible, recent sources. Treat rumors and unsupported social posts as noise. "
-            "Do not infer a directional signal when evidence is stale, mixed, or immaterial. "
+            "Assess the expected direction for risk assets over the next 4-12 hours. Weight "
+            "market-moving evidence by recency, source quality, breadth across assets, and likely "
+            "price impact. Distinguish genuinely balanced evidence from a quiet news window: use "
+            "NEUTRAL only when credible bullish and bearish forces are balanced or there is no "
+            "tradable directional edge. A modest but coherent net edge should be BULLISH or "
+            "BEARISH with appropriately modest confidence. Do not manufacture direction from "
+            "stale, duplicated, speculative, or immaterial items. "
             "This is a market sentiment input, not an instruction to place a trade.\n\n"
             "Return ONLY valid JSON with this exact shape and no markdown:\n"
             "{{\n"
             '  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",\n'
             '  "confidence": <float from 0.0 to 1.0>,\n'
-            '  "explanation": "concise evidence-based synthesis",\n'
+            '  "explanation": "2-4 sentences naming the dominant catalysts, counter-evidence, '
+            'affected assets, and 4-12 hour risk",\n'
             '  "sources": ["https://source.example/article"]\n'
             "}}\n"
             "Include 2-8 source URLs actually consulted."

@@ -20,6 +20,9 @@ Key schema
 ``order:{order_id}``                – trade_id string
 ``{symbol}``                        – cooldown ISO-8601 timestamp
 ``market_sentiments``               – current sentiment label
+``sentiment:pending_label``         – expiring candidate regime awaiting confirmation
+``sentiment:pending_base``          – directional regime the candidate is measured against
+``sentiment:pending_count``         – expiring consecutive-observation count
 ``ms_hourly_last_run``              – hour integer of last full analysis
 ``sentiment:last_news_fetch``       – ISO-8601 last news fetch time
 ``sentiment:last_reddit_fetch``     – ISO-8601 last Reddit fetch time
@@ -46,6 +49,9 @@ TRADE_KEY_PREFIX: str = "trade:"
 ORDER_KEY_PREFIX: str = "order:"
 
 REDIS_KEY_MARKET_SENTIMENT: str = "market_sentiments"
+REDIS_KEY_PENDING_SENTIMENT: str = "sentiment:pending_label"
+REDIS_KEY_PENDING_SENTIMENT_BASE: str = "sentiment:pending_base"
+REDIS_KEY_PENDING_SENTIMENT_COUNT: str = "sentiment:pending_count"
 REDIS_KEY_HOURLY_LAST_RUN: str = "ms_hourly_last_run"
 REDIS_KEY_LAST_NEWS_FETCH: str = "sentiment:last_news_fetch"
 REDIS_KEY_LAST_REDDIT_FETCH: str = "sentiment:last_reddit_fetch"
@@ -59,6 +65,10 @@ _TIMESTAMP_TTL: int = 172_800
 # TTL for drift keys (25 hours — slightly beyond the 24-hour window so Redis
 # never evicts them before the cron has a chance to read and reset them)
 _DRIFT_TTL: int = 90_000
+
+# Pending observations must belong to the same hourly confirmation window.
+# Allow one hour of scheduler delay, but never carry evidence across an outage.
+_PENDING_SENTIMENT_TTL: int = 7_200
 
 
 def _trade_key(trade_id: str) -> str:
@@ -243,6 +253,115 @@ class RedisManager:
     def set_market_sentiment(self, sentiment: str) -> None:
         """Cache the current market-sentiment label."""
         self.redis_set(REDIS_KEY_MARKET_SENTIMENT, sentiment)
+
+    def record_pending_sentiment(
+        self,
+        sentiment: str,
+        base_sentiment: str,
+        confirmations_required: int,
+    ) -> Optional[tuple[int, bool]]:
+        """Atomically record and, at threshold, commit a candidate regime.
+
+        ``None`` means another scheduler changed the market regime after it was
+        read by the caller. Otherwise returns ``(count, was_committed)``.
+        """
+        script = """
+        if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+            return 0
+        end
+        local count = 1
+        if redis.call('GET', KEYS[2]) == ARGV[2]
+            and redis.call('GET', KEYS[3]) == ARGV[1] then
+            count = tonumber(redis.call('GET', KEYS[4]) or '0') + 1
+        end
+        if count >= tonumber(ARGV[4]) then
+            redis.call('SET', KEYS[1], ARGV[2])
+            redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
+            return -count
+        end
+        redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+        redis.call('SET', KEYS[3], ARGV[1], 'EX', ARGV[3])
+        redis.call('SET', KEYS[4], count, 'EX', ARGV[3])
+        return count
+        """
+        try:
+            count = int(self.redis_client.eval(
+                script,
+                4,
+                REDIS_KEY_MARKET_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                REDIS_KEY_PENDING_SENTIMENT_COUNT,
+                base_sentiment,
+                sentiment,
+                str(_PENDING_SENTIMENT_TTL),
+                str(confirmations_required),
+            ))
+            if count == 0:
+                return None
+            return abs(count), count < 0
+        except Exception as e:
+            logger.exception("[Redis] Atomic pending-sentiment update failed: %s", e)
+            return None
+
+    def set_market_sentiment_if_current(
+        self, expected: Optional[str], sentiment: str
+    ) -> bool:
+        """Atomically change regime only if its cached value is still expected."""
+        script = """
+        local current = redis.call('GET', KEYS[1]) or ''
+        if current ~= ARGV[1] then
+            return 0
+        end
+        redis.call('SET', KEYS[1], ARGV[2])
+        redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
+        return 1
+        """
+        try:
+            return bool(self.redis_client.eval(
+                script,
+                4,
+                REDIS_KEY_MARKET_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                REDIS_KEY_PENDING_SENTIMENT_COUNT,
+                expected or "",
+                sentiment,
+            ))
+        except Exception as e:
+            logger.exception("[Redis] Conditional market-sentiment update failed: %s", e)
+            return False
+
+    def set_market_sentiment_and_clear_pending(self, sentiment: str) -> None:
+        """Atomically establish a market regime and discard older evidence."""
+        script = """
+        redis.call('SET', KEYS[1], ARGV[1])
+        redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
+        return 1
+        """
+        try:
+            self.redis_client.eval(
+                script,
+                4,
+                REDIS_KEY_MARKET_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                REDIS_KEY_PENDING_SENTIMENT_COUNT,
+                sentiment,
+            )
+        except Exception as e:
+            logger.exception("[Redis] Atomic market-sentiment update failed: %s", e)
+
+    def clear_pending_sentiment(self) -> None:
+        """Clear a candidate regime after it is accepted or invalidated."""
+        try:
+            self.redis_client.delete(
+                REDIS_KEY_PENDING_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                REDIS_KEY_PENDING_SENTIMENT_COUNT,
+            )
+        except Exception as e:
+            logger.exception("[Redis] Clearing pending sentiment failed: %s", e)
 
     # ------------------------------------------------------------------
     # Hourly-run tracking  (ms_hourly_last_run → hour integer)
