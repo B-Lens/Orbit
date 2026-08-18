@@ -130,12 +130,44 @@ class TestCore(unittest.TestCase):
         first = asyncio.run(croner.run_once())
         # Simulate Redis expiring the pending evidence during an analysis outage.
         state.pop("sentiment:pending_label")
+        state.pop("sentiment:pending_base")
         state.pop("sentiment:pending_count")
         recovered = asyncio.run(croner.run_once())
 
         self.assertEqual(first["signal_action"], "neutral_pending_confirmation")
         self.assertEqual(recovered["signal_action"], "neutral_pending_confirmation")
         self.assertEqual(recovered["confirmation_count"], 1)
+        self.assertEqual(state["market_sentiments"], "BEARISH")
+
+    @timeout(30)
+    def test_pending_neutral_does_not_cross_directional_regimes(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "NEUTRAL",
+            "confidence": 0.72,
+            "explanation": "Directional catalysts are balanced.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BULLISH"}
+        mock_redis.get.side_effect = lambda key: state.get(key)
+        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+        mock_redis.setex.side_effect = (
+            lambda key, _ttl, value: state.__setitem__(key, value)
+        )
+        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        first = asyncio.run(croner.run_once())
+        # Simulate another supported update path establishing a newer regime.
+        state["market_sentiments"] = "BEARISH"
+        after_regime_change = asyncio.run(croner.run_once())
+
+        self.assertEqual(first["confirmation_count"], 1)
+        self.assertEqual(after_regime_change["confirmation_count"], 1)
+        self.assertEqual(
+            after_regime_change["signal_action"], "neutral_pending_confirmation"
+        )
         self.assertEqual(state["market_sentiments"], "BEARISH")
 
     @timeout(30)

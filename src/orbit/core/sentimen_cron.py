@@ -202,7 +202,7 @@ class Croner(ExceptionManager, RedisManager):
             if score < self.neutral_confidence_threshold:
                 self.clear_pending_sentiment()
                 return cached, "neutral_rejected_low_confidence", 0
-            confirmations = self.record_pending_sentiment(observed)
+            confirmations = self.record_pending_sentiment(observed, cached)
             if confirmations < self.neutral_confirmations_required:
                 return cached, "neutral_pending_confirmation", confirmations
             self.clear_pending_sentiment()
@@ -370,6 +370,7 @@ class Croner(ExceptionManager, RedisManager):
                     "Triggering immediate full analysis."
                 )
                 try:
+                    self.clear_pending_sentiment()
                     self.set_market_sentiment(news_sentiment.sentiment)
                 except Exception as e:
                     logger.exception("Failed to update Redis after incremental analysis.")

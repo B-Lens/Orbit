@@ -21,6 +21,7 @@ Key schema
 ``{symbol}``                        – cooldown ISO-8601 timestamp
 ``market_sentiments``               – current sentiment label
 ``sentiment:pending_label``         – expiring candidate regime awaiting confirmation
+``sentiment:pending_base``          – directional regime the candidate is measured against
 ``sentiment:pending_count``         – expiring consecutive-observation count
 ``ms_hourly_last_run``              – hour integer of last full analysis
 ``sentiment:last_news_fetch``       – ISO-8601 last news fetch time
@@ -49,6 +50,7 @@ ORDER_KEY_PREFIX: str = "order:"
 
 REDIS_KEY_MARKET_SENTIMENT: str = "market_sentiments"
 REDIS_KEY_PENDING_SENTIMENT: str = "sentiment:pending_label"
+REDIS_KEY_PENDING_SENTIMENT_BASE: str = "sentiment:pending_base"
 REDIS_KEY_PENDING_SENTIMENT_COUNT: str = "sentiment:pending_count"
 REDIS_KEY_HOURLY_LAST_RUN: str = "ms_hourly_last_run"
 REDIS_KEY_LAST_NEWS_FETCH: str = "sentiment:last_news_fetch"
@@ -252,12 +254,18 @@ class RedisManager:
         """Cache the current market-sentiment label."""
         self.redis_set(REDIS_KEY_MARKET_SENTIMENT, sentiment)
 
-    def record_pending_sentiment(self, sentiment: str) -> int:
+    def record_pending_sentiment(self, sentiment: str, base_sentiment: str) -> int:
         """Record an expiring candidate regime and return its observation count."""
         current = self.redis_get(REDIS_KEY_PENDING_SENTIMENT)
-        if current != sentiment:
+        current_base = self.redis_get(REDIS_KEY_PENDING_SENTIMENT_BASE)
+        if current != sentiment or current_base != base_sentiment:
             self.redis_setex(
                 REDIS_KEY_PENDING_SENTIMENT, _PENDING_SENTIMENT_TTL, sentiment
+            )
+            self.redis_setex(
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                _PENDING_SENTIMENT_TTL,
+                base_sentiment,
             )
             self.redis_setex(
                 REDIS_KEY_PENDING_SENTIMENT_COUNT, _PENDING_SENTIMENT_TTL, "1"
@@ -275,6 +283,11 @@ class RedisManager:
             REDIS_KEY_PENDING_SENTIMENT, _PENDING_SENTIMENT_TTL, sentiment
         )
         self.redis_setex(
+            REDIS_KEY_PENDING_SENTIMENT_BASE,
+            _PENDING_SENTIMENT_TTL,
+            base_sentiment,
+        )
+        self.redis_setex(
             REDIS_KEY_PENDING_SENTIMENT_COUNT,
             _PENDING_SENTIMENT_TTL,
             str(count),
@@ -284,6 +297,7 @@ class RedisManager:
     def clear_pending_sentiment(self) -> None:
         """Clear a candidate regime after it is accepted or invalidated."""
         self.redis_delete(REDIS_KEY_PENDING_SENTIMENT)
+        self.redis_delete(REDIS_KEY_PENDING_SENTIMENT_BASE)
         self.redis_delete(REDIS_KEY_PENDING_SENTIMENT_COUNT)
 
     # ------------------------------------------------------------------
