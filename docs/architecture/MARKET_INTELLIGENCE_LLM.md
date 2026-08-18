@@ -45,6 +45,8 @@ OPENAI_AUTH_FILE=/run/secrets/codex/auth.json
 OPENAI_MODEL=gpt-5.6-luna
 OPENAI_MAX_OUTPUT_TOKENS=2000
 OPENAI_WEB_SEARCH_TIMEOUT=300
+OPENAI_STREAM_MAX_RETRIES=2
+OPENAI_STREAM_RETRY_DELAY=1
 ORBIT_LEGACY_SENTIMENT_UPDATES=false
 ```
 
@@ -56,6 +58,10 @@ provisioned file refreshes the running worker; the credential must never be
 committed to the repository. `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and `GROQ_API_KEY`
 are optional resilience settings. Production should alert when a fallback is
 used because different providers may produce different sentiment distributions.
+OAuth streaming requests retry server-side `server_error` events up to
+`OPENAI_STREAM_MAX_RETRIES` times with exponential backoff starting at
+`OPENAI_STREAM_RETRY_DELAY` seconds. Client and validation errors are not
+retried, and a failed attempt's partial output is discarded.
 
 ## Hourly web-search flow
 
