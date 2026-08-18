@@ -86,7 +86,9 @@ class WalkForwardBacktester:
                 continue
 
             side = signal["signal"]
-            raw_entry = float(signal.get("entry_price") or data["close"].iloc[index])
+            # A signal based on candle ``index`` cannot execute at that candle's
+            # already-observed close. Enter at the next available candle open.
+            raw_entry = float(data["open"].iloc[index + 1])
             stop = float(signal["stop_loss"])
             target = float(signal["take_profit"])
             if (side == "BUY" and not stop < raw_entry < target) or (
@@ -112,7 +114,7 @@ class WalkForwardBacktester:
             peak = max(peak, equity)
             max_drawdown = max(max_drawdown, (peak - equity) / peak)
             results.append(TradeResult(
-                side=side, entry_time=data.index[index], exit_time=data.index[exit_index],
+                side=side, entry_time=data.index[index + 1], exit_time=data.index[exit_index],
                 entry_price=entry, exit_price=exit_price, quantity=quantity,
                 gross_pnl=gross, costs=costs, net_pnl=net, outcome=outcome,
                 pattern=str(signal.get("pattern", "unknown")),
