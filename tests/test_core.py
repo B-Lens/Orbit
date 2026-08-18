@@ -498,6 +498,60 @@ class TestTradeCheckerLoadTrades(unittest.TestCase):
         self.assertEqual(len(keys), 3)
 
 
+class TestTradeCheckerPositionRiskRetries(unittest.TestCase):
+    """Tests for transient Binance backend timeouts during position discovery."""
+
+    def setUp(self):
+        self.tc = _make_trade_checker()
+        self.client = self.tc.order_manager.future_client
+
+    @staticmethod
+    def _client_error(status_code=408, error_code=-1007):
+        from binance.error import ClientError
+
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "backend timeout")
+        error.status_code = status_code
+        error.error_code = error_code
+        error.error_message = "backend timeout"
+        return error
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_retries_timeout_and_returns_snapshot(self, sleep):
+        snapshot = [{"symbol": "XRPUSDT", "entryPrice": "0", "positionAmt": "0"}]
+        self.client.get_position_risk.side_effect = [
+            self._client_error(),
+            self._client_error(),
+            snapshot,
+        ]
+
+        self.assertEqual(self.tc._get_position_risk(self.client), snapshot)
+        self.assertEqual(self.client.get_position_risk.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1.0, 2.0])
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_raises_after_timeout_retries_are_exhausted(self, sleep):
+        error = self._client_error()
+        self.client.get_position_risk.side_effect = error
+
+        with self.assertRaises(type(error)):
+            self.tc._get_position_risk(self.client)
+
+        self.assertEqual(self.client.get_position_risk.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_does_not_retry_other_client_errors(self, sleep):
+        error = self._client_error(status_code=400, error_code=-1121)
+        self.client.get_position_risk.side_effect = error
+
+        with self.assertRaises(type(error)):
+            self.tc._get_position_risk(self.client)
+
+        self.client.get_position_risk.assert_called_once_with()
+        sleep.assert_not_called()
+
+
 class TestTradeCheckerOrderStatusTransitions(unittest.TestCase):
     """Tests for order status transitions (FILLED, CANCELED, NEW)."""
 

@@ -43,6 +43,9 @@ from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
 
+_POSITION_RISK_MAX_ATTEMPTS = 3
+_POSITION_RISK_RETRY_DELAY = 1.0
+
 
 def is_stop_order(order: Optional[Dict[str, Any]]) -> bool:
     """Return ``True`` if *order* represents a stop-loss conditional/algo order."""
@@ -719,6 +722,36 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Active-position discovery
     # ------------------------------------------------------------------
 
+    def _get_position_risk(self, client: Any) -> List[Dict[str, Any]]:
+        """Fetch a position snapshot, retrying only transient read timeouts.
+
+        Binance ``-1007`` means the result of a request is unknown.  Retrying
+        is safe here because ``get_position_risk`` is a read-only operation;
+        order mutations must continue to handle that response as ambiguous.
+        """
+        delay = _POSITION_RISK_RETRY_DELAY
+        for attempt in range(1, _POSITION_RISK_MAX_ATTEMPTS + 1):
+            try:
+                return client.get_position_risk()
+            except ClientError as error:
+                is_backend_timeout = (
+                    getattr(error, "status_code", None) == 408
+                    and getattr(error, "error_code", None) == -1007
+                )
+                if not is_backend_timeout or attempt == _POSITION_RISK_MAX_ATTEMPTS:
+                    raise
+
+                logger.warning(
+                    "Position-risk request timed out (attempt %s/%s); retrying in %.1fs",
+                    attempt,
+                    _POSITION_RISK_MAX_ATTEMPTS,
+                    delay,
+                )
+                time.sleep(delay)
+                delay *= 2
+
+        raise RuntimeError("position-risk retry loop exited unexpectedly")
+
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
         """Discover all active Futures positions and set cooldowns."""
         clients = {
@@ -729,7 +762,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         positions = [
             position
             for client in clients.values()
-            for position in client.get_position_risk()
+            for position in self._get_position_risk(client)
         ]
         trades: Dict[str, Dict[str, Any]] = {}
 
