@@ -8,7 +8,7 @@ Orbit is an AI-based trading framework that bridges research experimentation and
 - **Market Intelligence:** Run hourly, web-grounded financial and crypto-futures sentiment analysis with validated sources.
 - **Automated Trading:** Execute and monitor Binance Futures trades with precision, including SL/TP lifecycle management.
 - **Modular Design:** Easily integrate custom strategies via a lazy-loading strategy registry.
-- **Self-contained Strategies:** Production BTC, ETH, and BCH strategies are versioned and deployed with Orbit; no private runtime repository is required.
+- **Self-contained Strategies:** Production BTC and BCH strategies are versioned and deployed with Orbit; no private runtime repository is required.
 - **Research to Production:** Smooth transition from trading ideas to live trading with contradict simulation support.
 
 ## Setup and Installation

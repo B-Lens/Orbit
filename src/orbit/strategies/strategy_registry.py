@@ -22,15 +22,34 @@ def _load_config():
         return {"strategies": {}}
 
 
+def _configured_execution_modes() -> dict[str, str]:
+    """Read per-asset modes without triggering credential initialization."""
+    modes = {}
+    for entry in filter(
+        None,
+        (item.strip() for item in os.getenv("ORBIT_ASSET_EXECUTION_MODES", "").split(",")),
+    ):
+        try:
+            symbol, mode = (part.strip() for part in entry.split(":", 1))
+        except ValueError:
+            continue
+        modes[symbol.upper()] = mode.lower()
+    return modes
+
+
 class _LazyStrategyRegistry(dict):
     """A dict-like registry that defers importing strategy classes until first access."""
 
     def __init__(self, config: dict):
         super().__init__()
+        execution_modes = _configured_execution_modes()
         # Store raw config entries (strings), not the imported classes
         self._raw = {
             symbol: item["strategy"]
             for symbol, item in config.get("strategies", {}).items()
+            if not item.get("execution_modes")
+            or execution_modes.get(symbol.upper(), "paper")
+            in item["execution_modes"]
         }
 
     def _resolve(self, symbol: str):
