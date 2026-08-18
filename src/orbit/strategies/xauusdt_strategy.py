@@ -19,10 +19,11 @@ class XAUUSDTStrategy(Strategy):
         self.atr_multiplier_tp = 6.0 
 
     def generate_signals(self, symbol=None, position_side=None) -> Optional[Dict[str, Any]]:
-        if len(self.data) < self.lookback:
-            return None
+        # Exclude the active (incomplete) candle
+        df = self.data.iloc[:-1].copy()
         
-        df = self.data.copy()
+        if len(df) < self.lookback:
+            return None
         
         highest = df['high'].rolling(window=self.lookback).max()
         lowest = df['low'].rolling(window=self.lookback).min()
