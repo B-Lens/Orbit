@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   review:
-    uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@056867a00859225c4c1c36ed05b4b7637bbf07fe
+    uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@main
     with:
       review_prompt: >-
         Review this pull request as a strict production-safety gate for a
@@ -23,3 +23,4 @@ jobs:
         speculative concerns, and pre-existing issues outside the diff.
     secrets:
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+      ANTIGRAVITY_OAUTH_TOKEN: ${{ secrets.ANTIGRAVITY_OAUTH_TOKEN }}

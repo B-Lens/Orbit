@@ -860,7 +860,7 @@ class SentimentWorkflow(ExceptionManager):
         try:
             current_time = datetime.now(timezone.utc).isoformat()
             prompt = self.prompt_manager.get_prompt(
-                "hourly_web_search_sentiment", current_time_utc=current_time
+                "hourly_web_search_sentiment_v2", current_time_utc=current_time
             )
             raw_content = self.llm.invoke_web_search(prompt)
             data = extract_json(str(raw_content))

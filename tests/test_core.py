@@ -14,6 +14,48 @@ from orbit.core.sentimen_cron import Croner
 
 patch("orbit.core.discord_manager.DiscordManager.send_to_webhook", return_value=None).start()
 
+
+def _configure_sentiment_redis(mock_redis, state):
+    """Model the atomic Redis scripts used by the sentiment scheduler."""
+    mock_redis.get.side_effect = lambda key: state.get(key)
+    mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+    mock_redis.delete.side_effect = lambda *keys: [state.pop(key, None) for key in keys]
+
+    def eval_script(_script, _key_count, *args):
+        if len(args) == 8:  # candidate update: four keys + four args
+            market_key, label_key, base_key, count_key, base, label, _ttl, required = args
+            if state.get(market_key) != base:
+                return 0
+            count = 1
+            if state.get(label_key) == label and state.get(base_key) == base:
+                count = int(state.get(count_key, 0)) + 1
+            if count >= int(required):
+                state[market_key] = label
+                for key in (label_key, base_key, count_key):
+                    state.pop(key, None)
+                return -count
+            state[label_key] = label
+            state[base_key] = base
+            state[count_key] = str(count)
+            return count
+
+        if len(args) == 6:  # conditional regime transition: four keys + two args
+            market_key, label_key, base_key, count_key, expected, sentiment = args
+            if (state.get(market_key) or "") != expected:
+                return 0
+            state[market_key] = sentiment
+            for key in (label_key, base_key, count_key):
+                state.pop(key, None)
+            return 1
+
+        market_key, label_key, base_key, count_key, sentiment = args
+        state[market_key] = sentiment
+        for key in (label_key, base_key, count_key):
+            state.pop(key, None)
+        return 1
+
+    mock_redis.eval.side_effect = eval_script
+
 class TestCore(unittest.TestCase):
 
     @timeout(30)
@@ -37,7 +79,7 @@ class TestCore(unittest.TestCase):
         self.assertEqual(result["sentiment"], "BULLISH")
         self.assertEqual(result["confidence"], 0.9)
         self.assertEqual(result["reasoning"], "Strong buying pressure")
-        mock_redis.set.assert_any_call("market_sentiments", "BULLISH")
+        self.assertTrue(mock_redis.eval.called)
 
         assert result["sentiment"] == "BULLISH"
 
@@ -54,6 +96,122 @@ class TestCore(unittest.TestCase):
 
         self.assertFalse(result["success"])
         mock_redis.set.assert_not_called()
+
+    @timeout(30)
+    def test_single_neutral_hour_preserves_directional_signal(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "NEUTRAL",
+            "confidence": 0.72,
+            "explanation": "The latest catalysts are balanced.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BULLISH"}
+        _configure_sentiment_redis(mock_redis, state)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        result = asyncio.run(croner.run_once())
+
+        self.assertEqual(result["observed_sentiment"], "NEUTRAL")
+        self.assertEqual(result["effective_sentiment"], "BULLISH")
+        self.assertEqual(result["signal_action"], "neutral_pending_confirmation")
+        self.assertEqual(state["market_sentiments"], "BULLISH")
+
+    @timeout(30)
+    def test_repeated_credible_neutral_clears_directional_signal(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "NEUTRAL",
+            "confidence": 0.72,
+            "explanation": "Directional catalysts remain balanced.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BEARISH"}
+        _configure_sentiment_redis(mock_redis, state)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        first = asyncio.run(croner.run_once())
+        second = asyncio.run(croner.run_once())
+
+        self.assertEqual(first["effective_sentiment"], "BEARISH")
+        self.assertEqual(second["effective_sentiment"], "NEUTRAL")
+        self.assertEqual(second["signal_action"], "neutral_confirmed")
+        self.assertEqual(state["market_sentiments"], "NEUTRAL")
+
+    @timeout(30)
+    def test_expired_neutral_observation_cannot_confirm_later_result(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "NEUTRAL",
+            "confidence": 0.72,
+            "explanation": "Directional catalysts are balanced.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BEARISH"}
+        _configure_sentiment_redis(mock_redis, state)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        first = asyncio.run(croner.run_once())
+        # Simulate Redis expiring the pending evidence during an analysis outage.
+        state.pop("sentiment:pending_label")
+        state.pop("sentiment:pending_base")
+        state.pop("sentiment:pending_count")
+        recovered = asyncio.run(croner.run_once())
+
+        self.assertEqual(first["signal_action"], "neutral_pending_confirmation")
+        self.assertEqual(recovered["signal_action"], "neutral_pending_confirmation")
+        self.assertEqual(recovered["confirmation_count"], 1)
+        self.assertEqual(state["market_sentiments"], "BEARISH")
+
+    @timeout(30)
+    def test_pending_neutral_does_not_cross_directional_regimes(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "NEUTRAL",
+            "confidence": 0.72,
+            "explanation": "Directional catalysts are balanced.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BULLISH"}
+        _configure_sentiment_redis(mock_redis, state)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        first = asyncio.run(croner.run_once())
+        # Simulate another supported update path establishing a newer regime.
+        state["market_sentiments"] = "BEARISH"
+        after_regime_change = asyncio.run(croner.run_once())
+
+        self.assertEqual(first["confirmation_count"], 1)
+        self.assertEqual(after_regime_change["confirmation_count"], 1)
+        self.assertEqual(
+            after_regime_change["signal_action"], "neutral_pending_confirmation"
+        )
+        self.assertEqual(state["market_sentiments"], "BEARISH")
+
+    @timeout(30)
+    def test_low_confidence_directional_flip_is_rejected(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "BEARISH",
+            "confidence": 0.41,
+            "explanation": "Weak downside evidence.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BULLISH"}
+        mock_redis.get.side_effect = lambda key: state.get(key)
+        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        result = asyncio.run(croner.run_once())
+
+        self.assertEqual(result["effective_sentiment"], "BULLISH")
+        self.assertEqual(result["signal_action"], "directional_rejected_low_confidence")
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +654,60 @@ class TestTradeCheckerLoadTrades(unittest.TestCase):
 
         keys = self.tc.redis_client.keys("trade:*")
         self.assertEqual(len(keys), 3)
+
+
+class TestTradeCheckerPositionRiskRetries(unittest.TestCase):
+    """Tests for transient Binance backend timeouts during position discovery."""
+
+    def setUp(self):
+        self.tc = _make_trade_checker()
+        self.client = self.tc.order_manager.future_client
+
+    @staticmethod
+    def _client_error(status_code=408, error_code=-1007):
+        from binance.error import ClientError
+
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "backend timeout")
+        error.status_code = status_code
+        error.error_code = error_code
+        error.error_message = "backend timeout"
+        return error
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_retries_timeout_and_returns_snapshot(self, sleep):
+        snapshot = [{"symbol": "XRPUSDT", "entryPrice": "0", "positionAmt": "0"}]
+        self.client.get_position_risk.side_effect = [
+            self._client_error(),
+            self._client_error(),
+            snapshot,
+        ]
+
+        self.assertEqual(self.tc._get_position_risk(self.client), snapshot)
+        self.assertEqual(self.client.get_position_risk.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1.0, 2.0])
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_raises_after_timeout_retries_are_exhausted(self, sleep):
+        error = self._client_error()
+        self.client.get_position_risk.side_effect = error
+
+        with self.assertRaises(type(error)):
+            self.tc._get_position_risk(self.client)
+
+        self.assertEqual(self.client.get_position_risk.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    @patch("orbit.core.trade_checker.time.sleep")
+    def test_does_not_retry_other_client_errors(self, sleep):
+        error = self._client_error(status_code=400, error_code=-1121)
+        self.client.get_position_risk.side_effect = error
+
+        with self.assertRaises(type(error)):
+            self.tc._get_position_risk(self.client)
+
+        self.client.get_position_risk.assert_called_once_with()
+        sleep.assert_not_called()
 
 
 class TestTradeCheckerOrderStatusTransitions(unittest.TestCase):
