@@ -108,8 +108,11 @@ def calculate_extended_metrics(report, data):
 def main():
     parser = argparse.ArgumentParser(description="Run XAUUSDTStrategy backtest.")
     parser.add_argument("--equity", type=float, default=10000.0, help="Starting equity")
-    parser.add_argument("--risk", type=float, default=0.01, help="Risk per trade (percent)")
+    parser.add_argument("--risk", type=float, default=0.01, help="Risk per trade (fraction, e.g. 0.01 for 1%)")
     args = parser.parse_args()
+    
+    if not (0 < args.risk <= 1):
+        parser.error("Risk must be a fraction between 0 and 1")
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_path = os.path.join(project_root, 'data', 'XAUUSDT_15m.csv')

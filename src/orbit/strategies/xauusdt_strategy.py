@@ -53,7 +53,7 @@ class XAUUSDTStrategy(Strategy):
                 "entry_price": current_close,
                 "stop_loss": current_close - (current_atr * self.atr_multiplier_sl),
                 "take_profit": current_close + (current_atr * self.atr_multiplier_tp),
-                "pattern": "XAUUSDT Donchian Breakout"
+                "pattern": "XAUUSDT Donchian Trend"
             }
             
         if short_signal:
@@ -62,7 +62,7 @@ class XAUUSDTStrategy(Strategy):
                 "entry_price": current_close,
                 "stop_loss": current_close + (current_atr * self.atr_multiplier_sl),
                 "take_profit": current_close - (current_atr * self.atr_multiplier_tp),
-                "pattern": "XAUUSDT Donchian Breakout"
+                "pattern": "XAUUSDT Donchian Trend"
             }
             
         return None
