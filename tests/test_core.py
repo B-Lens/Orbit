@@ -68,6 +68,9 @@ class TestCore(unittest.TestCase):
         state = {"market_sentiments": "BULLISH"}
         mock_redis.get.side_effect = lambda key: state.get(key)
         mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+        mock_redis.setex.side_effect = (
+            lambda key, _ttl, value: state.__setitem__(key, value)
+        )
         mock_redis.delete.side_effect = lambda key: state.pop(key, None)
         croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
 
@@ -91,6 +94,9 @@ class TestCore(unittest.TestCase):
         state = {"market_sentiments": "BEARISH"}
         mock_redis.get.side_effect = lambda key: state.get(key)
         mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+        mock_redis.setex.side_effect = (
+            lambda key, _ttl, value: state.__setitem__(key, value)
+        )
         mock_redis.delete.side_effect = lambda key: state.pop(key, None)
         croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
 
@@ -101,6 +107,36 @@ class TestCore(unittest.TestCase):
         self.assertEqual(second["effective_sentiment"], "NEUTRAL")
         self.assertEqual(second["signal_action"], "neutral_confirmed")
         self.assertEqual(state["market_sentiments"], "NEUTRAL")
+
+    @timeout(30)
+    def test_expired_neutral_observation_cannot_confirm_later_result(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "NEUTRAL",
+            "confidence": 0.72,
+            "explanation": "Directional catalysts are balanced.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BEARISH"}
+        mock_redis.get.side_effect = lambda key: state.get(key)
+        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+        mock_redis.setex.side_effect = (
+            lambda key, _ttl, value: state.__setitem__(key, value)
+        )
+        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        first = asyncio.run(croner.run_once())
+        # Simulate Redis expiring the pending evidence during an analysis outage.
+        state.pop("sentiment:pending_label")
+        state.pop("sentiment:pending_count")
+        recovered = asyncio.run(croner.run_once())
+
+        self.assertEqual(first["signal_action"], "neutral_pending_confirmation")
+        self.assertEqual(recovered["signal_action"], "neutral_pending_confirmation")
+        self.assertEqual(recovered["confirmation_count"], 1)
+        self.assertEqual(state["market_sentiments"], "BEARISH")
 
     @timeout(30)
     def test_low_confidence_directional_flip_is_rejected(self):

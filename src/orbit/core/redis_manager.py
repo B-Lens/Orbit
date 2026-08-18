@@ -20,8 +20,8 @@ Key schema
 ``order:{order_id}``                – trade_id string
 ``{symbol}``                        – cooldown ISO-8601 timestamp
 ``market_sentiments``               – current sentiment label
-``sentiment:pending_label``         – candidate regime awaiting confirmation
-``sentiment:pending_count``         – consecutive observations of that candidate
+``sentiment:pending_label``         – expiring candidate regime awaiting confirmation
+``sentiment:pending_count``         – expiring consecutive-observation count
 ``ms_hourly_last_run``              – hour integer of last full analysis
 ``sentiment:last_news_fetch``       – ISO-8601 last news fetch time
 ``sentiment:last_reddit_fetch``     – ISO-8601 last Reddit fetch time
@@ -63,6 +63,10 @@ _TIMESTAMP_TTL: int = 172_800
 # TTL for drift keys (25 hours — slightly beyond the 24-hour window so Redis
 # never evicts them before the cron has a chance to read and reset them)
 _DRIFT_TTL: int = 90_000
+
+# Pending observations must belong to the same hourly confirmation window.
+# Allow one hour of scheduler delay, but never carry evidence across an outage.
+_PENDING_SENTIMENT_TTL: int = 7_200
 
 
 def _trade_key(trade_id: str) -> str:
@@ -249,11 +253,15 @@ class RedisManager:
         self.redis_set(REDIS_KEY_MARKET_SENTIMENT, sentiment)
 
     def record_pending_sentiment(self, sentiment: str) -> int:
-        """Record a consecutive candidate regime and return its observation count."""
+        """Record an expiring candidate regime and return its observation count."""
         current = self.redis_get(REDIS_KEY_PENDING_SENTIMENT)
         if current != sentiment:
-            self.redis_set(REDIS_KEY_PENDING_SENTIMENT, sentiment)
-            self.redis_set(REDIS_KEY_PENDING_SENTIMENT_COUNT, "1")
+            self.redis_setex(
+                REDIS_KEY_PENDING_SENTIMENT, _PENDING_SENTIMENT_TTL, sentiment
+            )
+            self.redis_setex(
+                REDIS_KEY_PENDING_SENTIMENT_COUNT, _PENDING_SENTIMENT_TTL, "1"
+            )
             return 1
 
         raw_count = self.redis_get(REDIS_KEY_PENDING_SENTIMENT_COUNT)
@@ -261,7 +269,16 @@ class RedisManager:
             count = int(raw_count or 0) + 1
         except (TypeError, ValueError):
             count = 1
-        self.redis_set(REDIS_KEY_PENDING_SENTIMENT_COUNT, str(count))
+        # Refresh both expiries together so a complete candidate observation
+        # always has a bounded lifetime from its most recent evidence.
+        self.redis_setex(
+            REDIS_KEY_PENDING_SENTIMENT, _PENDING_SENTIMENT_TTL, sentiment
+        )
+        self.redis_setex(
+            REDIS_KEY_PENDING_SENTIMENT_COUNT,
+            _PENDING_SENTIMENT_TTL,
+            str(count),
+        )
         return count
 
     def clear_pending_sentiment(self) -> None:
