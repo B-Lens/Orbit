@@ -199,6 +199,8 @@ class MongoHandler(ExceptionManager):
         """
         lang, _ = locale.getdefaultlocale()
         url = "https://api.binance.us/api/v3/klines" if lang == "en_US" else "https://api.binance.com/api/v3/klines"
+        if symbol == "XAUUSDT":
+            url = "https://fapi.binance.com/fapi/v1/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 1000, "startTime": start_time, "endTime": end_time}
 
         retries, max_retries = 0, 5

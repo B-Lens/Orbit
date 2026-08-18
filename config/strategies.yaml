@@ -12,3 +12,6 @@ strategies:
 
   XAUUSDT:
     strategy: orbit.strategies.xauusdt_strategy.XAUUSDTStrategy
+    execution_modes:
+      - testnet
+      - paper
