@@ -19,9 +19,22 @@ class XAUUSDTStrategy(Strategy):
         self.atr_multiplier_tp = 6.0 
 
     def generate_signals(self, symbol=None, position_side=None) -> Optional[Dict[str, Any]]:
-        # Exclude the active (incomplete) candle
-        df = self.data.iloc[:-1].copy()
+        df = self.data.copy()
         
+        # Explicitly verify the last candle's close time to ensure we don't trade on an active candle
+        import time
+        last_time = df.index[-1]
+        
+        if isinstance(last_time, pd.Timestamp):
+            last_ts_sec = last_time.timestamp()
+        elif isinstance(last_time, (int, float)):
+            last_ts_sec = last_time / 1000 if last_time > 1e11 else last_time
+        else:
+            last_ts_sec = 0
+            
+        if time.time() < last_ts_sec + 15 * 60:
+            df = df.iloc[:-1]
+            
         if len(df) < self.lookback:
             return None
         
