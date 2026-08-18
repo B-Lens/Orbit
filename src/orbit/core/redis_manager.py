@@ -254,51 +254,75 @@ class RedisManager:
         """Cache the current market-sentiment label."""
         self.redis_set(REDIS_KEY_MARKET_SENTIMENT, sentiment)
 
-    def record_pending_sentiment(self, sentiment: str, base_sentiment: str) -> int:
-        """Record an expiring candidate regime and return its observation count."""
-        current = self.redis_get(REDIS_KEY_PENDING_SENTIMENT)
-        current_base = self.redis_get(REDIS_KEY_PENDING_SENTIMENT_BASE)
-        if current != sentiment or current_base != base_sentiment:
-            self.redis_setex(
-                REDIS_KEY_PENDING_SENTIMENT, _PENDING_SENTIMENT_TTL, sentiment
-            )
-            self.redis_setex(
-                REDIS_KEY_PENDING_SENTIMENT_BASE,
-                _PENDING_SENTIMENT_TTL,
-                base_sentiment,
-            )
-            self.redis_setex(
-                REDIS_KEY_PENDING_SENTIMENT_COUNT, _PENDING_SENTIMENT_TTL, "1"
-            )
-            return 1
+    def record_pending_sentiment(
+        self, sentiment: str, base_sentiment: str
+    ) -> Optional[int]:
+        """Atomically record a candidate if the active regime still matches.
 
-        raw_count = self.redis_get(REDIS_KEY_PENDING_SENTIMENT_COUNT)
-        try:
-            count = int(raw_count or 0) + 1
-        except (TypeError, ValueError):
-            count = 1
-        # Refresh both expiries together so a complete candidate observation
-        # always has a bounded lifetime from its most recent evidence.
-        self.redis_setex(
-            REDIS_KEY_PENDING_SENTIMENT, _PENDING_SENTIMENT_TTL, sentiment
-        )
-        self.redis_setex(
-            REDIS_KEY_PENDING_SENTIMENT_BASE,
-            _PENDING_SENTIMENT_TTL,
-            base_sentiment,
-        )
-        self.redis_setex(
-            REDIS_KEY_PENDING_SENTIMENT_COUNT,
-            _PENDING_SENTIMENT_TTL,
-            str(count),
-        )
+        ``None`` means another scheduler changed the market regime after it was
+        read by the caller, so this observation must not confirm stale evidence.
+        """
+        script = """
+        if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+            return -1
+        end
+        local count = 1
+        if redis.call('GET', KEYS[2]) == ARGV[2]
+            and redis.call('GET', KEYS[3]) == ARGV[1] then
+            count = tonumber(redis.call('GET', KEYS[4]) or '0') + 1
+        end
+        redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+        redis.call('SET', KEYS[3], ARGV[1], 'EX', ARGV[3])
+        redis.call('SET', KEYS[4], count, 'EX', ARGV[3])
         return count
+        """
+        try:
+            count = int(self.redis_client.eval(
+                script,
+                4,
+                REDIS_KEY_MARKET_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                REDIS_KEY_PENDING_SENTIMENT_COUNT,
+                base_sentiment,
+                sentiment,
+                str(_PENDING_SENTIMENT_TTL),
+            ))
+            return None if count < 0 else count
+        except Exception as e:
+            logger.exception("[Redis] Atomic pending-sentiment update failed: %s", e)
+            return None
+
+    def set_market_sentiment_and_clear_pending(self, sentiment: str) -> None:
+        """Atomically establish a market regime and discard older evidence."""
+        script = """
+        redis.call('SET', KEYS[1], ARGV[1])
+        redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
+        return 1
+        """
+        try:
+            self.redis_client.eval(
+                script,
+                4,
+                REDIS_KEY_MARKET_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                REDIS_KEY_PENDING_SENTIMENT_COUNT,
+                sentiment,
+            )
+        except Exception as e:
+            logger.exception("[Redis] Atomic market-sentiment update failed: %s", e)
 
     def clear_pending_sentiment(self) -> None:
         """Clear a candidate regime after it is accepted or invalidated."""
-        self.redis_delete(REDIS_KEY_PENDING_SENTIMENT)
-        self.redis_delete(REDIS_KEY_PENDING_SENTIMENT_BASE)
-        self.redis_delete(REDIS_KEY_PENDING_SENTIMENT_COUNT)
+        try:
+            self.redis_client.delete(
+                REDIS_KEY_PENDING_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                REDIS_KEY_PENDING_SENTIMENT_COUNT,
+            )
+        except Exception as e:
+            logger.exception("[Redis] Clearing pending sentiment failed: %s", e)
 
     # ------------------------------------------------------------------
     # Hourly-run tracking  (ms_hourly_last_run → hour integer)

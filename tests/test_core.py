@@ -14,6 +14,34 @@ from orbit.core.sentimen_cron import Croner
 
 patch("orbit.core.discord_manager.DiscordManager.send_to_webhook", return_value=None).start()
 
+
+def _configure_sentiment_redis(mock_redis, state):
+    """Model the atomic Redis scripts used by the sentiment scheduler."""
+    mock_redis.get.side_effect = lambda key: state.get(key)
+    mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+    mock_redis.delete.side_effect = lambda *keys: [state.pop(key, None) for key in keys]
+
+    def eval_script(_script, _key_count, *args):
+        if len(args) == 7:  # atomic candidate update: four keys + three args
+            market_key, label_key, base_key, count_key, base, label, _ttl = args
+            if state.get(market_key) != base:
+                return -1
+            count = 1
+            if state.get(label_key) == label and state.get(base_key) == base:
+                count = int(state.get(count_key, 0)) + 1
+            state[label_key] = label
+            state[base_key] = base
+            state[count_key] = str(count)
+            return count
+
+        market_key, label_key, base_key, count_key, sentiment = args
+        state[market_key] = sentiment
+        for key in (label_key, base_key, count_key):
+            state.pop(key, None)
+        return 1
+
+    mock_redis.eval.side_effect = eval_script
+
 class TestCore(unittest.TestCase):
 
     @timeout(30)
@@ -37,7 +65,7 @@ class TestCore(unittest.TestCase):
         self.assertEqual(result["sentiment"], "BULLISH")
         self.assertEqual(result["confidence"], 0.9)
         self.assertEqual(result["reasoning"], "Strong buying pressure")
-        mock_redis.set.assert_any_call("market_sentiments", "BULLISH")
+        self.assertTrue(mock_redis.eval.called)
 
         assert result["sentiment"] == "BULLISH"
 
@@ -66,12 +94,7 @@ class TestCore(unittest.TestCase):
         })
         mock_redis = MagicMock()
         state = {"market_sentiments": "BULLISH"}
-        mock_redis.get.side_effect = lambda key: state.get(key)
-        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
-        mock_redis.setex.side_effect = (
-            lambda key, _ttl, value: state.__setitem__(key, value)
-        )
-        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        _configure_sentiment_redis(mock_redis, state)
         croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
 
         result = asyncio.run(croner.run_once())
@@ -92,12 +115,7 @@ class TestCore(unittest.TestCase):
         })
         mock_redis = MagicMock()
         state = {"market_sentiments": "BEARISH"}
-        mock_redis.get.side_effect = lambda key: state.get(key)
-        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
-        mock_redis.setex.side_effect = (
-            lambda key, _ttl, value: state.__setitem__(key, value)
-        )
-        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        _configure_sentiment_redis(mock_redis, state)
         croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
 
         first = asyncio.run(croner.run_once())
@@ -119,12 +137,7 @@ class TestCore(unittest.TestCase):
         })
         mock_redis = MagicMock()
         state = {"market_sentiments": "BEARISH"}
-        mock_redis.get.side_effect = lambda key: state.get(key)
-        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
-        mock_redis.setex.side_effect = (
-            lambda key, _ttl, value: state.__setitem__(key, value)
-        )
-        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        _configure_sentiment_redis(mock_redis, state)
         croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
 
         first = asyncio.run(croner.run_once())
@@ -150,12 +163,7 @@ class TestCore(unittest.TestCase):
         })
         mock_redis = MagicMock()
         state = {"market_sentiments": "BULLISH"}
-        mock_redis.get.side_effect = lambda key: state.get(key)
-        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
-        mock_redis.setex.side_effect = (
-            lambda key, _ttl, value: state.__setitem__(key, value)
-        )
-        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        _configure_sentiment_redis(mock_redis, state)
         croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
 
         first = asyncio.run(croner.run_once())
