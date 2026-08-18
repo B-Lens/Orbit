@@ -247,8 +247,9 @@ and the highest Sharpe ratio (+0.41 vs. negative for all others).
 
 ### 5.2 Integration with Orbit
 
-The strategy is registered in `config/strategies.yaml` and can be used as a
-drop-in replacement or alongside the existing `Agglo_ETHERIUM` strategy:
+The strategy remains a research and backtesting candidate. It is intentionally
+not registered in `config/strategies.yaml`, so production does not load an ETH
+strategy. To evaluate it outside production, use an explicit test configuration:
 
 ```yaml
 strategies:

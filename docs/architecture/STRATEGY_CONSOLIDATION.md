@@ -12,7 +12,6 @@ or EC2 deployment.
 | Symbol | Production class | Orbit module |
 |---|---|---|
 | BTCUSDT | `SwingStrategyBTC` | `orbit.strategies.swing_strategy` |
-| ETHUSDT | `Agglo_ETHERIUM` | `orbit.strategies.agglo_strategy` |
 | BCHUSDT | `BollingerAdaptiveReversalStrategyBCH` | `orbit.strategies.reversal_strategy` |
 
 The shared `Strategy` base now contains the ATR and EMA helpers required by

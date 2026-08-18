@@ -12,7 +12,7 @@ OHLCV + sentiment -> versioned strategy -> decision ledger -> risk guard
 
 ## Repository ownership
 
-Orbit owns the complete production runtime: data collection, the three active
+Orbit owns the complete production runtime: data collection, the active
 strategies, sentiment filters, risk policy, execution, monitoring, accounting,
 notifications, and backtesting. `Orbit-Strategies` is a legacy research archive
 and is not installed by CI or EC2.
