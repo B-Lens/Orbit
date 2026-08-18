@@ -22,17 +22,31 @@ def _configure_sentiment_redis(mock_redis, state):
     mock_redis.delete.side_effect = lambda *keys: [state.pop(key, None) for key in keys]
 
     def eval_script(_script, _key_count, *args):
-        if len(args) == 7:  # atomic candidate update: four keys + three args
-            market_key, label_key, base_key, count_key, base, label, _ttl = args
+        if len(args) == 8:  # candidate update: four keys + four args
+            market_key, label_key, base_key, count_key, base, label, _ttl, required = args
             if state.get(market_key) != base:
-                return -1
+                return 0
             count = 1
             if state.get(label_key) == label and state.get(base_key) == base:
                 count = int(state.get(count_key, 0)) + 1
+            if count >= int(required):
+                state[market_key] = label
+                for key in (label_key, base_key, count_key):
+                    state.pop(key, None)
+                return -count
             state[label_key] = label
             state[base_key] = base
             state[count_key] = str(count)
             return count
+
+        if len(args) == 6:  # conditional regime transition: four keys + two args
+            market_key, label_key, base_key, count_key, expected, sentiment = args
+            if (state.get(market_key) or "") != expected:
+                return 0
+            state[market_key] = sentiment
+            for key in (label_key, base_key, count_key):
+                state.pop(key, None)
+            return 1
 
         market_key, label_key, base_key, count_key, sentiment = args
         state[market_key] = sentiment

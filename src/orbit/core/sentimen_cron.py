@@ -191,8 +191,9 @@ class Croner(ExceptionManager, RedisManager):
             cached = None
 
         if cached is None:
-            self.clear_pending_sentiment()
-            return observed, "initialized", 1
+            if self.set_market_sentiment_if_current(None, observed):
+                return observed, "initialized", 1
+            return self.get_market_sentiment(), "regime_changed_during_resolution", 0
 
         if observed == cached:
             self.clear_pending_sentiment()
@@ -202,14 +203,17 @@ class Croner(ExceptionManager, RedisManager):
             if score < self.neutral_confidence_threshold:
                 self.clear_pending_sentiment()
                 return cached, "neutral_rejected_low_confidence", 0
-            confirmations = self.record_pending_sentiment(observed, cached)
-            if confirmations is None:
+            confirmation = self.record_pending_sentiment(
+                observed, cached, self.neutral_confirmations_required
+            )
+            if confirmation is None:
                 return (
                     self.get_market_sentiment(),
                     "regime_changed_during_resolution",
                     0,
                 )
-            if confirmations < self.neutral_confirmations_required:
+            confirmations, was_committed = confirmation
+            if not was_committed:
                 return cached, "neutral_pending_confirmation", confirmations
             return observed, "neutral_confirmed", confirmations
 
@@ -217,7 +221,9 @@ class Croner(ExceptionManager, RedisManager):
             self.clear_pending_sentiment()
             return cached, "directional_rejected_low_confidence", 0
 
-        return observed, "directional_change", 1
+        if self.set_market_sentiment_if_current(cached, observed):
+            return observed, "directional_change", 1
+        return self.get_market_sentiment(), "regime_changed_during_resolution", 0
 
     async def run_once(self) -> Dict[str, Any]:
         """Execute a single full sentiment-analysis cycle.
@@ -255,19 +261,6 @@ class Croner(ExceptionManager, RedisManager):
             description=None,
             fields=result,
         )
-
-        try:
-            if effective_sentiment is not None and signal_action in {
-                "initialized",
-                "neutral_confirmed",
-                "directional_change",
-            }:
-                self.set_market_sentiment_and_clear_pending(effective_sentiment)
-        except Exception as e:
-            self.handle_exception(
-                e,
-                context_description="Failed to update Redis after full analysis",
-            )
 
         return result
 

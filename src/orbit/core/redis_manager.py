@@ -255,21 +255,29 @@ class RedisManager:
         self.redis_set(REDIS_KEY_MARKET_SENTIMENT, sentiment)
 
     def record_pending_sentiment(
-        self, sentiment: str, base_sentiment: str
-    ) -> Optional[int]:
-        """Atomically record a candidate if the active regime still matches.
+        self,
+        sentiment: str,
+        base_sentiment: str,
+        confirmations_required: int,
+    ) -> Optional[tuple[int, bool]]:
+        """Atomically record and, at threshold, commit a candidate regime.
 
         ``None`` means another scheduler changed the market regime after it was
-        read by the caller, so this observation must not confirm stale evidence.
+        read by the caller. Otherwise returns ``(count, was_committed)``.
         """
         script = """
         if redis.call('GET', KEYS[1]) ~= ARGV[1] then
-            return -1
+            return 0
         end
         local count = 1
         if redis.call('GET', KEYS[2]) == ARGV[2]
             and redis.call('GET', KEYS[3]) == ARGV[1] then
             count = tonumber(redis.call('GET', KEYS[4]) or '0') + 1
+        end
+        if count >= tonumber(ARGV[4]) then
+            redis.call('SET', KEYS[1], ARGV[2])
+            redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
+            return -count
         end
         redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
         redis.call('SET', KEYS[3], ARGV[1], 'EX', ARGV[3])
@@ -287,11 +295,42 @@ class RedisManager:
                 base_sentiment,
                 sentiment,
                 str(_PENDING_SENTIMENT_TTL),
+                str(confirmations_required),
             ))
-            return None if count < 0 else count
+            if count == 0:
+                return None
+            return abs(count), count < 0
         except Exception as e:
             logger.exception("[Redis] Atomic pending-sentiment update failed: %s", e)
             return None
+
+    def set_market_sentiment_if_current(
+        self, expected: Optional[str], sentiment: str
+    ) -> bool:
+        """Atomically change regime only if its cached value is still expected."""
+        script = """
+        local current = redis.call('GET', KEYS[1]) or ''
+        if current ~= ARGV[1] then
+            return 0
+        end
+        redis.call('SET', KEYS[1], ARGV[2])
+        redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
+        return 1
+        """
+        try:
+            return bool(self.redis_client.eval(
+                script,
+                4,
+                REDIS_KEY_MARKET_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT,
+                REDIS_KEY_PENDING_SENTIMENT_BASE,
+                REDIS_KEY_PENDING_SENTIMENT_COUNT,
+                expected or "",
+                sentiment,
+            ))
+        except Exception as e:
+            logger.exception("[Redis] Conditional market-sentiment update failed: %s", e)
+            return False
 
     def set_market_sentiment_and_clear_pending(self, sentiment: str) -> None:
         """Atomically establish a market regime and discard older evidence."""
