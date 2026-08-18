@@ -6,4 +6,4 @@ strategies:
     strategy: orbit.strategies.agglo_strategy.Agglo_ETHERIUM
 
   BTCUSDT:
-    strategy: orbit.strategies.swing_strategy.SwingStrategyBTC
+    strategy: orbit.strategies.swing_strategy_v2.SwingStrategyBTC_V2
