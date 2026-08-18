@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -15,6 +16,8 @@ logger = logging.getLogger("Orbit")
 
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_OUTPUT_TOKENS = 2_000
+DEFAULT_STREAM_MAX_RETRIES = 2
+DEFAULT_STREAM_RETRY_DELAY = 1.0
 DEFAULT_INSTRUCTIONS = (
     "You are Orbit's market-intelligence analyst. Follow the requested output "
     "schema exactly. When JSON is requested, return only valid JSON without "
@@ -122,6 +125,9 @@ class CodexOAuthResponsesClient:
         max_output_tokens: Optional[int] = None,
         endpoint: Optional[str] = None,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
+        max_retries: Optional[int] = None,
+        retry_delay: Optional[float] = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.auth_file = Path(auth_file).expanduser() if auth_file else default_auth_file()
         self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
@@ -139,7 +145,30 @@ class CodexOAuthResponsesClient:
         self.endpoint = endpoint or os.getenv(
             "OPENAI_CODEX_RESPONSES_URL", DEFAULT_CODEX_RESPONSES_URL
         )
+        self.max_retries = (
+            max_retries
+            if max_retries is not None
+            else int(
+                os.getenv(
+                    "OPENAI_STREAM_MAX_RETRIES", str(DEFAULT_STREAM_MAX_RETRIES)
+                )
+            )
+        )
+        self.retry_delay = (
+            retry_delay
+            if retry_delay is not None
+            else float(
+                os.getenv(
+                    "OPENAI_STREAM_RETRY_DELAY", str(DEFAULT_STREAM_RETRY_DELAY)
+                )
+            )
+        )
+        if self.max_retries < 0:
+            raise ValueError("OPENAI_STREAM_MAX_RETRIES must not be negative")
+        if self.retry_delay < 0:
+            raise ValueError("OPENAI_STREAM_RETRY_DELAY must not be negative")
         self._urlopen = urlopen
+        self._sleep = sleep
 
     def _credentials(self) -> tuple[str, Optional[str]]:
         try:
@@ -170,6 +199,24 @@ class CodexOAuthResponsesClient:
         if not prompt or not prompt.strip():
             raise ValueError("prompt must not be empty")
 
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self._invoke_once(prompt, web_search)
+            except _RetryableOpenAIStreamingError:
+                if attempt == self.max_retries:
+                    raise
+                delay = self.retry_delay * (2**attempt)
+                logger.warning(
+                    "OpenAI stream failed with a transient server error; "
+                    "retrying in %.1fs (%d/%d)",
+                    delay,
+                    attempt + 1,
+                    self.max_retries,
+                )
+                self._sleep(delay)
+        raise AssertionError("unreachable")
+
+    def _invoke_once(self, prompt: str, web_search: bool) -> str:
         access_token, account_id = self._credentials()
         request_id = str(uuid.uuid4())
         payload_data: dict[str, Any] = {
@@ -234,8 +281,23 @@ class CodexOAuthResponsesClient:
                             assistant_text.append(delta)
                     elif event_type == "response.completed":
                         completed = True
-                    elif event_type in {"error", "response.failed", "response.incomplete"}:
-                        raise RuntimeError(f"OpenAI streaming error: {event}")
+                    elif event_type in {
+                        "error",
+                        "response.failed",
+                        "response.incomplete",
+                    }:
+                        error = event.get("error")
+                        if not isinstance(error, dict):
+                            response = event.get("response")
+                            if isinstance(response, dict):
+                                error = response.get("error")
+                        error = error if isinstance(error, dict) else {}
+                        exception_type = (
+                            _RetryableOpenAIStreamingError
+                            if "server_error" in {error.get("type"), error.get("code")}
+                            else RuntimeError
+                        )
+                        raise exception_type(f"OpenAI streaming error: {event}")
         except urllib.error.HTTPError as error:
             details = error.read().decode("utf-8", errors="replace")
             hint = " Run `codex login` to refresh auth.json." if error.code == 401 else ""
@@ -252,3 +314,7 @@ class CodexOAuthResponsesClient:
             raise RuntimeError("OpenAI returned an empty response")
         logger.info("OpenAI OAuth response generated with %s", self.model)
         return output_text
+
+
+class _RetryableOpenAIStreamingError(RuntimeError):
+    """A server-side SSE failure for which replaying the request is safe."""
