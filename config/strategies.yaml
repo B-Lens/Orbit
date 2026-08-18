@@ -4,6 +4,8 @@ strategies:
 
   ETHUSDT:
     strategy: orbit.strategies.eth_strategy.ETHStrategy
+    execution_modes:
+      - testnet
 
   BTCUSDT:
     strategy: orbit.strategies.swing_strategy.SwingStrategyBTC

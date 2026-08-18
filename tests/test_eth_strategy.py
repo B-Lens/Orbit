@@ -35,6 +35,18 @@ def _make_trending_data(direction="up", n=350):
 
 
 class TestETHStrategy(unittest.TestCase):
+
+    @patch('orbit.core.discord_manager.DiscordManager.__init__', return_value=None)
+    def test_partial_hour_is_excluded(self, mock_discord):
+        index = pd.date_range("2025-01-01", periods=9, freq="15min")
+        data = pd.DataFrame(
+            {"open": range(9), "high": range(1, 10), "low": range(9),
+             "close": range(1, 10), "volume": [1] * 9},
+            index=index,
+        )
+        strategy = ETHStrategy(data)
+        self.assertEqual(len(strategy.data), 2)
+        self.assertEqual(strategy.data.index[-1], pd.Timestamp("2025-01-01 01:00:00"))
     
     @patch('orbit.core.discord_manager.DiscordManager.__init__', return_value=None)
     def test_strategy_inherits_base(self, mock_discord):

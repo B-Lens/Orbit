@@ -19,6 +19,21 @@ class _OneShotStrategy:
 
 
 class TestWalkForwardBacktester(unittest.TestCase):
+    def test_ignores_signal_entry_and_fills_at_next_open(self):
+        data = pd.DataFrame(
+            {
+                "open": [100, 100, 102], "high": [101, 101, 105],
+                "low": [99, 99, 101], "close": [100, 100, 104],
+                "volume": [1, 1, 1],
+            },
+            index=pd.date_range("2026-01-01", periods=3, freq="15min"),
+        )
+        report = WalkForwardBacktester(
+            _OneShotStrategy, starting_equity=1000, fee_rate=0, slippage_bps=0
+        ).run(data, symbol="ETHUSDT", warmup_bars=1)
+        self.assertEqual(report.results[0].entry_price, 102)
+        self.assertEqual(report.results[0].entry_time, data.index[2])
+
     def test_fee_aware_target_trade(self):
         data = pd.DataFrame(
             {
@@ -53,4 +68,3 @@ class TestWalkForwardBacktester(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

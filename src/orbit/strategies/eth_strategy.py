@@ -21,13 +21,21 @@ class ETHStrategy(Strategy):
     def __init__(self, data: pd.DataFrame):
         # Orbit's production feed uses 15m candles, but this strategy requires 1h candles
         if not data.empty and isinstance(data.index, pd.DatetimeIndex):
-            resampled = data.resample('1h').agg({
-                'open': 'first',
-                'high': 'max',
-                'low': 'min',
-                'close': 'last',
-                'volume': 'sum'
-            }).dropna()
+            intervals = data.index.to_series().diff().dropna()
+            interval = intervals.median() if not intervals.empty else pd.Timedelta(hours=1)
+            if interval < pd.Timedelta(hours=1):
+                hourly = data.resample('1h')
+                resampled = hourly.agg({
+                    'open': 'first',
+                    'high': 'max',
+                    'low': 'min',
+                    'close': 'last',
+                    'volume': 'sum'
+                })
+                expected_bars = int(pd.Timedelta(hours=1) / interval)
+                resampled = resampled[hourly.size() == expected_bars].dropna()
+            else:
+                resampled = data.copy()
             super().__init__(resampled)
         else:
             super().__init__(data)
