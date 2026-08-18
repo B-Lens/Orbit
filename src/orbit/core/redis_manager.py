@@ -20,6 +20,8 @@ Key schema
 ``order:{order_id}``                – trade_id string
 ``{symbol}``                        – cooldown ISO-8601 timestamp
 ``market_sentiments``               – current sentiment label
+``sentiment:pending_label``         – candidate regime awaiting confirmation
+``sentiment:pending_count``         – consecutive observations of that candidate
 ``ms_hourly_last_run``              – hour integer of last full analysis
 ``sentiment:last_news_fetch``       – ISO-8601 last news fetch time
 ``sentiment:last_reddit_fetch``     – ISO-8601 last Reddit fetch time
@@ -46,6 +48,8 @@ TRADE_KEY_PREFIX: str = "trade:"
 ORDER_KEY_PREFIX: str = "order:"
 
 REDIS_KEY_MARKET_SENTIMENT: str = "market_sentiments"
+REDIS_KEY_PENDING_SENTIMENT: str = "sentiment:pending_label"
+REDIS_KEY_PENDING_SENTIMENT_COUNT: str = "sentiment:pending_count"
 REDIS_KEY_HOURLY_LAST_RUN: str = "ms_hourly_last_run"
 REDIS_KEY_LAST_NEWS_FETCH: str = "sentiment:last_news_fetch"
 REDIS_KEY_LAST_REDDIT_FETCH: str = "sentiment:last_reddit_fetch"
@@ -243,6 +247,27 @@ class RedisManager:
     def set_market_sentiment(self, sentiment: str) -> None:
         """Cache the current market-sentiment label."""
         self.redis_set(REDIS_KEY_MARKET_SENTIMENT, sentiment)
+
+    def record_pending_sentiment(self, sentiment: str) -> int:
+        """Record a consecutive candidate regime and return its observation count."""
+        current = self.redis_get(REDIS_KEY_PENDING_SENTIMENT)
+        if current != sentiment:
+            self.redis_set(REDIS_KEY_PENDING_SENTIMENT, sentiment)
+            self.redis_set(REDIS_KEY_PENDING_SENTIMENT_COUNT, "1")
+            return 1
+
+        raw_count = self.redis_get(REDIS_KEY_PENDING_SENTIMENT_COUNT)
+        try:
+            count = int(raw_count or 0) + 1
+        except (TypeError, ValueError):
+            count = 1
+        self.redis_set(REDIS_KEY_PENDING_SENTIMENT_COUNT, str(count))
+        return count
+
+    def clear_pending_sentiment(self) -> None:
+        """Clear a candidate regime after it is accepted or invalidated."""
+        self.redis_delete(REDIS_KEY_PENDING_SENTIMENT)
+        self.redis_delete(REDIS_KEY_PENDING_SENTIMENT_COUNT)
 
     # ------------------------------------------------------------------
     # Hourly-run tracking  (ms_hourly_last_run → hour integer)

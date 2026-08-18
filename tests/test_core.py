@@ -55,6 +55,74 @@ class TestCore(unittest.TestCase):
         self.assertFalse(result["success"])
         mock_redis.set.assert_not_called()
 
+    @timeout(30)
+    def test_single_neutral_hour_preserves_directional_signal(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "NEUTRAL",
+            "confidence": 0.72,
+            "explanation": "The latest catalysts are balanced.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BULLISH"}
+        mock_redis.get.side_effect = lambda key: state.get(key)
+        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        result = asyncio.run(croner.run_once())
+
+        self.assertEqual(result["observed_sentiment"], "NEUTRAL")
+        self.assertEqual(result["effective_sentiment"], "BULLISH")
+        self.assertEqual(result["signal_action"], "neutral_pending_confirmation")
+        self.assertEqual(state["market_sentiments"], "BULLISH")
+
+    @timeout(30)
+    def test_repeated_credible_neutral_clears_directional_signal(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "NEUTRAL",
+            "confidence": 0.72,
+            "explanation": "Directional catalysts remain balanced.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BEARISH"}
+        mock_redis.get.side_effect = lambda key: state.get(key)
+        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        first = asyncio.run(croner.run_once())
+        second = asyncio.run(croner.run_once())
+
+        self.assertEqual(first["effective_sentiment"], "BEARISH")
+        self.assertEqual(second["effective_sentiment"], "NEUTRAL")
+        self.assertEqual(second["signal_action"], "neutral_confirmed")
+        self.assertEqual(state["market_sentiments"], "NEUTRAL")
+
+    @timeout(30)
+    def test_low_confidence_directional_flip_is_rejected(self):
+        workflow = MagicMock()
+        workflow.run_web_search_analysis = AsyncMock(return_value={
+            "success": True,
+            "sentiment": "BEARISH",
+            "confidence": 0.41,
+            "explanation": "Weak downside evidence.",
+        })
+        mock_redis = MagicMock()
+        state = {"market_sentiments": "BULLISH"}
+        mock_redis.get.side_effect = lambda key: state.get(key)
+        mock_redis.set.side_effect = lambda key, value: state.__setitem__(key, value)
+        mock_redis.delete.side_effect = lambda key: state.pop(key, None)
+        croner = Croner(sentiment_workflow=workflow, redis_client=mock_redis)
+
+        result = asyncio.run(croner.run_once())
+
+        self.assertEqual(result["effective_sentiment"], "BULLISH")
+        self.assertEqual(result["signal_action"], "directional_rejected_low_confidence")
+
 
 # ---------------------------------------------------------------------------
 # Helpers

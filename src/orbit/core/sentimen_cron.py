@@ -38,6 +38,12 @@ NEWS_POLL_INTERVAL_SECONDS: int = 600  # 10 minutes
 # immediate full analysis.
 SENTIMENT_DRIFT_THRESHOLD: float = 0.55
 
+# A directional regime is useful until the market repeatedly demonstrates that
+# its edge has disappeared. One neutral observation is often just an uneventful
+# news window, so require two credible observations before clearing the signal.
+NEUTRAL_CONFIDENCE_THRESHOLD: float = 0.60
+NEUTRAL_CONFIRMATIONS_REQUIRED: int = 2
+
 # How long a drift window lasts before the counter is reset (seconds)
 DRIFT_WINDOW_SECONDS: int = 86_400  # 24 hours
 
@@ -55,6 +61,10 @@ class Croner(ExceptionManager, RedisManager):
         news_poll_interval: Override the news-polling interval in seconds.
         sentiment_drift_threshold: Override the confidence threshold that
             triggers an immediate full analysis on sentiment drift.
+        neutral_confidence_threshold: Minimum confidence for a neutral
+            observation to count toward clearing a directional signal.
+        neutral_confirmations_required: Consecutive credible neutral hourly
+            observations required before the cached signal becomes neutral.
         legacy_updates_enabled: Enable the legacy 10-minute source poller.
     """
 
@@ -65,6 +75,8 @@ class Croner(ExceptionManager, RedisManager):
         custom_logger: Optional[logging.Logger] = None,
         news_poll_interval: int = NEWS_POLL_INTERVAL_SECONDS,
         sentiment_drift_threshold: float = SENTIMENT_DRIFT_THRESHOLD,
+        neutral_confidence_threshold: float = NEUTRAL_CONFIDENCE_THRESHOLD,
+        neutral_confirmations_required: int = NEUTRAL_CONFIRMATIONS_REQUIRED,
         legacy_updates_enabled: Optional[bool] = None,
     ) -> None:
         ExceptionManager.__init__(self, custom_logger)
@@ -78,6 +90,8 @@ class Croner(ExceptionManager, RedisManager):
 
         self.news_poll_interval: int = news_poll_interval
         self.sentiment_drift_threshold: float = sentiment_drift_threshold
+        self.neutral_confidence_threshold = neutral_confidence_threshold
+        self.neutral_confirmations_required = neutral_confirmations_required
         self.legacy_updates_enabled = (
             legacy_updates_enabled
             if legacy_updates_enabled is not None
@@ -153,13 +167,63 @@ class Croner(ExceptionManager, RedisManager):
     # FULL ANALYSIS
     # ------------------------------------------------------------------
 
+    def _resolve_effective_sentiment(
+        self, observed: Any, confidence: Any
+    ) -> tuple[Optional[str], str, int]:
+        """Apply confidence-aware regime hysteresis to an hourly observation.
+
+        Returns ``(effective_label, action, confirmation_count)``. Directional
+        signals can change on one sufficiently confident observation. Clearing a
+        directional signal to neutral requires consecutive credible observations,
+        preventing a quiet hour from erasing useful market intelligence.
+        """
+        labels = {"BULLISH", "BEARISH", "NEUTRAL"}
+        if observed not in labels:
+            return self.get_market_sentiment(), "invalid_observation", 0
+
+        try:
+            score = float(confidence)
+        except (TypeError, ValueError):
+            score = 0.0
+
+        cached = self.get_market_sentiment()
+        if cached not in labels:
+            cached = None
+
+        if cached is None:
+            self.clear_pending_sentiment()
+            return observed, "initialized", 1
+
+        if observed == cached:
+            self.clear_pending_sentiment()
+            return cached, "confirmed", 1
+
+        if observed == "NEUTRAL":
+            if score < self.neutral_confidence_threshold:
+                self.clear_pending_sentiment()
+                return cached, "neutral_rejected_low_confidence", 0
+            confirmations = self.record_pending_sentiment(observed)
+            if confirmations < self.neutral_confirmations_required:
+                return cached, "neutral_pending_confirmation", confirmations
+            self.clear_pending_sentiment()
+            return observed, "neutral_confirmed", confirmations
+
+        if score < self.sentiment_drift_threshold:
+            self.clear_pending_sentiment()
+            return cached, "directional_rejected_low_confidence", 0
+
+        self.clear_pending_sentiment()
+        return observed, "directional_change", 1
+
     async def run_once(self) -> Dict[str, Any]:
         """Execute a single full sentiment-analysis cycle.
 
         Returns:
             The analysis result dict.
         """
-        result = await self.sentimental_workflow.run_web_search_analysis()
+        # Work on our own envelope: test doubles and workflow callers may reuse
+        # the returned mapping, while the scheduler adds effective-signal metadata.
+        result = dict(await self.sentimental_workflow.run_web_search_analysis())
         logger.info(f"Sentiment Analysis Result: {result}")
         if not result.get("success"):
             logger.error("Hourly web-search sentiment failed: %s", result.get("error"))
@@ -169,9 +233,18 @@ class Croner(ExceptionManager, RedisManager):
         sentiment_reasoning = result.get("explanation")
         dominant_memory_sentiment = result.get("dominant_memory_sentiment")
 
+        effective_sentiment, signal_action, confirmation_count = (
+            self._resolve_effective_sentiment(sentiment, sentiment_confidence)
+        )
+        result["observed_sentiment"] = sentiment
+        result["effective_sentiment"] = effective_sentiment
+        result["signal_action"] = signal_action
+        result["confirmation_count"] = confirmation_count
+
         self.send_market_sentiment(
             data=(
-                f"Market Sentiment = {sentiment}, Confidence : {sentiment_confidence}, "
+                f"Observed Sentiment = {sentiment}, Effective Signal = {effective_sentiment}, "
+                f"Confidence: {sentiment_confidence}, Action: {signal_action}, "
                 f"Reasoning : {sentiment_reasoning} | "
                 f"Memory dominant: {dominant_memory_sentiment}"
             ),
@@ -180,7 +253,8 @@ class Croner(ExceptionManager, RedisManager):
         )
 
         try:
-            self.set_market_sentiment(sentiment)
+            if effective_sentiment is not None:
+                self.set_market_sentiment(effective_sentiment)
         except Exception as e:
             self.handle_exception(
                 e,
