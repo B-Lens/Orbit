@@ -247,14 +247,16 @@ and the highest Sharpe ratio (+0.41 vs. negative for all others).
 
 ### 5.2 Integration with Orbit
 
-The strategy remains a research and backtesting candidate. It is intentionally
-not registered in `config/strategies.yaml`, so production does not load an ETH
-strategy. To evaluate it outside production, use an explicit test configuration:
+The strategy remains a research and backtesting candidate. It is registered in
+`config/strategies.yaml` for testnet only, so paper and live modes do not load
+an ETH strategy:
 
 ```yaml
 strategies:
   ETHUSDT:
     strategy: orbit.strategies.eth_strategy.ETHStrategy
+    execution_modes:
+      - testnet
 ```
 
 ### 5.3 Running the Backtest
