@@ -200,30 +200,15 @@ class MongoHandler(ExceptionManager):
         lang, _ = locale.getdefaultlocale()
         url = "https://api.binance.us/api/v3/klines" if lang == "en_US" else "https://api.binance.com/api/v3/klines"
         if symbol == "XAUUSDT":
-            mode = os.getenv("ORBIT_ASSET_EXECUTION_MODES", "")
+            mode_env = os.getenv("ORBIT_ASSET_EXECUTION_MODES", "")
             is_testnet = False
-            mode_set = False
-            for entry in filter(None, (item.strip() for item in mode.split(","))):
+            for entry in filter(None, (item.strip() for item in mode_env.split(","))):
                 try:
                     s, m = (part.strip() for part in entry.split(":", 1))
-                    if s.upper() == "XAUUSDT":
-                        is_testnet = (m.lower() == "testnet")
-                        mode_set = True
+                    if s.upper() == "XAUUSDT" and m.lower() == "testnet":
+                        is_testnet = True
                 except ValueError:
                     continue
-                    
-            if not mode_set:
-                try:
-                    import yaml
-                    import os
-                    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-                    with open(os.path.join(project_root, "config", "strategies.yaml"), encoding="utf-8") as f:
-                        config = yaml.safe_load(f)
-                        modes = config.get("strategies", {}).get("XAUUSDT", {}).get("execution_modes", [])
-                        if "testnet" in modes and "live" not in modes:
-                            is_testnet = True
-                except Exception:
-                    pass
             
             if is_testnet:
                 url = "https://demo-fapi.binance.com/fapi/v1/klines"
