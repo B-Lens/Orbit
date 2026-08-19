@@ -34,6 +34,16 @@ except Exception:  # pragma: no cover - handled gracefully if pymongo not instal
 logger = logging.getLogger("Orbit")
 
 OHLCV_COLLECTION_NAME: str = "OHLCVData"
+BINANCE_SPOT_KLINES_URL: str = "https://api.binance.com/api/v3/klines"
+BINANCE_US_SPOT_KLINES_URL: str = "https://api.binance.us/api/v3/klines"
+BINANCE_FUTURES_TESTNET_KLINES_URL: str = (
+    "https://demo-fapi.binance.com/fapi/v1/klines"
+)
+
+
+def _market_data_symbol(symbol: str) -> str:
+    """Return the cache key for a symbol's market-data environment."""
+    return "XAUUSDT_TESTNET" if symbol == "XAUUSDT" else symbol
 
 
 def _epoch_to_seconds(ts: int) -> int:
@@ -185,8 +195,9 @@ class MongoHandler(ExceptionManager):
     ) -> List[Any]:
         """Fetch kline (candlestick) data from the Binance REST API.
 
-        Automatically retries up to 5 times on transient network errors and
-        selects the US or global endpoint based on the system locale.
+        Automatically retries up to 5 times on transient network/server errors.
+        XAUUSDT is isolated on Futures Testnet; other symbols use the US or
+        global Spot endpoint based on the system locale.
 
         Args:
             symbol: Trading pair.
@@ -197,9 +208,24 @@ class MongoHandler(ExceptionManager):
         Returns:
             A list of raw kline arrays, or an empty list on failure.
         """
-        lang, _ = locale.getdefaultlocale()
-        url = "https://api.binance.us/api/v3/klines" if lang == "en_US" else "https://api.binance.com/api/v3/klines"
-        params = {"symbol": symbol, "interval": interval, "limit": 1000, "startTime": start_time, "endTime": end_time}
+        if symbol == "XAUUSDT":
+            # XAUUSDT is a Futures Testnet-only strategy. It is not listed on
+            # Binance Spot, and its candles must not cross the testnet boundary.
+            url = BINANCE_FUTURES_TESTNET_KLINES_URL
+        else:
+            lang, _ = locale.getdefaultlocale()
+            url = (
+                BINANCE_US_SPOT_KLINES_URL
+                if lang == "en_US"
+                else BINANCE_SPOT_KLINES_URL
+            )
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "limit": 1000,
+            "startTime": start_time,
+            "endTime": end_time,
+        }
 
         retries, max_retries = 0, 5
         while retries < max_retries:
@@ -207,6 +233,22 @@ class MongoHandler(ExceptionManager):
                 response = requests.get(url, params=params, timeout=10)
                 response.raise_for_status()
                 return response.json()
+            except requests.HTTPError as exc:
+                status_code = (
+                    exc.response.status_code if exc.response is not None else None
+                )
+                if status_code is not None and status_code < 500 and status_code != 429:
+                    logger.error(
+                        "Binance API rejected kline request for %s with status %s",
+                        symbol,
+                        status_code,
+                    )
+                    return []
+                retries += 1
+                logger.warning(
+                    f"Retrying Binance API call for {symbol}. Attempt {retries}"
+                )
+                time.sleep(1)
             except requests.RequestException:
                 retries += 1
                 logger.warning(f"Retrying Binance API call for {symbol}. Attempt {retries}")
@@ -273,7 +315,8 @@ class MongoHandler(ExceptionManager):
         Returns:
             A timestamp-indexed :class:`~pandas.DataFrame` with OHLCV columns.
         """
-        existing_data = self.get_mongo_historical_data(symbol, interval="15m")
+        cache_symbol = _market_data_symbol(symbol)
+        existing_data = self.get_mongo_historical_data(cache_symbol, interval="15m")
 
         required_start_time = None
         if not existing_data.empty:
@@ -299,7 +342,7 @@ class MongoHandler(ExceptionManager):
             .astype("int64") // 1000
         )
 
-        self.store_historical_data(symbol, historical_data_db)
+        self.store_historical_data(cache_symbol, historical_data_db)
 
         return historical_data
 
