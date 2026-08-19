@@ -27,6 +27,7 @@ Please ensure you add the appropriate labels to this PR before requesting a revi
 - `enhancement`: New features or improvements.
 - `bug`: Bug fixes.
 - `won'tfix`: PRs that are being closed without being merged, or document a known unfixable issue.
+- etc.
 
 **3. Creator:**
 - `antigravity`: PR created by the Antigravity agent.
