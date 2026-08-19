@@ -207,6 +207,13 @@ class MongoHandler(ExceptionManager):
                 response = requests.get(url, params=params, timeout=10)
                 response.raise_for_status()
                 return response.json()
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code >= 400 and e.response.status_code < 500 and e.response.status_code != 429:
+                    self.handle_exception(Exception(f"Client error {e.response.status_code} for {symbol}: {e.response.text}"), f"Fetching {symbol}")
+                    return []
+                retries += 1
+                logger.warning(f"Retrying Binance API call for {symbol}. Attempt {retries}")
+                time.sleep(1)
             except requests.RequestException:
                 retries += 1
                 logger.warning(f"Retrying Binance API call for {symbol}. Attempt {retries}")
