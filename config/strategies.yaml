@@ -9,3 +9,9 @@ strategies:
 
   BTCUSDT:
     strategy: orbit.strategies.swing_strategy.SwingStrategyBTC
+
+  XAUUSDT:
+    strategy: orbit.strategies.xauusdt_strategy.XAUUSDTStrategy
+    execution_modes:
+      - testnet
+      - paper
