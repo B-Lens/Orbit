@@ -1,10 +1,10 @@
-# XAUUSDT Intraday Trading Strategy Research & Implementation
+# PAXGUSDT Intraday Trading Strategy Research & Implementation
 
 ## Objective
-Research and implement a highly effective intraday trading strategy on lower timeframes for XAUUSDT (Gold). The objective was to backtest the strategy, demonstrate positive returns, and deploy it to a testnet-ready draft PR.
+Research and implement a highly effective intraday trading strategy on lower timeframes for PAXGUSDT (Gold). The objective was to backtest the strategy, demonstrate positive returns, and deploy it to a testnet-ready draft PR.
 
 ## Research Findings & Methodology
-Gold (XAUUSDT) exhibits significant intraday noise and stop-hunting behavior on lower timeframes (e.g. 15-minute). Initial experiments with Mean-Reversion (Bollinger Bands) and standard EMA crossovers produced negative expectancy because the tight price action generated too many false signals.
+Gold (PAXGUSDT) exhibits significant intraday noise and stop-hunting behavior on lower timeframes (e.g. 15-minute). Initial experiments with Mean-Reversion (Bollinger Bands) and standard EMA crossovers produced negative expectancy because the tight price action generated too many false signals.
 
 To overcome this, the strategy was pivoted to a **Trend-Following Breakout Strategy**:
 1. **Indicator**: 48-period Donchian Channel (equivalent to 12 hours on the 15m chart).
@@ -26,10 +26,10 @@ The strategy was run over the most recent 60-day period of 15-minute klines:
 
 ## Implementation Details & PR 520 Updates
 The strategy was fully integrated into the Orbit architecture and pushed to PR #520. To pass the rigorous `Codex Strict Code Review`, the following systemic and testnet-isolation constraints were fixed during the process:
-* **Testnet Routing**: Hardcoded the `XAUUSDT` strategy's data polling to securely route to the Futures Testnet endpoint `demo-fapi.binance.com` to isolate environments.
-* **Cache Segregation**: Handled caching overrides in `mongo_handler.py` so that XAUUSDT Testnet historical data does not leak into the production OHLCV MongoDB collections (`XAUUSDT_TESTNET`).
+* **Testnet Routing**: Hardcoded the `PAXGUSDT` strategy's data polling to securely route to the Futures Testnet endpoint `demo-fapi.binance.com` to isolate environments.
+* **Cache Segregation**: Handled caching overrides in `mongo_handler.py` so that PAXGUSDT Testnet historical data does not leak into the production OHLCV MongoDB collections (`PAXGUSDT_TESTNET`).
 * **Active Candle Safety**: Dropping unclosed 15-minute candles was rewritten to use system clock bounds (`time.time()`) rather than static slicing, preventing profitable trading signals from firing on delayed/shifted intervals.
-* **Config Updates**: Added `XAUUSDT` dynamically to `TRAILING_STOPLOSS` and `COIN_TRADE_TYPE` globally so the production execution checker does not orphan the active orders.
+* **Config Updates**: Added `PAXGUSDT` dynamically to `TRAILING_STOPLOSS` and `COIN_TRADE_TYPE` globally so the production execution checker does not orphan the active orders.
 
 ## Status
 All GitHub Actions checks, including Static Checkers, CodeQL, and the rigorous Codex Strict Code Review, have **PASSED**. The PR is fully robust, documented, and ready for deployment.

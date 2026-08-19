@@ -5,12 +5,12 @@ import logging
 
 logger = logging.getLogger("Orbit")
 
-class XAUUSDTStrategy(Strategy):
+class PAXGUSDTStrategy(Strategy):
     """
-    Donchian Breakout strategy for XAUUSDT on 15m.
+    Donchian Breakout strategy for PAXGUSDT on 15m.
     """
     
-    def __init__(self, data: pd.DataFrame, symbol="XAUUSDT"):
+    def __init__(self, data: pd.DataFrame, symbol="PAXGUSDT"):
         super().__init__(data)
         self.symbol = symbol
         self.lookback = 48 # 12 hours
@@ -67,7 +67,7 @@ class XAUUSDTStrategy(Strategy):
                 "entry_price": current_close,
                 "stop_loss": current_close - (current_atr * self.atr_multiplier_sl),
                 "take_profit": current_close + (current_atr * self.atr_multiplier_tp),
-                "pattern": "XAUUSDT Donchian Breakout"
+                "pattern": "PAXGUSDT Donchian Breakout"
             }
             
         if short_signal:
@@ -76,7 +76,7 @@ class XAUUSDTStrategy(Strategy):
                 "entry_price": current_close,
                 "stop_loss": current_close + (current_atr * self.atr_multiplier_sl),
                 "take_profit": current_close - (current_atr * self.atr_multiplier_tp),
-                "pattern": "XAUUSDT Donchian Breakout"
+                "pattern": "PAXGUSDT Donchian Breakout"
             }
             
         return None
