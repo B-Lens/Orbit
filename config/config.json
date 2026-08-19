@@ -20,7 +20,7 @@
     "risk_policy": {
       "max_leverage": 5,
       "max_position_notional_pct": 0.25,
-      "max_risk_per_trade_pct": 0.01,
+      "max_risk_per_trade_pct": 0.0025,
       "max_daily_loss_pct": 0.02,
       "min_reward_risk_ratio": 1.5
     },
