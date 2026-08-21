@@ -44,8 +44,6 @@ redis = "*"
 pymongo = "*"
 
 gym = "*"
-timeout-decorator = "*"
-
 anthropic = "*"
 groq = "*"
 openai = "*"

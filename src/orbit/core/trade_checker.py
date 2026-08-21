@@ -47,34 +47,28 @@ _POSITION_RISK_MAX_ATTEMPTS = 3
 _POSITION_RISK_RETRY_DELAY = 1.0
 
 
-def is_stop_order(order: Optional[Dict[str, Any]]) -> bool:
-    """Return ``True`` if *order* represents a stop-loss conditional/algo order."""
+def _order_types(order: Optional[Dict[str, Any]]) -> Tuple[str, str]:
     if not order:
-        return False
-    t = str(order.get("algoType", "")).upper()
-    ot = str(order.get("orderType", "")).upper()
+        return "", ""
+    return str(order.get("algoType", "")).upper(), str(order.get("orderType", "")).upper()
 
-    if t in ("ALGO", "CONDITIONAL") and "STOP" in ot:
-        return True
-    if ot in ("STOP", "STOP_MARKET", "STOP_LOSS", "STOP_LOSS_LIMIT"):
-        return True
-    if t in ("STOP", "STOP_MARKET"):
-        return True
-    return False
+
+def is_stop_order(order: Optional[Dict[str, Any]]) -> bool:
+    """Return whether *order* is a stop-loss conditional/algo order."""
+    algo_type, order_type = _order_types(order)
+    return (
+        (algo_type in {"ALGO", "CONDITIONAL"} and "STOP" in order_type)
+        or order_type in {"STOP", "STOP_MARKET", "STOP_LOSS", "STOP_LOSS_LIMIT"}
+        or algo_type in {"STOP", "STOP_MARKET"}
+    )
 
 
 def is_take_profit_order(order: Optional[Dict[str, Any]]) -> bool:
     """Return ``True`` if *order* represents a take-profit conditional/algo order."""
-    if not order:
-        return False
-    t = str(order.get("algoType", "")).upper()
-    ot = str(order.get("orderType", "")).upper()
-
-    if t in ("ALGO", "CONDITIONAL") and "TAKE_PROFIT" in ot:
-        return True
-    if ot in ("TAKE_PROFIT", "TAKE_PROFIT_MARKET"):
-        return True
-    return False
+    algo_type, order_type = _order_types(order)
+    return (
+        algo_type in {"ALGO", "CONDITIONAL"} and "TAKE_PROFIT" in order_type
+    ) or order_type in {"TAKE_PROFIT", "TAKE_PROFIT_MARKET"}
 
 
 class TradeChecker(AuthenticationManager, RedisManager):

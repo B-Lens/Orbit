@@ -87,6 +87,9 @@ For any questions or to discuss ideas, please create an issue.
 
 ## System Architecture
 
+For a concise ownership and navigation guide, start with the
+[`Codebase map`](docs/architecture/CODEBASE_MAP.md).
+
 ### High-Level Runtime Flow
 
 ```mermaid
