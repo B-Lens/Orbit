@@ -15,12 +15,17 @@ logger = logging.getLogger("Orbit")
 
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_OUTPUT_TOKENS = 2_000
+DEFAULT_STREAM_RETRIES = 1
 DEFAULT_INSTRUCTIONS = (
     "You are Orbit's market-intelligence analyst. Follow the requested output "
     "schema exactly. When JSON is requested, return only valid JSON without "
     "Markdown fences or additional commentary. Do not invent market data."
 )
 DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+
+
+class _IncompleteStreamError(RuntimeError):
+    """Raised when an SSE response closes without a terminal event."""
 
 
 class OpenAIResponsesClient:
@@ -122,6 +127,7 @@ class CodexOAuthResponsesClient:
         max_output_tokens: Optional[int] = None,
         endpoint: Optional[str] = None,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
+        stream_retries: Optional[int] = None,
     ) -> None:
         self.auth_file = Path(auth_file).expanduser() if auth_file else default_auth_file()
         self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
@@ -136,6 +142,13 @@ class CodexOAuthResponsesClient:
         )
         if self.max_output_tokens < 1:
             raise ValueError("OPENAI_MAX_OUTPUT_TOKENS must be positive")
+        self.stream_retries = (
+            stream_retries
+            if stream_retries is not None
+            else int(os.getenv("OPENAI_STREAM_RETRIES", str(DEFAULT_STREAM_RETRIES)))
+        )
+        if self.stream_retries < 0:
+            raise ValueError("OPENAI_STREAM_RETRIES must not be negative")
         self.endpoint = endpoint or os.getenv(
             "OPENAI_CODEX_RESPONSES_URL", DEFAULT_CODEX_RESPONSES_URL
         )
@@ -170,6 +183,20 @@ class CodexOAuthResponsesClient:
         if not prompt or not prompt.strip():
             raise ValueError("prompt must not be empty")
 
+        for attempt in range(self.stream_retries + 1):
+            try:
+                return self._invoke_once(prompt, web_search)
+            except _IncompleteStreamError:
+                if attempt == self.stream_retries:
+                    raise
+                logger.warning(
+                    "OpenAI stream ended before completion; retrying (%d/%d)",
+                    attempt + 1,
+                    self.stream_retries,
+                )
+        raise RuntimeError("OpenAI stream retry loop exited unexpectedly")
+
+    def _invoke_once(self, prompt: str, web_search: bool) -> str:
         access_token, account_id = self._credentials()
         request_id = str(uuid.uuid4())
         payload_data: dict[str, Any] = {
@@ -247,7 +274,9 @@ class CodexOAuthResponsesClient:
 
         output_text = "".join(assistant_text).strip()
         if not completed:
-            raise RuntimeError("OpenAI stream ended before response.completed")
+            raise _IncompleteStreamError(
+                "OpenAI stream ended before response.completed"
+            )
         if not output_text:
             raise RuntimeError("OpenAI returned an empty response")
         logger.info("OpenAI OAuth response generated with %s", self.model)

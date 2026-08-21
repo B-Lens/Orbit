@@ -45,12 +45,16 @@ OPENAI_AUTH_FILE=/run/secrets/codex/auth.json
 OPENAI_MODEL=gpt-5.6-luna
 OPENAI_MAX_OUTPUT_TOKENS=2000
 OPENAI_WEB_SEARCH_TIMEOUT=300
+OPENAI_STREAM_RETRIES=1
 ORBIT_LEGACY_SENTIMENT_UPDATES=false
 ```
 
 `OPENAI_MODEL` is configurable so a model can be evaluated and promoted without
 a code deployment. `OPENAI_MAX_OUTPUT_TOKENS` bounds response cost and must be a
-positive integer. When both authentication methods are present, the API key is
+positive integer. OAuth streams that close before a terminal completion event
+are retried once by default; `OPENAI_STREAM_RETRIES` can change that bounded
+retry count. Partial output from an interrupted attempt is always discarded.
+When both authentication methods are present, the API key is
 preferred. OAuth credentials are re-read before each call so replacing the
 provisioned file refreshes the running worker; the credential must never be
 committed to the repository. `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and `GROQ_API_KEY`
