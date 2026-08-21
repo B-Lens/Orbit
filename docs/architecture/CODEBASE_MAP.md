@@ -9,7 +9,7 @@ Use this page as the entry point when loading Orbit into a limited context windo
 | Execution | Enforces environment modes, risk, and order lifecycle | `core/execution.py`, `core/risk_manager.py`, `core/order_manager.py` |
 | Positions | Maintains stops, targets, cooldowns, and live prices | `core/trade_checker.py`, `core/binance_ws_manager.py` |
 | State | Owns MongoDB market data and Redis trade mappings | `core/mongo_handler.py`, `core/redis_manager.py` |
-| Intelligence | Fetches sources, invokes LLMs, and persists sentiment | `market_intelligence/sentimental_workflow.py` |
+| Intelligence | Runs Codex-authenticated web analysis and persists validated sentiment | `core/sentimen_cron.py`, `market_intelligence/sentimental_workflow.py` |
 | Strategies | Implements production and research signal logic | `strategies/` |
 
 All package paths above are relative to `src/orbit/`. Configuration belongs in
@@ -18,11 +18,13 @@ boundaries in `tests/`.
 
 ## Runtime flow
 
-`main` starts the signal analyzer, trade checker, and sentiment cron. The signal
+`main` starts the signal analyzer, trade checker, sentiment cron, and performance
+reporter. The signal
 analyzer selects a strategy through the registry, then delegates risk and exchange
 work to the order manager. Redis stores active trades and order-to-trade mappings;
-MongoDB stores OHLCV and sentiment history. The trade checker reconciles Redis with
-Binance and maintains protective orders.
+MongoDB stores OHLCV, sentiment, decisions, and income history. The trade checker
+reconciles Redis with Binance and maintains protective orders. The sentiment cron
+runs one hourly web-grounded Responses analysis using provisioned Codex credentials.
 
 ## Safety invariants
 
@@ -38,6 +40,5 @@ Run `poetry run pytest`. Tests must exercise production behavior: avoid assertio
 that only verify a mock, a locally constructed dictionary, or an external service.
 Parametrize or share setup when scenarios use the same production path.
 
-Deeper references: [strategy ownership](STRATEGY_CONSOLIDATION.md),
-[market-intelligence providers](MARKET_INTELLIGENCE_LLM.md), and
-[safe operations](../operations/SAFE_ADAPTIVE_TRADING.md).
+See the [core runtime flow](core_module_flowchart.md) and
+[safe operations](../operations/SAFE_ADAPTIVE_TRADING.md) for deeper detail.
