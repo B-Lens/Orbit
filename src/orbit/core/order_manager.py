@@ -341,47 +341,12 @@ class OrderManager(AuthenticationManager, RedisManager):
         Returns:
             The API response dict, or ``None`` on failure.
         """
-        try:
-            precision = self.config["trading_pairs_precision"][symbol]
-            quantity = abs(round(float(quantity), precision))
-            quantity = self.adjust_quantity_step(symbol, quantity)
-
-            sl_req = {
-                "symbol": symbol,
-                "side": side,
-                "stopLossPrice": stoploss_price,
-                "quantity": quantity,
-            }
-
-            logger.warning(f"[SL REQUEST] {sl_req}")
-            self.send_sl_update_notifier(
-                data=None,
-                description=f"SL Order Request for {symbol}",
-                fields=sl_req,
-            )
-
-            stop_loss_order = self.place_algo_conditional_order(
-                symbol=symbol,
-                side=side,
-                order_type="STOP_MARKET",
-                stop_price=round(stoploss_price, 1),
-                quantity=quantity,
-                trade_id=trade_id or symbol,
-            )
-
-            self.send_sl_update_notifier(
-                data=None,
-                description=f"SL Order Response for {symbol}",
-                fields=stop_loss_order,
-            )
-            return stop_loss_order
-
-        except ClientError as error:
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> place_sl_order")
-        except Exception as e:
-            self.handle_exception(e, "Unexpected exception in place_sl_order")
-
-        return None
+        return self._place_exit_order(
+            symbol=symbol, side=side, price=stoploss_price, quantity=quantity,
+            trade_id=trade_id, order_type="STOP_MARKET",
+            price_field="stopLossPrice", label="SL",
+            notify=self.send_sl_update_notifier,
+        )
 
     def place_target_order(
         self,
@@ -403,45 +368,39 @@ class OrderManager(AuthenticationManager, RedisManager):
         Returns:
             The API response dict, or ``None`` on failure.
         """
+        return self._place_exit_order(
+            symbol=symbol, side=side, price=target_price, quantity=quantity,
+            trade_id=trade_id, order_type="TAKE_PROFIT_MARKET",
+            price_field="targetPrice", label="Target",
+            notify=self.send_signal_updates,
+        )
+
+    def _place_exit_order(
+        self, *, symbol: str, side: str, price: float, quantity: float,
+        trade_id: Optional[str], order_type: str, price_field: str,
+        label: str, notify: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Place a normalized SL/TP order and emit its request and response."""
         try:
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
             quantity = self.adjust_quantity_step(symbol, quantity)
-
-            tp_req = {
-                "symbol": symbol,
-                "side": side,
-                "targetPrice": target_price,
-                "quantity": quantity,
-            }
-
-            self.send_signal_updates(
-                data=None,
-                description=f"Target Order Request for {symbol}",
-                fields=tp_req,
-            )
-
-            take_profit_order = self.place_algo_conditional_order(
-                symbol=symbol,
-                side=side,
-                order_type="TAKE_PROFIT_MARKET",
-                stop_price=round(target_price, 1),
-                quantity=quantity,
+            request = {"symbol": symbol, "side": side, price_field: price, "quantity": quantity}
+            notify(data=None, description=f"{label} Order Request for {symbol}", fields=request)
+            response = self.place_algo_conditional_order(
+                symbol=symbol, side=side, order_type=order_type,
+                stop_price=round(price, 1), quantity=quantity,
                 trade_id=trade_id or symbol,
             )
-
-            self.send_signal_updates(
-                data=None,
-                description=f"Target Order Response for {symbol}",
-                fields=take_profit_order,
-            )
-            return take_profit_order
-
+            notify(data=None, description=f"{label} Order Response for {symbol}", fields=response)
+            return response
         except ClientError as error:
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> place_target_order")
-        except Exception as e:
-            self.handle_exception(e, "Unexpected exception in place_target_order")
-
+            self.clientExceptionHandler(
+                symbol=symbol, error=error,
+                Location=f"OrderManager -> place_{label.lower()}_order",
+            )
+        except Exception as error:
+            self.handle_exception(error, f"Unexpected exception in place_{label.lower()}_order")
         return None
 
     # -------------------------------------------------------------------------

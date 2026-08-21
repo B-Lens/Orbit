@@ -6,4 +6,6 @@ __pycache__/
 *.log
 .mypy_cache/
 .pytest_cache/
+.coverage
+.venv/
 issue.txt

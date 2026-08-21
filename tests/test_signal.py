@@ -1,24 +1,45 @@
 import unittest
+from unittest.mock import MagicMock
+
 import pandas as pd
-from datetime import datetime, timedelta
-from timeout_decorator import timeout
+
 from orbit.core.mongo_handler import MongoHandler
 
 
-class TestMongo(unittest.TestCase):
+class TestDataCollector(unittest.TestCase):
+    def test_converts_binance_klines_without_network_or_database(self):
+        handler = MongoHandler.__new__(MongoHandler)
+        handler.get_binance_klines = MagicMock(
+            side_effect=[
+                [
+                    [
+                        1_700_000_000_000,
+                        "100",
+                        "105",
+                        "99",
+                        "103",
+                        "42",
+                        1_700_000_899_999,
+                        "0",
+                        1,
+                        "0",
+                        "0",
+                        "0",
+                    ]
+                ],
+                [],
+            ]
+        )
 
-    def setUp(self):
-        self.mongo_handler = MongoHandler()
+        frame = handler.data_collector("BTCUSDT", start_time=1_700_000_000_000)
 
-    @timeout(15)
-    def test_data_collector(self):
-        current_time = datetime.now()
-        few_back = current_time - timedelta(minutes=45)
-        timestamp = int(few_back.timestamp() * 1000)
-        self.assertEqual(type(self.mongo_handler.data_collector(symbol="BTCUSDT", interval='15m', start_time=timestamp)), pd.DataFrame)
+        self.assertIsInstance(frame, pd.DataFrame)
+        self.assertEqual(
+            frame.iloc[0][["open", "high", "low", "close", "volume"]].tolist(),
+            [100, 105, 99, 103, 42],
+        )
+        self.assertEqual(frame.index.name, "timestamp")
 
-    def tearDown(self):
-        self.mongo_handler.close()
 
 if __name__ == "__main__":
     unittest.main()
