@@ -41,6 +41,13 @@ Testnet and production credentials must be different and should be loaded from
 AWS Systems Manager Parameter Store or Secrets Manager by the EC2 service. Never
 write credentials or webhook URLs into Git.
 
+Paper signals never submit an exchange order. They run the same stop/target,
+position-size, exchange-filter, and risk-policy checks against
+`ORBIT_PAPER_EQUITY`. Successful preflights are written to the decision ledger
+as `paper_validated` without failure alerts. A failed preflight records and alerts
+its actionable reason; unresolved failures are promotion blockers for Testnet or
+live configuration.
+
 ## Decision ledger
 
 MongoDB collection `trade_decisions` stores accepted, rejected, no-signal, and

@@ -234,6 +234,28 @@ class BinanceAutomation(ExceptionManager):
 
         logger.info(f"Placing {action} order for {symbol}...")
 
+        if self.order_manager.execution_settings.mode_for(symbol) is ExecutionMode.PAPER:
+            preflight = self.order_manager.preflight_paper_order(
+                self.risk_management, symbol, action, price_to_use,
+                stop_loss, target, leverage,
+            )
+            event = {
+                "status": preflight.reason,
+                "request": preflight.request,
+                "metrics": preflight.metrics,
+            }
+            if decision_id and self.order_manager.mongo_handler is not None:
+                self.order_manager.mongo_handler.append_decision_event(decision_id, event)
+            if preflight.allowed:
+                logger.info("Paper order validated for %s: %s", symbol, preflight.request)
+            else:
+                self.send_alerts(
+                    data=None,
+                    description=f"Paper preflight failed for {symbol}: {preflight.reason}",
+                    fields=event,
+                )
+            return
+
         order_response, quantity, order_request = self.order_manager.place_order(
             self.risk_management,
             symbol,
