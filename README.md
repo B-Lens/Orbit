@@ -68,6 +68,10 @@ interactions. Operational automation is documented in
 [Codex automation](docs/operations/CODEX_AUTOMATION.md) and
 [Codex PR review](docs/operations/CODEX_PR_REVIEW.md).
 
+Testnet candidates retain concise promotion evidence and future success criteria
+in the [ETH dossier](docs/research/ETH_STRATEGY.md) and
+[PAXG dossier](docs/research/PAXGUSDT_STRATEGY.md).
+
 ## Development
 
 ```bash
