@@ -14,13 +14,47 @@ jobs:
     uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@main
     with:
       review_prompt: >-
-        Review this pull request as a strict production-safety gate for a
-        continuously running automated cryptocurrency trading system. Inspect the
-        complete diff and enough surrounding code to prove each finding. Focus only
-        on actionable correctness, security, data-integrity, trading-risk, and
-        deployment defects introduced by the diff. Preserve paper/Testnet/live
-        environment separation. Ignore style, documentation preferences,
-        speculative concerns, and pre-existing issues outside the diff.
+        Review this pull request as a strict production-safety gate for Orbit, a
+        continuously running, thread-based Binance Futures trading system. Inspect
+        the complete diff and enough surrounding production code, configuration,
+        tests, and workflows to prove each finding. Project architecture and
+        invariants: `poetry run orbit` starts signal analysis, position and
+        protective-order reconciliation, hourly market intelligence, performance
+        reporting, and worker-health monitoring; stopped or stuck workers can
+        silently leave trades unprotected. Signals flow through the strategy
+        registry and SignalAnalyzer into pre-trade risk checks and OrderManager.
+        OrderManager is the only exchange-order gateway; TradeChecker reconciles
+        Binance with Redis and maintains stop-loss/take-profit orders; market
+        intelligence may filter signals but never place orders. Execution is
+        authorized per symbol, missing symbols are paper-only, Testnet and live use
+        separate clients and credentials, and live symbols require an exact
+        ORBIT_LIVE_ASSETS allowlist. Mixed-mode processes must scope orders,
+        balances, income, and reconciliation to the symbol's environment. Redis
+        owns active trades, cooldowns, and every order:{order_id}->trade_id mapping;
+        MongoDB owns OHLCV, decision/event, sentiment, and exchange-income ledgers.
+        Exchange and local-state changes must remain idempotent and restart/retry,
+        partial-fill, and stale-state safe. Pre-trade policy caps leverage at 5,
+        notional at 25% of equity, risk at stop at 0.25% of equity, and daily loss
+        at 2%, with minimum reward/risk 1.5. Exchange minimums cannot override risk
+        rejection; the daily-loss gate refreshes Binance income immediately before
+        submission and fails closed on sync failure. Commission and paid funding
+        are already negative and are added when calculating net P&L. Validate
+        Binance tick/step/notional rules, entry versus closing sides, quantity,
+        positionSide, reduceOnly/closePosition, trigger direction, and duplicate
+        prevention. Config lives in config/config.json, config/strategies.yaml, and
+        environment variables and must fail safely. Python support is 3.10-3.12.
+        binance-connector and binance-futures-connector share the `binance` package,
+        so Poetry installation must remain non-parallel and poetry.lock consistent
+        with pyproject.toml. Deployments install locked dependencies into a staged
+        release, test, switch, restart, health-check, and roll back; they must not
+        git-pull into the active environment. Never expose credentials or run
+        untrusted PR code with secrets. Focus only on concrete correctness,
+        security, concurrency, data-integrity, trading-risk, clean-build, startup,
+        and deployment defects introduced by the diff. Trace changed values through
+        consumers and examine failure, retry, restart, and mixed-environment paths.
+        Ignore style, documentation preferences, missing tests alone, speculative
+        concerns, and pre-existing issues. Report only findings proven by the diff,
+        using changed-file line numbers and a concrete triggering scenario.
     secrets:
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
       ANTIGRAVITY_OAUTH_TOKEN: ${{ secrets.ANTIGRAVITY_OAUTH_TOKEN }}
