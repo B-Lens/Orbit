@@ -114,7 +114,6 @@ class TestExecutionSettings(unittest.TestCase):
         live_client = MagicMock()
         settings = ExecutionSettings(
             {"BCHUSDT": ExecutionMode.LIVE},
-            frozenset({"BCHUSDT"}),
         )
         manager = AuthenticationManager(
             spot_client=MagicMock(),

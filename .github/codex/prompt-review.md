@@ -22,7 +22,9 @@ paths.
 - `config/strategies.yaml` is the execution-mode authority. Every configured
   trading pair must explicitly use `execution_mode: testnet` or `execution_mode:
   live`; missing or paper modes must fail startup. Orders, balances, income, and
-  reconciliation must use the Binance environment selected for that asset.
+  reconciliation must use the Binance environment selected for that asset. This
+  file is also the deliberate and sole per-asset live authorization mechanism;
+  do not require or restore an environment-variable live-asset allowlist.
 - Exchange mutations and Redis/MongoDB state must remain atomic, idempotent, and
   safe across partial fills, retries, restarts, stale mappings, and concurrent
   workers. Entry and closing sides must remain opposite and protective orders

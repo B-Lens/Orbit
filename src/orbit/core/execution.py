@@ -25,7 +25,6 @@ DEFAULT_STRATEGY_CONFIG = Path(__file__).parents[3] / "config" / "strategies.yam
 @dataclass(frozen=True)
 class ExecutionSettings:
     asset_modes: dict[str, ExecutionMode] = field(default_factory=dict)
-    live_assets: frozenset[str] = frozenset()
 
     @property
     def can_submit_orders(self) -> bool:
@@ -98,11 +97,4 @@ class ExecutionSettings:
         ):
             raise RuntimeError("Binance live credentials are required")
 
-        return cls(
-            asset_modes,
-            frozenset(
-                symbol
-                for symbol, mode in asset_modes.items()
-                if mode is ExecutionMode.LIVE
-            ),
-        )
+        return cls(asset_modes)
