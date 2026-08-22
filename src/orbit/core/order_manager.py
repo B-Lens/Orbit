@@ -192,7 +192,11 @@ class OrderManager(AuthenticationManager, RedisManager):
             * 1000
         )
         client = self.future_client_for(symbol) if symbol else self.future_client
-        tracker = PerformanceTracker(client, self.mongo_handler)
+        tracker = PerformanceTracker(
+            client,
+            self.mongo_handler,
+            self.execution_settings.mode_for(symbol or "").value,
+        )
         return tracker.sync(start_ms).net_pnl
 
     def _record_order_rejection(

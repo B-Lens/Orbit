@@ -132,6 +132,19 @@ class TestPerformanceTracker(unittest.TestCase):
         self.assertEqual(summary.net_pnl, 22)
         self.assertAlmostEqual(summary.return_pct, 2.2)
 
+    def test_sync_tags_income_with_execution_mode(self):
+        client = MagicMock()
+        client.get_income_history.return_value = [
+            {"tranId": 1, "incomeType": "REALIZED_PNL", "income": "2"}
+        ]
+        mongo = MagicMock()
+
+        PerformanceTracker(client, mongo, "testnet").sync(123)
+
+        mongo.store_income_records.assert_called_once_with(
+            client.get_income_history.return_value, "testnet"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

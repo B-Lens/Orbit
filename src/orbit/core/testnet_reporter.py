@@ -228,16 +228,26 @@ class GitHubProjectClient:
 class TestnetDailyReporter:
     """Read yesterday's ledgers and idempotently publish their GitHub report."""
 
-    def __init__(self, mongo_handler: Any, github: GitHubProjectClient) -> None:
+    def __init__(
+        self,
+        mongo_handler: Any,
+        github: GitHubProjectClient,
+        futures_client: Any = None,
+    ) -> None:
         self.mongo_handler = mongo_handler
         self.github = github
+        self.futures_client = futures_client
 
     def publish_date(self, report_date: date) -> str:
         start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
+        if self.futures_client is not None:
+            PerformanceTracker(self.futures_client, self.mongo_handler, "testnet").sync(
+                int(start.timestamp() * 1000)
+            )
         decisions = self.mongo_handler.get_trade_decisions(start, end, "testnet")
         income = self.mongo_handler.get_income_records(
-            int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+            int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
         title = f"Orbit Testnet daily report: {report_date.isoformat()}"
         return self.github.publish(
@@ -258,7 +268,9 @@ class TestnetDailyReporter:
             time_module.sleep(interval_seconds)
 
     @classmethod
-    def from_env(cls, mongo_handler: Any) -> Optional["TestnetDailyReporter"]:
+    def from_env(
+        cls, mongo_handler: Any, futures_client: Any = None
+    ) -> Optional["TestnetDailyReporter"]:
         if os.getenv("ORBIT_GITHUB_REPORTING_ENABLED", "false").lower() != "true":
             return None
         token = os.getenv("ORBIT_GITHUB_TOKEN", "").strip()
@@ -268,4 +280,8 @@ class TestnetDailyReporter:
             raise RuntimeError(
                 "GitHub reporting requires ORBIT_GITHUB_TOKEN and ORBIT_GITHUB_PROJECT_ID"
             )
-        return cls(mongo_handler, GitHubProjectClient(token, repository, project_id))
+        return cls(
+            mongo_handler,
+            GitHubProjectClient(token, repository, project_id),
+            futures_client,
+        )

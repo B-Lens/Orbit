@@ -23,9 +23,15 @@ class PerformanceSummary:
 class PerformanceTracker:
     """Normalise and aggregate the exchange's immutable income ledger."""
 
-    def __init__(self, futures_client: Any, mongo_handler: Any = None) -> None:
+    def __init__(
+        self,
+        futures_client: Any,
+        mongo_handler: Any = None,
+        execution_mode: str = "unknown",
+    ) -> None:
         self.futures_client = futures_client
         self.mongo_handler = mongo_handler
+        self.execution_mode = execution_mode
 
     @staticmethod
     def summarize(records: Iterable[dict[str, Any]], starting_equity: float | None = None) -> PerformanceSummary:
@@ -63,7 +69,7 @@ class PerformanceTracker:
             params["startTime"] = start_time_ms
         records = self.futures_client.get_income_history(**params)
         if self.mongo_handler is not None:
-            self.mongo_handler.store_income_records(records)
+            self.mongo_handler.store_income_records(records, self.execution_mode)
         return self.summarize(records)
 
     @staticmethod

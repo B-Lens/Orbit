@@ -61,6 +61,10 @@ the previous UTC day's accepted, rejected, and errored Testnet attempts to one
 idempotent GitHub issue and adds it to the configured Project. The issue includes
 prices, sentiment, strategy identity, decision reason, all execution transitions,
 and fee-aware net P&L. No-signal evaluations are counted but are not trade attempts.
+Before publication, the reporter synchronizes Binance Testnet income from the
+start of the reporting window. Income rows are tagged by execution mode, and the
+report queries only `testnet` rows so mixed live/Testnet deployments cannot blend
+account performance.
 
 The publisher then applies `ai-autonomous`. The existing Codex workflow analyzes
 the evidence and may create a reviewed pull request only for a demonstrated code

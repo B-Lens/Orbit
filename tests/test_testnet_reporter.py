@@ -57,7 +57,9 @@ class TestDailyReporter(unittest.TestCase):
         mongo.get_income_records.return_value = []
         github = MagicMock()
         github.publish.return_value = "https://github.test/report/1"
-        reporter = DailyReporter(mongo, github)
+        futures = MagicMock()
+        futures.get_income_history.return_value = []
+        reporter = DailyReporter(mongo, github, futures)
 
         url = reporter.publish_date(date(2026, 8, 21))
 
@@ -66,6 +68,13 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(start, datetime(2026, 8, 21, tzinfo=timezone.utc))
         self.assertEqual(end, datetime(2026, 8, 22, tzinfo=timezone.utc))
         self.assertEqual(mode, "testnet")
+        futures.get_income_history.assert_called_once_with(
+            recvWindow=60000, startTime=int(start.timestamp() * 1000)
+        )
+        mongo.store_income_records.assert_called_once_with([], "testnet")
+        mongo.get_income_records.assert_called_once_with(
+            int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
+        )
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet daily report: 2026-08-21"
         )

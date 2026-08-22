@@ -383,7 +383,9 @@ class BinanceAutomation(ExceptionManager):
     def report_performance(self, interval_seconds: int = 86400) -> None:
         """Sync Binance income and emit a fee-aware report once per day."""
         reporters = [
-            PerformanceReporter(client, self.order_manager.mongo_handler)
+            PerformanceReporter(
+                client, self.order_manager.mongo_handler, mode.value
+            )
             for mode, client in self.order_manager.futures_clients.items()
             if mode is not ExecutionMode.PAPER
         ]
@@ -409,7 +411,8 @@ class BinanceAutomation(ExceptionManager):
         self.handle_crons()
 
         reporter = self._testnet_reporter or TestnetDailyReporter.from_env(
-            self.order_manager.mongo_handler
+            self.order_manager.mongo_handler,
+            self.order_manager.futures_clients.get(ExecutionMode.TESTNET),
         )
         if reporter is not None:
             report_thread = threading.Thread(
