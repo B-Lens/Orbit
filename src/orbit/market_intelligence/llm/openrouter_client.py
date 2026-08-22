@@ -60,7 +60,7 @@ class OpenRouterClient:
                 )
             except Exception:
                 logger.info(f"LLM Inference failed on attempt {attempt}")
-                if attempt == MAX_RETRIES + 1:
+                if attempt == MAX_RETRIES:
                     return None
                 continue
 
@@ -82,8 +82,9 @@ class OpenRouterClient:
             if routed_model in RETRY_MODEL and attempt == MAX_RETRIES:
                 logger.warning(
                     "Final attempt also routed to %s – skipping this response",
-                    RETRY_MODEL,
+                    routed_model,
                 )
+                continue
 
             extracted_response = self._extract_content(response)
             if extracted_response is None:

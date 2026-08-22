@@ -108,7 +108,7 @@ class NewsSentiment(BaseModel):
 
 
 class WebSearchSentiment(Sentiment):
-    """Validated hourly sentiment grounded in live web sources."""
+    """Validated half-hourly sentiment grounded in live web sources."""
 
     sources: List[str] = Field(min_length=1, max_length=8)
 
@@ -855,12 +855,12 @@ class SentimentWorkflow(ExceptionManager):
             }
 
     async def run_web_search_analysis(self) -> Dict[str, Any]:
-        """Run the hourly live-web market assessment and persist its result."""
+        """Run the half-hourly live-web market assessment and persist its result."""
         start_time = time.time()
         try:
             current_time = datetime.now(timezone.utc).isoformat()
             prompt = self.prompt_manager.get_prompt(
-                "hourly_web_search_sentiment_v2", current_time_utc=current_time
+                "global_crypto_web_sentiment_v3", current_time_utc=current_time
             )
             raw_content = self.llm.invoke_web_search(prompt)
             data = extract_json(str(raw_content))
@@ -872,14 +872,14 @@ class SentimentWorkflow(ExceptionManager):
                     "confidence": result.confidence,
                     "explanation": result.explanation,
                 },
-                reddit_sentiment={"source": "disabled_for_hourly_web_search"},
+                reddit_sentiment={"source": "disabled_for_web_search"},
                 news_sentiment={
-                    "source": "chatgpt_web_search",
+                    "source": "live_web_search",
                     "sources": result.sources,
                     "summary": result.explanation,
                 },
                 market_indicators={},
-                twitter_sentiment={"source": "disabled_for_hourly_web_search"},
+                twitter_sentiment={"source": "disabled_for_web_search"},
                 processing_time_ms=processing_time,
             )
             record_id = self.mongodb.save_sentiment(record)
@@ -887,7 +887,7 @@ class SentimentWorkflow(ExceptionManager):
                 "success": True,
                 "timestamp": get_indian_time().isoformat(),
                 "database_id": record_id,
-                "source": "chatgpt_web_search",
+                "source": "live_web_search",
                 **result.model_dump(),
                 "processing_time_ms": processing_time,
             }
@@ -897,7 +897,7 @@ class SentimentWorkflow(ExceptionManager):
                 "success": False,
                 "error": str(error),
                 "timestamp": get_indian_time().isoformat(),
-                "source": "chatgpt_web_search",
+                "source": "live_web_search",
             }
 
     # ------------------------------------------------------------------

@@ -78,7 +78,7 @@ class BinanceAutomation(ExceptionManager):
 
     1. **Signal analysis** — generates and processes trading signals.
     2. **Trade checker** — monitors active positions and manages SL/TP.
-    3. **Sentiment cron** — runs hourly sentiment analysis.
+    3. **Sentiment cron** — runs sentiment analysis every 30 minutes.
 
     All major dependencies are accepted via the constructor so that the
     class can be tested or reconfigured without monkey-patching.
