@@ -81,7 +81,6 @@ class PerformanceTracker:
         records: list[dict[str, Any]] = []
         seen: set[tuple[Any, ...]] = set()
         cursor = start_time_ms
-        repeat_cursor = False
         while cursor < end_time_ms:
             page_records = self.futures_client.get_income_history(
                 startTime=cursor,
@@ -109,12 +108,11 @@ class PerformanceTracker:
             latest_time = max(int(row.get("time", cursor)) for row in page_records)
             if latest_time > cursor:
                 cursor = latest_time
-                repeat_cursor = False
-            elif added and not repeat_cursor:
-                repeat_cursor = True
-            else:
-                cursor += 1
-                repeat_cursor = False
+            elif not added:
+                raise RuntimeError(
+                    "Binance income history cannot advance past a full-page "
+                    "timestamp; refusing to publish incomplete accounting"
+                )
         if self.mongo_handler is not None:
             self.mongo_handler.store_income_records(records, self.execution_mode)
         return self.summarize(records)

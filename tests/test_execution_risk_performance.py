@@ -201,6 +201,18 @@ class TestPerformanceTracker(unittest.TestCase):
             client.get_income_history.call_args_list[0].kwargs["endTime"], 499
         )
 
+    def test_sync_window_fails_closed_on_unpageable_timestamp(self):
+        client = MagicMock()
+        full_page = [
+            {"tranId": 1, "time": 100, "incomeType": "COMMISSION", "income": "-1"}
+        ]
+        client.get_income_history.side_effect = [full_page, full_page]
+
+        with self.assertRaisesRegex(RuntimeError, "refusing to publish incomplete"):
+            PerformanceTracker(client, MagicMock(), "testnet").sync_window(
+                100, 500, page_size=1
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
