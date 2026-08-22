@@ -189,24 +189,6 @@ class GitHubProjectClient:
                 f"https://api.github.com/repos/{self.repository}/issues",
                 json={"title": title, "body": body, "labels": [REPORT_LABEL]},
             )
-            mutation = """
-              mutation($project: ID!, $content: ID!) {
-                addProjectV2ItemById(input: {projectId: $project, contentId: $content}) {
-                  item { id }
-                }
-              }
-            """
-            self._call(
-                "POST",
-                "https://api.github.com/graphql",
-                json={
-                    "query": mutation,
-                    "variables": {
-                        "project": self.project_id,
-                        "content": issue["node_id"],
-                    },
-                },
-            )
         else:
             assert existing is not None
             issue = self._call(
@@ -214,6 +196,32 @@ class GitHubProjectClient:
                 f"https://api.github.com/repos/{self.repository}/issues/{existing['number']}",
                 json={"body": body},
             )
+
+        mutation = """
+          mutation($project: ID!, $content: ID!) {
+            addProjectV2ItemById(input: {projectId: $project, contentId: $content}) {
+              item { id }
+            }
+          }
+        """
+        # Always attempt it so a retry repairs a prior issue-created/project-failed run.
+        project_result = self._call(
+            "POST",
+            "https://api.github.com/graphql",
+            json={
+                "query": mutation,
+                "variables": {
+                    "project": self.project_id,
+                    "content": issue["node_id"],
+                },
+            },
+        )
+        errors = project_result.get("errors", [])
+        if errors and not all(
+            "already exists" in str(error.get("message", "")).lower()
+            for error in errors
+        ):
+            raise RuntimeError(f"GitHub Project insertion failed: {errors}")
 
         current_labels = {item["name"] for item in issue.get("labels", [])}
         if AGENT_LABEL not in current_labels:

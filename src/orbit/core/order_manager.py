@@ -604,8 +604,15 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             if not self.validate_notional(symbol, price, quantity):
                 filters = self.get_symbol_filters(symbol)
-                min_notional = filters["MIN_NOTIONAL"]["notional"] if filters.get("MIN_NOTIONAL") else "N/A"
-                logger.error(f"[NOTIONAL ERROR] {symbol} LIMIT order rejected. Required: {min_notional}, Got: {price * quantity}")
+                minimum_notional = (
+                    filters["MIN_NOTIONAL"]["notional"]
+                    if filters.get("MIN_NOTIONAL")
+                    else "N/A"
+                )
+                logger.error(
+                    f"[NOTIONAL ERROR] {symbol} LIMIT order rejected. "
+                    f"Required: {minimum_notional}, Got: {price * quantity}"
+                )
                 self.send_alerts(
                     data=None,
                     description="Order rejected – Notional too small",
@@ -616,7 +623,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                     "minimum_notional",
                     price=price,
                     quantity=quantity,
-                    minimum_notional=min_notional,
+                    minimum_notional=minimum_notional,
                 )
                 return None, None, None
 

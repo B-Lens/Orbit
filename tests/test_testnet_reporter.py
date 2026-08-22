@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import MagicMock
 
 from orbit.core.testnet_reporter import (
+    GitHubProjectClient,
     TestnetDailyReporter as DailyReporter,
     build_report_body,
 )
@@ -77,6 +78,31 @@ class TestDailyReporter(unittest.TestCase):
         )
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet daily report: 2026-08-21"
+        )
+
+
+class TestGitHubProjectClient(unittest.TestCase):
+    def test_existing_issue_is_retried_into_project(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        existing = {
+            "title": "daily",
+            "number": 7,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/7",
+            "labels": [{"name": "testnet-report"}, {"name": "ai-autonomous"}],
+        }
+        client._call = MagicMock(side_effect=[[existing], existing, {}])
+
+        url = client.publish("daily", "body")
+
+        self.assertEqual(url, existing["html_url"])
+        graphql_call = client._call.call_args_list[2]
+        self.assertEqual(graphql_call.args[1], "https://api.github.com/graphql")
+        self.assertEqual(
+            graphql_call.kwargs["json"]["variables"]["content"], "issue-node"
         )
 
 
