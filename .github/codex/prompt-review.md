@@ -19,9 +19,13 @@ paths.
 - `OrderManager` is the only exchange-order gateway. `TradeChecker` reconciles
   positions and protective orders. Market intelligence may filter signals but
   must never place orders.
-- Execution is authorized per symbol. Missing symbols are paper-only; Testnet and
-  live clients, credentials, balances, income, orders, and reconciliation must
-  remain isolated. Live trading requires an exact `ORBIT_LIVE_ASSETS` match.
+- `config/strategies.yaml` is the execution-mode authority. Every configured
+  trading pair must explicitly use `execution_mode: testnet` or `execution_mode:
+  live`; missing or paper modes must fail startup. Orders, balances, income, and
+  reconciliation must use the Binance environment selected for that asset. Do
+  not require or restore an environment-variable live-asset allowlist.
+  Non-strategy symbols monitored for existing positions must also have an
+  explicit mode.
 - Exchange mutations and Redis/MongoDB state must remain atomic, idempotent, and
   safe across partial fills, retries, restarts, stale mappings, and concurrent
   workers. Entry and closing sides must remain opposite and protective orders

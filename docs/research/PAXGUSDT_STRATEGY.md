@@ -6,7 +6,7 @@
 - Registry: `config/strategies.yaml`
 - Timeframe: 15 minutes; active candles are excluded
 - Current eligibility: **Paper and Testnet only**
-- Promotion rule: do not add `live` to `execution_modes` until the criteria below pass
+- Promotion rule: do not change `execution_mode` from `testnet` until the criteria below pass
 
 ## Signal contract
 
@@ -49,7 +49,8 @@ Before live eligibility, record the evaluated commit and dataset, then require:
 4. Testnet reaches a predeclared minimum trade count across breakout and range regimes.
 5. Testnet profit factor, drawdown, slippage, and order-reconciliation limits pass.
 6. Verify stop/target lifecycle and restart recovery on Futures Testnet.
-7. A human approves `PAXGUSDT:live` and the exact `ORBIT_LIVE_ASSETS` allowlist.
+7. Any future live-mode work requires a separately reviewed configuration and
+   authorization design; the current runtime rejects it.
 
 Record each evaluation in the promoting PR; never treat this baseline as a live
 profit guarantee.

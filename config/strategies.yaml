@@ -1,17 +1,24 @@
+monitored_assets:
+  BNBUSDT: testnet
+  MKRUSDT: testnet
+  LTCUSDT: testnet
+  SOLUSDT: testnet
+  ATOMUSDT: testnet
+  XRPUSDT: testnet
+
 strategies:
   BCHUSDT:
     strategy: orbit.strategies.reversal_strategy.BollingerAdaptiveReversalStrategyBCH
+    execution_mode: testnet
 
   ETHUSDT:
     strategy: orbit.strategies.eth_strategy.ETHStrategy
-    execution_modes:
-      - testnet
+    execution_mode: testnet
 
   BTCUSDT:
     strategy: orbit.strategies.swing_strategy.SwingStrategyBTC
+    execution_mode: testnet
 
   PAXGUSDT:
     strategy: orbit.strategies.paxgusdt_strategy.PAXGUSDTStrategy
-    execution_modes:
-      - testnet
-      - paper
+    execution_mode: testnet

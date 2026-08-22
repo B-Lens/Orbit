@@ -27,7 +27,6 @@ from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import RedisManager
 from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
-from orbit.core.execution import ExecutionMode
 from orbit.core.risk_manager import PreTradeRiskGuard
 from orbit.core.performance import PerformanceTracker
 
@@ -509,17 +508,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                 self._record_order_rejection(trade_id, "missing_limit_price")
                 return None, None, None
 
-            execution_mode = self.execution_settings.mode_for(symbol)
-            if execution_mode is ExecutionMode.PAPER:
-                logger.warning("Order blocked: %s is configured for paper mode", symbol)
-                self.send_alerts(
-                    data=None,
-                    description="Order blocked in paper mode",
-                    fields={"symbol": symbol, "side": side},
-                )
-                self._record_order_rejection(trade_id, "paper_mode")
-                return None, None, None
-
             effective_trade_id = trade_id or symbol
 
             balance_available = self.get_usdt_balance(symbol)
@@ -734,9 +722,6 @@ class OrderManager(AuthenticationManager, RedisManager):
             The API response dict, or ``None`` on failure.
         """
         try:
-            if self.execution_settings.mode_for(symbol) is ExecutionMode.PAPER:
-                logger.warning("Market order blocked: %s is configured for paper mode", symbol)
-                return None
             current_price = self.get_symbol_price(symbol)
 
             if quantity is None:

@@ -22,8 +22,10 @@ OHLCV history, sentiment results, trade decisions, and exchange income.
 
 ## Safety model
 
-- Every asset defaults to `paper` unless explicitly mapped to `testnet` or `live`.
-- Live assets require an exact `ORBIT_LIVE_ASSETS` allowlist.
+- There are exactly two execution modes: `testnet` and `live`. Every configured
+  strategy and monitored position symbol selects one explicitly; all checked-in
+  mappings currently use `testnet`.
+- Startup rejects missing, paper, and invalid execution modes.
 - `OrderManager` is the only exchange-order gateway.
 - The daily-loss gate fails closed when exchange income cannot be synchronized.
 - Market intelligence can filter signals but cannot place orders.
@@ -43,9 +45,12 @@ cp .env.example .env
 poetry run orbit
 ```
 
-The example environment maps BTC, ETH, and BCH to Futures Testnet. PAXG is
-configured as a strategy but remains paper-only unless it is explicitly added to
-`ORBIT_ASSET_EXECUTION_MODES`.
+`config/strategies.yaml` is the single source of truth for strategy ownership and
+order mode. BTC, ETH, BCH, and PAXG are currently pinned to Futures Testnet;
+changing an asset to `live` routes that asset to Binance Futures production and
+requires production credentials. Missing, paper, and invalid modes fail startup.
+Symbols monitored for pre-existing positions are assigned an environment under
+`monitored_assets` in the same file.
 
 Market intelligence uses `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
 CLI `auth.json`. Credentials must stay outside the repository. Each run fails
@@ -58,7 +63,7 @@ closed and preserves the cached sentiment if web-grounded analysis fails.
 | `config/config.json` | Symbols, leverage, fixed allocations, precision, cooldowns, and risk limits. |
 | `config/strategies.yaml` | Symbol-to-strategy ownership and allowed execution modes. |
 | `config/webhooks.yaml` | Discord channel mapping; URLs come from environment variables. |
-| `.env` | Credentials, service endpoints, and per-asset execution modes. |
+| `.env` | Testnet/live credentials and service endpoints; it does not control execution modes. |
 
 ## Architecture
 

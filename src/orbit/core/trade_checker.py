@@ -34,7 +34,6 @@ from binance.error import ClientError
 from config import COIN_TRADE_TYPE, TradeType, TRAILING_STOPLOSS
 from orbit.utils.utils import get_indian_time
 from orbit.core.authentication_manager import AuthenticationManager
-from orbit.core.execution import ExecutionMode
 from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.binance_ws_manager import BinanceWSManager
@@ -751,7 +750,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
         clients = {
             id(self.order_manager.futures_clients[mode]): self.order_manager.futures_clients[mode]
             for mode in self.order_manager.execution_settings.active_modes
-            if mode is not ExecutionMode.PAPER
         }
         positions = [
             position
