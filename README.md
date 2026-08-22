@@ -13,7 +13,7 @@ intelligence.
 | --- | --- |
 | Signal analyzer | Runs configured strategies on 15-minute boundaries and submits accepted signals to `OrderManager`. |
 | Trade checker | Reconciles positions and maintains stop-loss/take-profit orders. |
-| Sentiment cron | Runs global, web-grounded crypto sentiment analysis every 30 minutes through OpenAI or Antigravity. |
+| Sentiment cron | Runs global, web-grounded crypto sentiment analysis every 30 minutes through OpenAI. |
 | Performance reporter | Synchronizes exchange income and reports net performance when order submission is enabled. |
 | Health monitor | Alerts when a background worker stops. |
 
@@ -47,10 +47,9 @@ The example environment maps BTC, ETH, and BCH to Futures Testnet. PAXG is
 configured as a strategy but remains paper-only unless it is explicitly added to
 `ORBIT_ASSET_EXECUTION_MODES`.
 
-Market intelligence can use `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
-CLI `auth.json`, and optionally Google Antigravity through `ANTIGRAVITY_API_KEY`
-or `GEMINI_API_KEY`. Credentials must stay outside the repository. Each run fails
-closed and preserves the cached sentiment if all web-grounded providers fail.
+Market intelligence uses `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
+CLI `auth.json`. Credentials must stay outside the repository. Each run fails
+closed and preserves the cached sentiment if web-grounded analysis fails.
 
 ## Configuration
 

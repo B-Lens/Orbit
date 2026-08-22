@@ -5,10 +5,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from orbit.market_intelligence.llm.llm_endpoint import LLM
-from orbit.market_intelligence.llm.antigravity_client import (
-    AntigravityClient,
-    DEFAULT_ANTIGRAVITY_AGENT,
-)
 from orbit.market_intelligence.llm.openai_client import (
     DEFAULT_INSTRUCTIONS,
     DEFAULT_MAX_OUTPUT_TOKENS,
@@ -223,156 +219,6 @@ def test_llm_web_search_uses_only_openai_provider() -> None:
     fallback.invoke.assert_not_called()
 
 
-def test_antigravity_client_uses_search_tools() -> None:
-    requests = []
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps(
-                {
-                    "status": "completed",
-                    "steps": [
-                        {
-                            "type": "google_search_result",
-                            "is_error": False,
-                            "result": [{"url": "https://example.com/market"}],
-                        },
-                        {
-                            "type": "model_output",
-                            "content": [
-                                {"type": "text", "text": "global "},
-                                {"type": "text", "text": "crypto result"},
-                            ],
-                        },
-                    ],
-                }
-            ).encode()
-
-    def urlopen(request, timeout):
-        requests.append((request, timeout))
-        return Response()
-
-    client = AntigravityClient(api_key="secret", urlopen=urlopen)
-    assert client.invoke_web_search("Assess crypto") == "global crypto result"
-    request, timeout = requests[0]
-    assert timeout == 300.0
-    assert request.get_header("X-goog-api-key") == "secret"
-    payload = json.loads(request.data)
-    assert payload["agent"] == DEFAULT_ANTIGRAVITY_AGENT
-    assert payload["tools"] == [
-        {"type": "google_search"},
-        {"type": "url_context"},
-    ]
-
-
-def test_antigravity_client_rejects_ungrounded_output() -> None:
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps(
-                {
-                    "status": "completed",
-                    "steps": [
-                        {
-                            "type": "model_output",
-                            "content": [{"type": "text", "text": "NEUTRAL"}],
-                        }
-                    ],
-                }
-            ).encode()
-
-    client = AntigravityClient(
-        api_key="secret", urlopen=lambda *_args, **_kwargs: Response()
-    )
-    with pytest.raises(RuntimeError, match="no successful web-grounding result"):
-        client.invoke_web_search("Assess crypto")
-
-
-@pytest.mark.parametrize(
-    "grounding_step",
-    [
-        {
-            "type": "google_search_result",
-            "is_error": True,
-            "result": [{"url": "https://example.com"}],
-        },
-        {
-            "type": "url_context_result",
-            "is_error": False,
-            "result": [
-                {"url": "https://example.com", "status": "paywall"}
-            ],
-        },
-    ],
-)
-def test_antigravity_client_rejects_failed_grounding(grounding_step: dict) -> None:
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps(
-                {
-                    "status": "completed",
-                    "steps": [
-                        grounding_step,
-                        {
-                            "type": "model_output",
-                            "content": [{"type": "text", "text": "NEUTRAL"}],
-                        },
-                    ],
-                }
-            ).encode()
-
-    client = AntigravityClient(
-        api_key="secret", urlopen=lambda *_args, **_kwargs: Response()
-    )
-    with pytest.raises(RuntimeError, match="no successful web-grounding result"):
-        client.invoke_web_search("Assess crypto")
-
-
-@pytest.mark.parametrize(
-    "endpoint",
-    [
-        "http://generativelanguage.googleapis.com/v1beta/interactions",
-        "https://attacker.example/v1beta/interactions",
-        "https://generativelanguage.googleapis.com.attacker.example/interactions",
-    ],
-)
-def test_antigravity_client_rejects_untrusted_endpoint(endpoint: str) -> None:
-    with pytest.raises(ValueError, match="must use HTTPS"):
-        AntigravityClient(api_key="secret", endpoint=endpoint)
-
-
-def test_llm_web_search_falls_back_to_antigravity() -> None:
-    openai_client = MagicMock()
-    openai_client.invoke_web_search.side_effect = RuntimeError("OpenAI unavailable")
-    antigravity_client = MagicMock()
-    antigravity_client.invoke_web_search.return_value = "grounded fallback"
-    llm = LLM(
-        openai_client=openai_client,
-        antigravity_client=antigravity_client,
-        redis_client=_redis_mock(),
-    )
-
-    assert llm.invoke_web_search("market prompt") == "grounded fallback"
-    antigravity_client.invoke_web_search.assert_called_once_with("market prompt")
-
-
 def test_llm_falls_back_when_openai_fails() -> None:
     openai_client = MagicMock()
     openai_client.invoke.side_effect = RuntimeError("OpenAI unavailable")
@@ -428,8 +274,6 @@ def test_llm_requires_at_least_one_provider(
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
         "GROQ_API_KEY",
-        "ANTIGRAVITY_API_KEY",
-        "GEMINI_API_KEY",
     ):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.delenv("OPENAI_AUTH_FILE", raising=False)
