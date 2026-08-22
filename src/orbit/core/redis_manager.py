@@ -364,14 +364,16 @@ class RedisManager:
     def claim_sentiment_run_slot(self, slot: int) -> bool:
         """Atomically lease an incomplete half-hour analysis slot.
 
-        A lease for an older slot may be superseded, while the completed-slot
-        marker prevents repeated observations. Redis errors fail closed.
+        Any active lease is preserved, including across a slot boundary, so an
+        older in-flight analysis cannot finish after and overwrite a newer one.
+        The completed-slot marker prevents repeated observations. Redis errors
+        fail closed.
         """
         script = """
         if redis.call('GET', KEYS[1]) == ARGV[1] then
             return 0
         end
-        if redis.call('GET', KEYS[2]) == ARGV[1] then
+        if redis.call('GET', KEYS[2]) then
             return 0
         end
         redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2])
