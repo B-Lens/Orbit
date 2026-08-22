@@ -1,0 +1,1 @@
+"""Credential-gated integration tests."""
