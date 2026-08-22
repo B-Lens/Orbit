@@ -184,8 +184,10 @@ class TestPerformanceTracker(unittest.TestCase):
         self.assertEqual(summary.records, 2)
         self.assertEqual(client.get_income_history.call_count, 2)
         self.assertEqual(
-            client.get_income_history.call_args_list[1].kwargs["startTime"], 102
+            client.get_income_history.call_args_list[1].kwargs["startTime"], 100
         )
+        self.assertEqual(client.get_income_history.call_args_list[0].kwargs["page"], 1)
+        self.assertEqual(client.get_income_history.call_args_list[1].kwargs["page"], 2)
         self.assertEqual(
             client.get_income_history.call_args_list[0].kwargs["endTime"], 499
         )
