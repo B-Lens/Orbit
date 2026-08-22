@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from orbit.core.testnet_reporter import (
     GitHubProjectClient,
     TestnetDailyReporter as DailyReporter,
+    _split_report,
     build_report_body,
 )
 
@@ -50,6 +51,12 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("No-signal evaluations (counted, not expanded): **1**", body)
         self.assertNotIn("quiet-1", body)
 
+    def test_large_report_is_split_without_losing_evidence(self):
+        body = "header\n" + "\n".join(f"decision-{index}" for index in range(100))
+        parts = _split_report(body, limit=100)
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("\n".join(parts), body)
+
 
 class TestDailyReporter(unittest.TestCase):
     def test_reads_only_testnet_window_and_publishes_idempotent_title(self):
@@ -70,7 +77,10 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(end, datetime(2026, 8, 22, tzinfo=timezone.utc))
         self.assertEqual(mode, "testnet")
         futures.get_income_history.assert_called_once_with(
-            recvWindow=60000, startTime=int(start.timestamp() * 1000)
+            recvWindow=60000,
+            startTime=int(start.timestamp() * 1000),
+            endTime=int(end.timestamp() * 1000) - 1,
+            limit=1000,
         )
         mongo.store_income_records.assert_called_once_with([], "testnet")
         mongo.get_income_records.assert_called_once_with(
@@ -94,7 +104,7 @@ class TestGitHubProjectClient(unittest.TestCase):
             "html_url": "https://github.test/issues/7",
             "labels": [{"name": "testnet-report"}, {"name": "ai-autonomous"}],
         }
-        client._call = MagicMock(side_effect=[[existing], existing, {}])
+        client._call = MagicMock(side_effect=[[existing], existing, {}, []])
 
         url = client.publish("daily", "body")
 

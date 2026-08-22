@@ -126,10 +126,27 @@ def build_report_body(
             "make no code change and explain that conclusion in the workflow artifact.",
         ]
     )
-    body = "\n".join(lines)
-    if len(body) > 65_000:
-        raise ValueError("Daily report exceeds GitHub's issue body limit")
-    return body
+    return "\n".join(lines)
+
+
+def _split_report(body: str, limit: int = 60_000) -> list[str]:
+    """Split Markdown on line boundaries without dropping report evidence."""
+    parts: list[str] = []
+    current: list[str] = []
+    current_size = 0
+    for line in body.splitlines():
+        addition = len(line) + 1
+        if current and current_size + addition > limit:
+            parts.append("\n".join(current))
+            current = []
+            current_size = 0
+        if addition > limit:
+            raise ValueError("A single report row exceeds the GitHub body limit")
+        current.append(line)
+        current_size += addition
+    if current:
+        parts.append("\n".join(current))
+    return parts or [""]
 
 
 class GitHubProjectClient:
@@ -172,6 +189,8 @@ class GitHubProjectClient:
 
     def publish(self, title: str, body: str) -> str:
         """Create the daily issue, label it for Codex, and add it to the Project."""
+        parts = _split_report(body)
+        issue_body = parts[0]
         self._ensure_label(REPORT_LABEL, "1d76db", "Automated Orbit Testnet report")
         self._ensure_label(AGENT_LABEL, "5319e7", "Approved Codex implementation task")
         issues = self._call(
@@ -187,14 +206,14 @@ class GitHubProjectClient:
             issue = self._call(
                 "POST",
                 f"https://api.github.com/repos/{self.repository}/issues",
-                json={"title": title, "body": body, "labels": [REPORT_LABEL]},
+                json={"title": title, "body": issue_body, "labels": [REPORT_LABEL]},
             )
         else:
             assert existing is not None
             issue = self._call(
                 "PATCH",
                 f"https://api.github.com/repos/{self.repository}/issues/{existing['number']}",
-                json={"body": body},
+                json={"body": issue_body},
             )
 
         mutation = """
@@ -223,6 +242,29 @@ class GitHubProjectClient:
         ):
             raise RuntimeError(f"GitHub Project insertion failed: {errors}")
 
+        comments_url = (
+            f"https://api.github.com/repos/{self.repository}/issues/"
+            f"{issue['number']}/comments"
+        )
+        existing_comments = self._call("GET", comments_url, params={"per_page": 100})
+        report_comments = {
+            str(comment.get("body", "")).splitlines()[0]: comment
+            for comment in existing_comments
+            if str(comment.get("body", "")).startswith(
+                "<!-- orbit-testnet-report-part:"
+            )
+        }
+        for part_number, part in enumerate(parts[1:], start=2):
+            marker = f"<!-- orbit-testnet-report-part:{part_number} -->"
+            comment_body = f"{marker}\n{part}"
+            existing_comment = report_comments.get(marker)
+            if existing_comment:
+                self._call(
+                    "PATCH", str(existing_comment["url"]), json={"body": comment_body}
+                )
+            else:
+                self._call("POST", comments_url, json={"body": comment_body})
+
         current_labels = {item["name"] for item in issue.get("labels", [])}
         if AGENT_LABEL not in current_labels:
             self._call(
@@ -250,9 +292,9 @@ class TestnetDailyReporter:
         start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
         if self.futures_client is not None:
-            PerformanceTracker(self.futures_client, self.mongo_handler, "testnet").sync(
-                int(start.timestamp() * 1000)
-            )
+            PerformanceTracker(
+                self.futures_client, self.mongo_handler, "testnet"
+            ).sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
         decisions = self.mongo_handler.get_trade_decisions(start, end, "testnet")
         income = self.mongo_handler.get_income_records(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"

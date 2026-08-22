@@ -34,7 +34,9 @@ class PerformanceTracker:
         self.execution_mode = execution_mode
 
     @staticmethod
-    def summarize(records: Iterable[dict[str, Any]], starting_equity: float | None = None) -> PerformanceSummary:
+    def summarize(
+        records: Iterable[dict[str, Any]], starting_equity: float | None = None
+    ) -> PerformanceSummary:
         totals: defaultdict[str, float] = defaultdict(float)
         count = 0
         for record in records:
@@ -68,6 +70,32 @@ class PerformanceTracker:
         if start_time_ms is not None:
             params["startTime"] = start_time_ms
         records = self.futures_client.get_income_history(**params)
+        if self.mongo_handler is not None:
+            self.mongo_handler.store_income_records(records, self.execution_mode)
+        return self.summarize(records)
+
+    def sync_window(
+        self, start_time_ms: int, end_time_ms: int, page_size: int = 1000
+    ) -> PerformanceSummary:
+        """Synchronize all income pages in a half-open exchange-time window."""
+        cursor = start_time_ms
+        records: list[dict[str, Any]] = []
+        while cursor < end_time_ms:
+            page = self.futures_client.get_income_history(
+                startTime=cursor,
+                endTime=end_time_ms - 1,
+                limit=page_size,
+                recvWindow=60000,
+            )
+            if not page:
+                break
+            records.extend(page)
+            if len(page) < page_size:
+                break
+            next_cursor = max(int(row.get("time", cursor)) for row in page) + 1
+            if next_cursor <= cursor:
+                raise RuntimeError("Binance income pagination did not advance")
+            cursor = next_cursor
         if self.mongo_handler is not None:
             self.mongo_handler.store_income_records(records, self.execution_mode)
         return self.summarize(records)

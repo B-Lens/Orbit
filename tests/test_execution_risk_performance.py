@@ -83,40 +83,63 @@ class TestExecutionSettings(unittest.TestCase):
 
 class TestRiskGuard(unittest.TestCase):
     def setUp(self):
-        self.guard = PreTradeRiskGuard({
-            "max_leverage": 3,
-            "max_position_notional_pct": 0.5,
-            "max_risk_per_trade_pct": 0.01,
-            "max_daily_loss_pct": 0.02,
-            "min_reward_risk_ratio": 1.5,
-        })
+        self.guard = PreTradeRiskGuard(
+            {
+                "max_leverage": 3,
+                "max_position_notional_pct": 0.5,
+                "max_risk_per_trade_pct": 0.01,
+                "max_daily_loss_pct": 0.02,
+                "min_reward_risk_ratio": 1.5,
+            }
+        )
 
     def test_accepts_bounded_trade(self):
         result = self.guard.evaluate(
-            equity=1000, entry_price=100, stop_loss=98,
-            take_profit=104, quantity=2, leverage=2, side="BUY",
+            equity=1000,
+            entry_price=100,
+            stop_loss=98,
+            take_profit=104,
+            quantity=2,
+            leverage=2,
+            side="BUY",
         )
         self.assertTrue(result.allowed)
 
     def test_rejects_daily_loss_limit(self):
         result = self.guard.evaluate(
-            equity=1000, entry_price=100, stop_loss=98,
-            take_profit=104, quantity=2, leverage=2, side="BUY", daily_net_pnl=-20,
+            equity=1000,
+            entry_price=100,
+            stop_loss=98,
+            take_profit=104,
+            quantity=2,
+            leverage=2,
+            side="BUY",
+            daily_net_pnl=-20,
         )
         self.assertFalse(result.allowed)
         self.assertEqual(result.reason, "daily_loss_limit")
 
     def test_rejects_poor_reward_risk(self):
         result = self.guard.evaluate(
-            equity=1000, entry_price=100, stop_loss=98,
-            take_profit=101, quantity=2, leverage=2, side="BUY",
+            equity=1000,
+            entry_price=100,
+            stop_loss=98,
+            take_profit=101,
+            quantity=2,
+            leverage=2,
+            side="BUY",
         )
         self.assertEqual(result.reason, "reward_risk_below_minimum")
 
     def test_rejects_stop_on_wrong_side(self):
         result = self.guard.evaluate(
-            equity=1000, entry_price=100, stop_loss=101,
-            take_profit=104, quantity=2, leverage=2, side="BUY",
+            equity=1000,
+            entry_price=100,
+            stop_loss=101,
+            take_profit=104,
+            quantity=2,
+            leverage=2,
+            side="BUY",
         )
         self.assertEqual(result.reason, "stop_on_wrong_side")
 
@@ -143,6 +166,28 @@ class TestPerformanceTracker(unittest.TestCase):
 
         mongo.store_income_records.assert_called_once_with(
             client.get_income_history.return_value, "testnet"
+        )
+
+    def test_sync_window_paginates_and_bounds_income(self):
+        client = MagicMock()
+        first_page = [
+            {"time": index + 100, "incomeType": "COMMISSION", "income": "-1"}
+            for index in range(2)
+        ]
+        client.get_income_history.side_effect = [first_page, []]
+        mongo = MagicMock()
+
+        summary = PerformanceTracker(client, mongo, "testnet").sync_window(
+            100, 500, page_size=2
+        )
+
+        self.assertEqual(summary.records, 2)
+        self.assertEqual(client.get_income_history.call_count, 2)
+        self.assertEqual(
+            client.get_income_history.call_args_list[1].kwargs["startTime"], 102
+        )
+        self.assertEqual(
+            client.get_income_history.call_args_list[0].kwargs["endTime"], 499
         )
 
 
