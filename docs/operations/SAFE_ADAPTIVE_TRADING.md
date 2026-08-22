@@ -131,6 +131,27 @@ order path fails closed instead of trading with a stale daily-loss value.
     same symbol to `ORBIT_LIVE_ASSETS`, deploy, and verify the decision ledger.
 11. Review drawdown and net performance before approving another asset.
 
+## Testnet order integration CI
+
+`.github/workflows/testnet-order-integration.yml` exercises the production
+`OrderManager` path for every symbol in `config/config.json` `trading_pairs`.
+It fetches current Testnet filters and balance, applies the configured precision,
+position sizing, leverage, stop/target geometry, and risk policy, submits a deeply
+off-market, time-bounded `GTD` limit order with `ros=True`, and cleans it up in
+`finally`. The dedicated Testnet account must start flat. Cleanup retries
+cancellation, reduce-only closes any unexpected fill, and verifies that the probe
+is no longer open and the position is flat; GTD expiry bounds exposure if the
+runner is interrupted.
+
+Create a protected GitHub environment named `Testnet-Integration`, store
+`BINANCE_TESTNET_API_KEY` and `BINANCE_TESTNET_SECRET_KEY` there, and set the
+repository variable `ORBIT_RUN_TESTNET_ORDER_TESTS=true`. The workflow runs on
+manual dispatch, daily, and after relevant changes reach `main`; it never runs on
+pull requests and hard-checks the `https://demo-fapi.binance.com` endpoint. Keep
+only disposable Testnet funds in this account. A newly added trading asset must
+also define precision, risk allocation, fixed allocation, and a Testnet-compatible
+strategy or the credential-free configuration test fails in normal unit CI.
+
 ## Deployment health and rollback
 
 The EC2 webhook should perform a staged deployment: fetch explicit commits,
