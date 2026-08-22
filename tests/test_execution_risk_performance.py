@@ -171,23 +171,32 @@ class TestPerformanceTracker(unittest.TestCase):
     def test_sync_window_paginates_and_bounds_income(self):
         client = MagicMock()
         first_page = [
-            {"time": index + 100, "incomeType": "COMMISSION", "income": "-1"}
-            for index in range(2)
+            {"tranId": 1, "time": 100, "incomeType": "COMMISSION", "income": "-1"},
+            {"tranId": 2, "time": 101, "incomeType": "COMMISSION", "income": "-1"},
         ]
-        client.get_income_history.side_effect = [first_page, []]
+        second_page = [
+            first_page[1],
+            {"tranId": 3, "time": 102, "incomeType": "COMMISSION", "income": "-1"},
+        ]
+        client.get_income_history.side_effect = [
+            first_page,
+            second_page,
+            [second_page[1]],
+        ]
         mongo = MagicMock()
 
         summary = PerformanceTracker(client, mongo, "testnet").sync_window(
             100, 500, page_size=2
         )
 
-        self.assertEqual(summary.records, 2)
-        self.assertEqual(client.get_income_history.call_count, 2)
+        self.assertEqual(summary.records, 3)
+        self.assertEqual(client.get_income_history.call_count, 3)
         self.assertEqual(
-            client.get_income_history.call_args_list[1].kwargs["startTime"], 100
+            client.get_income_history.call_args_list[1].kwargs["startTime"], 101
         )
-        self.assertEqual(client.get_income_history.call_args_list[0].kwargs["page"], 1)
-        self.assertEqual(client.get_income_history.call_args_list[1].kwargs["page"], 2)
+        self.assertEqual(
+            client.get_income_history.call_args_list[2].kwargs["startTime"], 102
+        )
         self.assertEqual(
             client.get_income_history.call_args_list[0].kwargs["endTime"], 499
         )

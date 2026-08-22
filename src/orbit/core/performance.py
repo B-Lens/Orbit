@@ -79,21 +79,42 @@ class PerformanceTracker:
     ) -> PerformanceSummary:
         """Synchronize all income pages in a half-open exchange-time window."""
         records: list[dict[str, Any]] = []
-        page_number = 1
-        while True:
+        seen: set[tuple[Any, ...]] = set()
+        cursor = start_time_ms
+        repeat_cursor = False
+        while cursor < end_time_ms:
             page_records = self.futures_client.get_income_history(
-                startTime=start_time_ms,
+                startTime=cursor,
                 endTime=end_time_ms - 1,
-                page=page_number,
                 limit=page_size,
                 recvWindow=60000,
             )
             if not page_records:
                 break
-            records.extend(page_records)
+            added = 0
+            for record in page_records:
+                identity = (
+                    record.get("tranId"),
+                    record.get("incomeType"),
+                    record.get("time"),
+                    record.get("asset"),
+                    record.get("symbol"),
+                )
+                if identity not in seen:
+                    seen.add(identity)
+                    records.append(record)
+                    added += 1
             if len(page_records) < page_size:
                 break
-            page_number += 1
+            latest_time = max(int(row.get("time", cursor)) for row in page_records)
+            if latest_time > cursor:
+                cursor = latest_time
+                repeat_cursor = False
+            elif added and not repeat_cursor:
+                repeat_cursor = True
+            else:
+                cursor += 1
+                repeat_cursor = False
         if self.mongo_handler is not None:
             self.mongo_handler.store_income_records(records, self.execution_mode)
         return self.summarize(records)

@@ -80,7 +80,6 @@ class TestDailyReporter(unittest.TestCase):
             recvWindow=60000,
             startTime=int(start.timestamp() * 1000),
             endTime=int(end.timestamp() * 1000) - 1,
-            page=1,
             limit=1000,
         )
         mongo.store_income_records.assert_called_once_with([], "testnet")
