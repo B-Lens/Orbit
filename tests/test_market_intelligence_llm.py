@@ -5,6 +5,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from orbit.market_intelligence.llm.llm_endpoint import LLM
+from orbit.market_intelligence.llm.antigravity_client import (
+    AntigravityClient,
+    DEFAULT_ANTIGRAVITY_AGENT,
+)
 from orbit.market_intelligence.llm.openai_client import (
     DEFAULT_INSTRUCTIONS,
     DEFAULT_MAX_OUTPUT_TOKENS,
@@ -219,6 +223,51 @@ def test_llm_web_search_uses_only_openai_provider() -> None:
     fallback.invoke.assert_not_called()
 
 
+def test_antigravity_client_uses_search_tools() -> None:
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"output_text":"global crypto result"}'
+
+    def urlopen(request, timeout):
+        requests.append((request, timeout))
+        return Response()
+
+    client = AntigravityClient(api_key="secret", urlopen=urlopen)
+    assert client.invoke_web_search("Assess crypto") == "global crypto result"
+    request, timeout = requests[0]
+    assert timeout == 300.0
+    assert request.get_header("X-goog-api-key") == "secret"
+    payload = json.loads(request.data)
+    assert payload["agent"] == DEFAULT_ANTIGRAVITY_AGENT
+    assert payload["tools"] == [
+        {"type": "google_search"},
+        {"type": "url_context"},
+    ]
+
+
+def test_llm_web_search_falls_back_to_antigravity() -> None:
+    openai_client = MagicMock()
+    openai_client.invoke_web_search.side_effect = RuntimeError("OpenAI unavailable")
+    antigravity_client = MagicMock()
+    antigravity_client.invoke_web_search.return_value = "grounded fallback"
+    llm = LLM(
+        openai_client=openai_client,
+        antigravity_client=antigravity_client,
+        redis_client=_redis_mock(),
+    )
+
+    assert llm.invoke_web_search("market prompt") == "grounded fallback"
+    antigravity_client.invoke_web_search.assert_called_once_with("market prompt")
+
+
 def test_llm_falls_back_when_openai_fails() -> None:
     openai_client = MagicMock()
     openai_client.invoke.side_effect = RuntimeError("OpenAI unavailable")
@@ -270,7 +319,13 @@ def test_llm_tries_each_configured_groq_model(
 def test_llm_requires_at_least_one_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    for variable in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"):
+    for variable in (
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GROQ_API_KEY",
+        "ANTIGRAVITY_API_KEY",
+        "GEMINI_API_KEY",
+    ):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.delenv("OPENAI_AUTH_FILE", raising=False)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))

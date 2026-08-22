@@ -16,6 +16,7 @@ from orbit.market_intelligence.llm.openai_client import (
     default_auth_file,
 )
 from orbit.market_intelligence.llm.openrouter_client import OpenRouterClient
+from orbit.market_intelligence.llm.antigravity_client import AntigravityClient
 
 load_dotenv()
 
@@ -37,12 +38,13 @@ class WebSearchProvider(Protocol):
 
 
 class LLM(ExceptionManager):
-    """Use OpenAI first, with optional OpenRouter and Groq fallbacks."""
+    """Use OpenAI first, with Antigravity, OpenRouter, and Groq fallbacks."""
 
     def __init__(
         self,
         openai_client: Optional[Any] = None,
         openrouter_client: Optional[Any] = None,
+        antigravity_client: Optional[Any] = None,
         groq_client: Optional[Any] = None,
         redis_client: Optional[Any] = None,
     ) -> None:
@@ -57,6 +59,7 @@ class LLM(ExceptionManager):
 
         self.openai_llm = openai_client
         self.openrouter_llm = openrouter_client
+        self.antigravity_llm = antigravity_client
         self.groq_llm = groq_client
         self._groq_providers = [("Groq", groq_client)] if groq_client is not None else []
 
@@ -71,7 +74,16 @@ class LLM(ExceptionManager):
             logger.info("OpenAI model '%s' configured with Codex OAuth", OPENAI_MODEL)
 
         # ------------------------------------------------------------------
-        # 2. OpenRouter (FALLBACK)
+        # 2. Google Antigravity (WEB-CAPABLE FALLBACK)
+        # ------------------------------------------------------------------
+        if self.antigravity_llm is None and (
+            os.getenv("ANTIGRAVITY_API_KEY") or os.getenv("GEMINI_API_KEY")
+        ):
+            self.antigravity_llm = AntigravityClient()
+            logger.info("Google Antigravity configured as a web-capable fallback")
+
+        # ------------------------------------------------------------------
+        # 3. OpenRouter (FALLBACK)
         # ------------------------------------------------------------------
         if self.openrouter_llm is None and os.getenv("OPENROUTER_API_KEY"):
             self.openrouter_llm = OpenRouterClient(
@@ -80,7 +92,7 @@ class LLM(ExceptionManager):
             logger.info("OpenRouter model '%s' configured as fallback", OPENROUTER_MODEL)
 
         # ------------------------------------------------------------------
-        # 3. Groq (LAST FALLBACK)
+        # 4. Groq (LAST FALLBACK)
         # ------------------------------------------------------------------
         if self.groq_llm is None and os.getenv("GROQ_API_KEY"):
             for model_name in GROQ_MODELS:
@@ -97,7 +109,9 @@ class LLM(ExceptionManager):
                 except Exception as error:
                     logger.warning("Could not configure Groq model '%s': %s", model_name, error)
 
-        if not any((self.openai_llm, self.openrouter_llm, self.groq_llm)):
+        if not any(
+            (self.openai_llm, self.antigravity_llm, self.openrouter_llm, self.groq_llm)
+        ):
             raise RuntimeError(
                 "No market-intelligence LLM configured. Set OPENAI_API_KEY, "
                 "provide OPENAI_AUTH_FILE, "
@@ -112,6 +126,7 @@ class LLM(ExceptionManager):
 
         providers = [
             ("OpenAI", self.openai_llm),
+            ("Antigravity", self.antigravity_llm),
             ("OpenRouter", self.openrouter_llm),
             *self._groq_providers,
         ]
@@ -133,21 +148,28 @@ class LLM(ExceptionManager):
         raise RuntimeError("All configured market-intelligence providers failed") from last_error
 
     def invoke_web_search(self, prompt: str) -> str:
-        """Run a web-grounded query through the primary OpenAI provider only."""
+        """Run a web-grounded query through the first capable provider."""
         prompt_token_length = len(prompt.split())
         self._track_token_usage(prompt_token_length)
-        provider = self.openai_llm
-        web_invoke = getattr(provider, "invoke_web_search", None)
-        if not callable(web_invoke):
-            raise RuntimeError(
-                "The configured OpenAI provider does not support live web search"
-            )
-        web_provider = cast(WebSearchProvider, provider)
-        response = web_provider.invoke_web_search(prompt)
-        content = response.content if hasattr(response, "content") else response
-        if not content or not str(content).strip():
-            raise RuntimeError("OpenAI web search returned an empty response")
-        return str(content).strip()
+        last_error: Optional[Exception] = None
+        for provider_name, provider in (
+            ("OpenAI", self.openai_llm),
+            ("Antigravity", self.antigravity_llm),
+        ):
+            web_invoke = getattr(provider, "invoke_web_search", None)
+            if not callable(web_invoke):
+                continue
+            try:
+                web_provider = cast(WebSearchProvider, provider)
+                response = web_provider.invoke_web_search(prompt)
+                content = response.content if hasattr(response, "content") else response
+                if content and str(content).strip():
+                    return str(content).strip()
+                raise RuntimeError(f"{provider_name} returned an empty response")
+            except Exception as error:
+                last_error = error
+                logger.exception("%s web-search provider failed", provider_name)
+        raise RuntimeError("No configured web-search provider succeeded") from last_error
 
     # -----------------------------------------------------------------------
     # Helpers
