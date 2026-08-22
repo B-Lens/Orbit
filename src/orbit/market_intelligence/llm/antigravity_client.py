@@ -83,7 +83,30 @@ class AntigravityClient:
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError(f"Antigravity request failed: {error}") from error
 
-        output = data.get("output_text") if isinstance(data, dict) else None
-        if not isinstance(output, str) or not output.strip():
+        if not isinstance(data, dict):
+            raise RuntimeError("Antigravity returned an invalid response")
+        status = data.get("status")
+        if status != "completed":
+            raise RuntimeError(
+                f"Antigravity interaction ended with status {status!r}"
+            )
+
+        output = ""
+        steps = data.get("steps")
+        if isinstance(steps, list):
+            for step in reversed(steps):
+                if not isinstance(step, dict) or step.get("type") != "model_output":
+                    continue
+                content = step.get("content")
+                if isinstance(content, list):
+                    output = "".join(
+                        part.get("text", "")
+                        for part in content
+                        if isinstance(part, dict)
+                        and part.get("type") == "text"
+                        and isinstance(part.get("text"), str)
+                    )
+                break
+        if not output.strip():
             raise RuntimeError("Antigravity returned an empty response")
         return output.strip()

@@ -234,7 +234,21 @@ def test_antigravity_client_uses_search_tools() -> None:
             return False
 
         def read(self):
-            return b'{"output_text":"global crypto result"}'
+            return json.dumps(
+                {
+                    "status": "completed",
+                    "steps": [
+                        {"type": "google_search_call", "arguments": {}},
+                        {
+                            "type": "model_output",
+                            "content": [
+                                {"type": "text", "text": "global "},
+                                {"type": "text", "text": "crypto result"},
+                            ],
+                        },
+                    ],
+                }
+            ).encode()
 
     def urlopen(request, timeout):
         requests.append((request, timeout))
