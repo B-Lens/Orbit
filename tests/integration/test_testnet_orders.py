@@ -105,20 +105,6 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
             f"{symbol} Testnet account must be flat; position amounts={amounts}",
         )
 
-    def _flatten_probe_position(self, symbol: str) -> None:
-        client = self.manager.future_client_for(symbol)
-        for position in self._positions_for(symbol):
-            amount = float(position.get("positionAmt", 0) or 0)
-            if amount:
-                client.new_order(
-                    symbol=symbol,
-                    side="SELL" if amount > 0 else "BUY",
-                    type="MARKET",
-                    quantity=str(abs(amount)),
-                    reduceOnly="true",
-                    recvWindow=60000,
-                )
-
     def _cleanup_probe(
         self, symbol: str, order_id: int | None, client_order_id: str
     ) -> None:
@@ -139,11 +125,26 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
                         time.sleep(1)
                         continue
                     time.sleep(1)
+                except Exception:
+                    time.sleep(1)
 
         if order_id is None:
-            self._flatten_probe_position(symbol)
-            self._assert_flat(symbol)
-            return
+            historical_orders = client.get_all_orders(
+                symbol=symbol, limit=100, recvWindow=60000
+            )
+            order = next(
+                (
+                    item
+                    for item in historical_orders
+                    if item.get("clientOrderId") == client_order_id
+                ),
+                None,
+            )
+            if order is None:
+                raise AssertionError(
+                    f"Could not resolve probe {client_order_id}; cleanup is unverified"
+                )
+            order_id = int(order["orderId"])
 
         for _ in range(5):
             self.manager.cancel_order(symbol, order_id)
@@ -157,7 +158,18 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
         assert order is not None
         self.assertIn(order.get("status"), {"CANCELED", "FILLED", "EXPIRED"})
 
-        self._flatten_probe_position(symbol)
+        executed_quantity = float(order.get("executedQty", 0) or 0)
+        if executed_quantity > 0:
+            cleanup = self.manager.place_reduce_only_market_order(
+                symbol,
+                "SELL",
+                executed_quantity,
+                trade_id=f"cleanup-{client_order_id}",
+            )
+            self.assertIsNotNone(
+                cleanup,
+                f"Could not close {executed_quantity} {symbol} from probe {order_id}",
+            )
 
         open_orders = client.get_open_orders(symbol=symbol, recvWindow=60000)
         self.assertNotIn(order_id, {int(item["orderId"]) for item in open_orders})

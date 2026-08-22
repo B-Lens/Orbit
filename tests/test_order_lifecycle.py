@@ -136,6 +136,22 @@ class TestOrderManager(unittest.TestCase):
         self.manager.future_client.change_leverage.assert_not_called()
         self.manager.future_client.new_order.assert_not_called()
 
+    def test_reduce_only_cleanup_uses_authorized_order_gateway(self):
+        self.manager.future_client.new_order.return_value = {
+            "orderId": 456,
+            "symbol": "BTCUSDT",
+        }
+
+        response = self.manager.place_reduce_only_market_order(
+            "BTCUSDT", "SELL", 0.005, trade_id="cleanup-probe"
+        )
+
+        self.assertIsNotNone(response)
+        params = self.manager.future_client.new_order.call_args.kwargs
+        self.assertEqual(params["type"], "MARKET")
+        self.assertEqual(params["quantity"], "0.005")
+        self.assertEqual(params["reduceOnly"], "true")
+
 
 class TestTradeChecker(unittest.TestCase):
     def test_order_classification(self):

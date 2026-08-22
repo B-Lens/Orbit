@@ -929,6 +929,52 @@ class OrderManager(AuthenticationManager, RedisManager):
 
         return None
 
+    def place_reduce_only_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        trade_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Close an exact position quantity through the authorized order gateway."""
+        try:
+            if not self.execution_settings.can_submit_orders_for(symbol):
+                raise RuntimeError(
+                    f"Reduce-only order disabled for paper asset {symbol}"
+                )
+            precision = self.config["trading_pairs_precision"][symbol]
+            normalized_quantity = self.adjust_quantity_step(
+                symbol, round(abs(float(quantity)), precision)
+            )
+            if normalized_quantity <= 0:
+                raise ValueError("Reduce-only quantity must be positive")
+            params: Dict[str, Any] = {
+                "symbol": symbol,
+                "side": side,
+                "type": "MARKET",
+                "quantity": str(normalized_quantity),
+                "reduceOnly": "true",
+                "recvWindow": 60000,
+            }
+            if trade_id:
+                params["newClientOrderId"] = self.client_order_id_for_trade(trade_id)
+            response = self._order_client_for(symbol).new_order(**params)
+            if response and trade_id and response.get("orderId"):
+                self.register_order(str(response["orderId"]), trade_id)
+            return response
+        except ClientError as error:
+            self.clientExceptionHandler(
+                symbol=symbol,
+                error=error,
+                Location="OrderManager -> place_reduce_only_market_order",
+            )
+        except Exception as error:
+            self.handle_exception(
+                error,
+                context_description="Exception placing reduce-only market order",
+            )
+        return None
+
     # -------------------------------------------------------------------------
     # Cancel / query orders
     # -------------------------------------------------------------------------
