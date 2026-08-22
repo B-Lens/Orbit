@@ -410,10 +410,16 @@ class BinanceAutomation(ExceptionManager):
 
         self.handle_crons()
 
-        reporter = self._testnet_reporter or TestnetDailyReporter.from_env(
-            self.order_manager.mongo_handler,
-            self.order_manager.futures_clients.get(ExecutionMode.TESTNET),
-        )
+        try:
+            reporter = self._testnet_reporter or TestnetDailyReporter.from_env(
+                self.order_manager.mongo_handler,
+                self.order_manager.futures_clients.get(ExecutionMode.TESTNET),
+            )
+        except Exception as exc:
+            reporter = None
+            self.handle_exception(
+                exc, "Testnet reporting disabled because configuration is invalid"
+            )
         if reporter is not None:
             report_thread = threading.Thread(
                 target=reporter.run_forever,
