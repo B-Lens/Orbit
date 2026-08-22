@@ -358,14 +358,31 @@ class RedisManager:
     # Half-hour run tracking
     # ------------------------------------------------------------------
 
-    def get_sentiment_last_run_slot(self) -> Optional[int]:
-        """Return the dated half-hour slot of the last analysis, or ``None``."""
-        raw = self.redis_get(REDIS_KEY_SENTIMENT_LAST_RUN_SLOT)
-        return int(raw) if raw is not None else None
+    def claim_sentiment_run_slot(self, slot: int) -> bool:
+        """Atomically claim a half-hour analysis slot.
 
-    def set_sentiment_last_run_slot(self, slot: int) -> None:
-        """Persist the dated half-hour slot of the most recent analysis."""
-        self.redis_set(REDIS_KEY_SENTIMENT_LAST_RUN_SLOT, str(slot))
+        The claim happens before analysis. This prevents concurrent workers or
+        Redis write failures from generating repeated observations in one slot.
+        Redis errors fail closed: no sentiment analysis is allowed without a
+        durable claim.
+        """
+        script = """
+        local current = redis.call('GET', KEYS[1])
+        if current == ARGV[1] then
+            return 0
+        end
+        redis.call('SET', KEYS[1], ARGV[1])
+        return 1
+        """
+        try:
+            return bool(
+                self.redis_client.eval(
+                    script, 1, REDIS_KEY_SENTIMENT_LAST_RUN_SLOT, str(slot)
+                )
+            )
+        except Exception as e:
+            logger.exception("[Redis] Claiming sentiment run slot failed: %s", e)
+            return False
 
     # ------------------------------------------------------------------
     # Sentiment fetch timestamps
