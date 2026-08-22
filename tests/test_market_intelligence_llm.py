@@ -240,6 +240,7 @@ def test_antigravity_client_uses_search_tools() -> None:
                     "steps": [
                         {
                             "type": "google_search_result",
+                            "is_error": False,
                             "result": [{"url": "https://example.com/market"}],
                         },
                         {
@@ -287,6 +288,52 @@ def test_antigravity_client_rejects_ungrounded_output() -> None:
                             "type": "model_output",
                             "content": [{"type": "text", "text": "NEUTRAL"}],
                         }
+                    ],
+                }
+            ).encode()
+
+    client = AntigravityClient(
+        api_key="secret", urlopen=lambda *_args, **_kwargs: Response()
+    )
+    with pytest.raises(RuntimeError, match="no successful web-grounding result"):
+        client.invoke_web_search("Assess crypto")
+
+
+@pytest.mark.parametrize(
+    "grounding_step",
+    [
+        {
+            "type": "google_search_result",
+            "is_error": True,
+            "result": [{"url": "https://example.com"}],
+        },
+        {
+            "type": "url_context_result",
+            "is_error": False,
+            "result": [
+                {"url": "https://example.com", "status": "paywall"}
+            ],
+        },
+    ],
+)
+def test_antigravity_client_rejects_failed_grounding(grounding_step: dict) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "status": "completed",
+                    "steps": [
+                        grounding_step,
+                        {
+                            "type": "model_output",
+                            "content": [{"type": "text", "text": "NEUTRAL"}],
+                        },
                     ],
                 }
             ).encode()

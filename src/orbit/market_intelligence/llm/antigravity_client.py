@@ -13,7 +13,23 @@ DEFAULT_ANTIGRAVITY_URL = (
     "https://generativelanguage.googleapis.com/v1beta/interactions"
 )
 TRUSTED_ANTIGRAVITY_HOSTS = {"generativelanguage.googleapis.com"}
-GROUNDING_RESULT_TYPES = {"google_search_result", "url_context_result"}
+
+
+def _is_successful_grounding_step(step: Any) -> bool:
+    """Return whether a grounding result contains usable external evidence."""
+    if not isinstance(step, dict) or step.get("is_error") is True:
+        return False
+    result = step.get("result")
+    if not isinstance(result, list) or not result:
+        return False
+    if step.get("type") == "google_search_result":
+        return True
+    if step.get("type") == "url_context_result":
+        return any(
+            isinstance(item, dict) and item.get("status") == "success"
+            for item in result
+        )
+    return False
 
 
 class AntigravityClient:
@@ -110,12 +126,7 @@ class AntigravityClient:
         steps = data.get("steps")
         grounded = False
         if isinstance(steps, list):
-            grounded = any(
-                isinstance(step, dict)
-                and step.get("type") in GROUNDING_RESULT_TYPES
-                and bool(step.get("result"))
-                for step in steps
-            )
+            grounded = any(_is_successful_grounding_step(step) for step in steps)
             for step in reversed(steps):
                 if not isinstance(step, dict) or step.get("type") != "model_output":
                     continue
