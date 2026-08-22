@@ -1,7 +1,7 @@
 """Execution-environment configuration for Orbit.
 
-Trading environments are deliberately explicit. The global default is always
-``paper``; testnet and live promotion are authorized independently per asset.
+Trading environments are deliberately explicit. Testnet and live execution are
+authorized independently per asset; paper and implicit fallback modes are rejected.
 """
 
 from dataclasses import dataclass, field
@@ -36,14 +36,17 @@ class ExecutionSettings:
 
     def mode_for(self, symbol: str) -> ExecutionMode:
         """Return the independently configured execution mode for ``symbol``."""
-        return self.asset_modes.get(symbol.upper(), ExecutionMode.PAPER)
+        try:
+            return self.asset_modes[symbol.upper()]
+        except KeyError as exc:
+            raise ValueError(f"No execution mode configured for {symbol.upper()}") from exc
 
     def can_submit_orders_for(self, symbol: str) -> bool:
         return self.mode_for(symbol) in (ExecutionMode.TESTNET, ExecutionMode.LIVE)
 
     @property
     def active_modes(self) -> frozenset[ExecutionMode]:
-        return frozenset({ExecutionMode.PAPER, *self.asset_modes.values()})
+        return frozenset(self.asset_modes.values())
 
     @classmethod
     def from_config(
@@ -51,8 +54,8 @@ class ExecutionSettings:
     ) -> "ExecutionSettings":
         """Load per-symbol order modes from ``config/strategies.yaml``.
 
-        The current rollout is Testnet-only. Any missing or non-Testnet mode is
-        rejected at startup rather than silently falling back to another order
+        Every asset must explicitly select Testnet or live execution. Missing and
+        paper modes are rejected rather than silently falling back to a non-trading
         environment.
         """
         path = Path(strategy_config)
@@ -76,18 +79,30 @@ class ExecutionSettings:
                 mode = ExecutionMode(str(item["execution_mode"]).lower())
             except (KeyError, ValueError, AttributeError) as exc:
                 raise ValueError(
-                    f"Strategy {symbol} must define execution_mode: testnet"
+                    f"Strategy {symbol} must define execution_mode: testnet or live"
                 ) from exc
-            if mode is not ExecutionMode.TESTNET:
+            if mode not in (ExecutionMode.TESTNET, ExecutionMode.LIVE):
                 raise ValueError(
-                    f"Strategy {symbol} uses {mode.value}; only testnet is allowed"
+                    f"Strategy {symbol} uses {mode.value}; only testnet or live is allowed"
                 )
             asset_modes[symbol] = mode
 
-        if not (
+        active_modes = frozenset(asset_modes.values())
+        if ExecutionMode.TESTNET in active_modes and not (
             os.getenv("BINANCE_TESTNET_API_KEY")
             and os.getenv("BINANCE_TESTNET_SECRET_KEY")
         ):
             raise RuntimeError("Binance testnet credentials are required")
+        if ExecutionMode.LIVE in active_modes and not (
+            os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_SECRET_KEY")
+        ):
+            raise RuntimeError("Binance live credentials are required")
 
-        return cls(asset_modes)
+        return cls(
+            asset_modes,
+            frozenset(
+                symbol
+                for symbol, mode in asset_modes.items()
+                if mode is ExecutionMode.LIVE
+            ),
+        )

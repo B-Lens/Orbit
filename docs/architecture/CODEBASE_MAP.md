@@ -29,8 +29,8 @@ runs one hourly web-grounded Responses analysis using provisioned Codex credenti
 
 ## Safety invariants
 
-- Assets default to paper mode; testnet/live submission requires explicit credentials.
-- The current rollout rejects paper and live strategy modes at startup.
+- Assets must explicitly select testnet or live mode; paper and missing modes fail startup.
+- The current rollout rejects paper modes and requires credentials for each selected exchange environment.
 - `OrderManager` is the only exchange-order gateway.
 - `RedisManager` owns trade and order key formats.
 - External services must be mocked at their boundary in unit tests.

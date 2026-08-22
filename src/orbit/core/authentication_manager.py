@@ -90,14 +90,14 @@ class AuthenticationManager(ExceptionManager):
             os.getenv("BINANCE_API_KEY") if live_enabled else None,
             os.getenv("BINANCE_SECRET_KEY") if live_enabled else None,
         )
-        self.futures_clients: Dict[ExecutionMode, UMFutures] = dict(futures_clients or {})
+        self.futures_clients: Dict[ExecutionMode, UMFutures] = {
+            mode: client
+            for mode, client in (futures_clients or {}).items()
+            if mode in self.execution_settings.active_modes
+        }
         if futures_client is not None:
             for mode in self.execution_settings.active_modes:
                 self.futures_clients.setdefault(mode, futures_client)
-        if ExecutionMode.PAPER in self.execution_settings.active_modes:
-            self.futures_clients.setdefault(
-                ExecutionMode.PAPER, _build_futures_client(None, None)
-            )
         if ExecutionMode.TESTNET in self.execution_settings.active_modes:
             self.futures_clients.setdefault(
                 ExecutionMode.TESTNET,
@@ -114,7 +114,7 @@ class AuthenticationManager(ExceptionManager):
                     os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_SECRET_KEY")
                 ),
             )
-        self.future_client: UMFutures = self.futures_clients[ExecutionMode.PAPER]
+        self.future_client: UMFutures = next(iter(self.futures_clients.values()))
 
         self.trading_pairs: List[str] = self.config["trading_pairs"]
         self.trade_checker_pair: List[str] = self.config["trade_checker_pair"]

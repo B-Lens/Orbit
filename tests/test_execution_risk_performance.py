@@ -35,12 +35,17 @@ class TestExecutionSettings(unittest.TestCase):
                 "read_text",
                 return_value="strategies:\n  BCHUSDT:\n    strategy: example.Strategy\n",
             ),
-            self.assertRaisesRegex(ValueError, "execution_mode: testnet"),
+            self.assertRaisesRegex(ValueError, "execution_mode: testnet or live"),
         ):
             ExecutionSettings.from_config("strategies.yaml")
 
-    def test_non_testnet_mode_is_rejected(self):
+    def test_live_mode_is_accepted_with_live_credentials(self):
+        env = {
+            "BINANCE_API_KEY": "key",
+            "BINANCE_SECRET_KEY": "secret",
+        }
         with (
+            patch.dict(os.environ, env, clear=True),
             patch.object(
                 Path,
                 "read_text",
@@ -49,7 +54,21 @@ class TestExecutionSettings(unittest.TestCase):
                     "    execution_mode: live\n"
                 ),
             ),
-            self.assertRaisesRegex(ValueError, "only testnet is allowed"),
+        ):
+            settings = ExecutionSettings.from_config("strategies.yaml")
+        self.assertEqual(settings.mode_for("BCHUSDT"), ExecutionMode.LIVE)
+
+    def test_paper_mode_is_rejected(self):
+        with (
+            patch.object(
+                Path,
+                "read_text",
+                return_value=(
+                    "strategies:\n  BCHUSDT:\n    strategy: example.Strategy\n"
+                    "    execution_mode: paper\n"
+                ),
+            ),
+            self.assertRaisesRegex(ValueError, "only testnet or live is allowed"),
         ):
             ExecutionSettings.from_config("strategies.yaml")
 
@@ -58,8 +77,22 @@ class TestExecutionSettings(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "testnet credentials"):
                 ExecutionSettings.from_config()
 
+    def test_live_credentials_are_required(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(
+                Path,
+                "read_text",
+                return_value=(
+                    "strategies:\n  BCHUSDT:\n    strategy: example.Strategy\n"
+                    "    execution_mode: live\n"
+                ),
+            ),
+            self.assertRaisesRegex(RuntimeError, "live credentials"),
+        ):
+            ExecutionSettings.from_config("strategies.yaml")
+
     def test_futures_client_is_routed_by_asset_mode(self):
-        paper_client = MagicMock()
         testnet_client = MagicMock()
         settings = ExecutionSettings(
             {"BCHUSDT": ExecutionMode.TESTNET},
@@ -67,14 +100,33 @@ class TestExecutionSettings(unittest.TestCase):
         manager = AuthenticationManager(
             spot_client=MagicMock(),
             futures_clients={
-                ExecutionMode.PAPER: paper_client,
                 ExecutionMode.TESTNET: testnet_client,
             },
             execution_settings=settings,
         )
 
         self.assertIs(manager.future_client_for("BCHUSDT"), testnet_client)
-        self.assertIs(manager.future_client_for("BTCUSDT"), paper_client)
+        with self.assertRaisesRegex(ValueError, "No execution mode configured"):
+            manager.future_client_for("BTCUSDT")
+
+    def test_live_asset_is_routed_only_to_live_client(self):
+        paper_client = MagicMock()
+        live_client = MagicMock()
+        settings = ExecutionSettings(
+            {"BCHUSDT": ExecutionMode.LIVE},
+            frozenset({"BCHUSDT"}),
+        )
+        manager = AuthenticationManager(
+            spot_client=MagicMock(),
+            futures_clients={
+                ExecutionMode.PAPER: paper_client,
+                ExecutionMode.LIVE: live_client,
+            },
+            execution_settings=settings,
+        )
+
+        self.assertIs(manager.future_client_for("BCHUSDT"), live_client)
+        self.assertNotIn(ExecutionMode.PAPER, manager.futures_clients)
 
     def test_unknown_asset_configuration_is_rejected(self):
         settings = ExecutionSettings(

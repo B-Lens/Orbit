@@ -20,9 +20,9 @@ paths.
   positions and protective orders. Market intelligence may filter signals but
   must never place orders.
 - `config/strategies.yaml` is the execution-mode authority. Every configured
-  trading pair must explicitly use `execution_mode: testnet`; missing, paper, or
-  live modes must fail startup. Orders, balances, income, and reconciliation must
-  remain on Binance Futures Testnet in the current rollout.
+  trading pair must explicitly use `execution_mode: testnet` or `execution_mode:
+  live`; missing or paper modes must fail startup. Orders, balances, income, and
+  reconciliation must use the Binance environment selected for that asset.
 - Exchange mutations and Redis/MongoDB state must remain atomic, idempotent, and
   safe across partial fills, retries, restarts, stale mappings, and concurrent
   workers. Entry and closing sides must remain opposite and protective orders
