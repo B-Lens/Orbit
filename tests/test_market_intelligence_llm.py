@@ -270,7 +270,11 @@ def test_llm_tries_each_configured_groq_model(
 def test_llm_requires_at_least_one_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    for variable in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"):
+    for variable in (
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GROQ_API_KEY",
+    ):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.delenv("OPENAI_AUTH_FILE", raising=False)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))

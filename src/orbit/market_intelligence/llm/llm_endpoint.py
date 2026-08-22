@@ -133,7 +133,7 @@ class LLM(ExceptionManager):
         raise RuntimeError("All configured market-intelligence providers failed") from last_error
 
     def invoke_web_search(self, prompt: str) -> str:
-        """Run a web-grounded query through the primary OpenAI provider only."""
+        """Run a web-grounded query through the primary OpenAI provider."""
         prompt_token_length = len(prompt.split())
         self._track_token_usage(prompt_token_length)
         provider = self.openai_llm

@@ -2,7 +2,7 @@
 
 Orbit is a Python framework for researching and running guarded Binance Futures
 strategies. It combines deterministic strategy signals, per-asset execution modes,
-pre-trade risk checks, position monitoring, and hourly Codex-authenticated market
+pre-trade risk checks, position monitoring, and half-hourly web-grounded market
 intelligence.
 
 ## Runtime
@@ -13,7 +13,7 @@ intelligence.
 | --- | --- |
 | Signal analyzer | Runs configured strategies on 15-minute boundaries and submits accepted signals to `OrderManager`. |
 | Trade checker | Reconciles positions and maintains stop-loss/take-profit orders. |
-| Sentiment cron | Runs one web-grounded OpenAI Responses analysis each hour using provisioned Codex authentication. |
+| Sentiment cron | Runs global, web-grounded crypto sentiment analysis every 30 minutes through OpenAI. |
 | Performance reporter | Synchronizes exchange income and reports net performance when order submission is enabled. |
 | Health monitor | Alerts when a background worker stops. |
 
@@ -47,9 +47,9 @@ The example environment maps BTC, ETH, and BCH to Futures Testnet. PAXG is
 configured as a strategy but remains paper-only unless it is explicitly added to
 `ORBIT_ASSET_EXECUTION_MODES`.
 
-Market intelligence uses `OPENAI_AUTH_FILE`, which points to a provisioned Codex
-CLI `auth.json`. The credential must stay outside the repository. The hourly run
-fails closed and preserves the cached sentiment if web-grounded analysis fails.
+Market intelligence uses `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
+CLI `auth.json`. Credentials must stay outside the repository. Each run fails
+closed and preserves the cached sentiment if web-grounded analysis fails.
 
 ## Configuration
 

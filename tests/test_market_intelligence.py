@@ -99,7 +99,7 @@ def test_run_analysis_success():
     workflow._save_to_database.assert_called_once()
 
 
-def test_hourly_web_search_analysis_is_validated_and_persisted():
+def test_web_search_analysis_is_validated_and_persisted():
     mock_llm = MagicMock()
     mock_llm.invoke_web_search.return_value = json.dumps(
         {
@@ -122,15 +122,15 @@ def test_hourly_web_search_analysis_is_validated_and_persisted():
 
     assert result["success"] is True
     assert result["sentiment"] == "BULLISH"
-    assert result["source"] == "chatgpt_web_search"
+    assert result["source"] == "live_web_search"
     record = save_sentiment.call_args.args[0]
-    assert record.news_sentiment["source"] == "chatgpt_web_search"
+    assert record.news_sentiment["source"] == "live_web_search"
     assert record.news_sentiment["sources"] == [
         "https://example.com/market-update"
     ]
 
 
-def test_hourly_web_search_analysis_rejects_missing_sources():
+def test_web_search_analysis_rejects_missing_sources():
     mock_llm = MagicMock()
     mock_llm.invoke_web_search.return_value = json.dumps(
         {
