@@ -162,7 +162,5 @@ class AuthenticationManager(ExceptionManager):
         return self.futures_clients[self.execution_settings.mode_for(symbol)]
 
     def _order_client_for(self, symbol: str) -> UMFutures:
-        """Return an authorized order client or fail closed for paper assets."""
-        if not self.execution_settings.can_submit_orders_for(symbol):
-            raise RuntimeError(f"Order submission is disabled for {symbol} in paper mode")
+        """Return the client for the symbol's configured execution mode."""
         return self.future_client_for(symbol)

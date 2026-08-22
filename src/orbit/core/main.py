@@ -387,7 +387,6 @@ class BinanceAutomation(ExceptionManager):
                 client, self.order_manager.mongo_handler, mode.value
             )
             for mode, client in self.order_manager.futures_clients.items()
-            if mode is not ExecutionMode.PAPER
         ]
         while True:
             for reporter in reporters:

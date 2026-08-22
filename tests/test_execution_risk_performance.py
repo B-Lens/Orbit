@@ -10,6 +10,12 @@ from orbit.core.risk_manager import PreTradeRiskGuard
 
 
 class TestExecutionSettings(unittest.TestCase):
+    def test_only_testnet_and_live_modes_exist(self):
+        self.assertEqual(
+            set(ExecutionMode),
+            {ExecutionMode.TESTNET, ExecutionMode.LIVE},
+        )
+
     def test_all_configured_assets_use_testnet(self):
         env = {
             "BINANCE_TESTNET_API_KEY": "key",
@@ -117,7 +123,6 @@ class TestExecutionSettings(unittest.TestCase):
             manager.future_client_for("BTCUSDT")
 
     def test_live_asset_is_routed_only_to_live_client(self):
-        paper_client = MagicMock()
         live_client = MagicMock()
         settings = ExecutionSettings(
             {"BCHUSDT": ExecutionMode.LIVE},
@@ -125,14 +130,13 @@ class TestExecutionSettings(unittest.TestCase):
         manager = AuthenticationManager(
             spot_client=MagicMock(),
             futures_clients={
-                ExecutionMode.PAPER: paper_client,
                 ExecutionMode.LIVE: live_client,
             },
             execution_settings=settings,
         )
 
         self.assertIs(manager.future_client_for("BCHUSDT"), live_client)
-        self.assertNotIn(ExecutionMode.PAPER, manager.futures_clients)
+        self.assertEqual(manager.futures_clients, {ExecutionMode.LIVE: live_client})
 
     def test_unknown_asset_configuration_is_rejected(self):
         settings = ExecutionSettings(
@@ -156,7 +160,6 @@ class TestExecutionSettings(unittest.TestCase):
             AuthenticationManager(
                 spot_client=MagicMock(),
                 futures_clients={
-                    ExecutionMode.PAPER: MagicMock(),
                     ExecutionMode.TESTNET: MagicMock(),
                 },
                 config={

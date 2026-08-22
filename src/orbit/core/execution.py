@@ -1,7 +1,7 @@
 """Execution-environment configuration for Orbit.
 
-Trading environments are deliberately explicit. Testnet and live execution are
-authorized independently per asset; paper and implicit fallback modes are rejected.
+Trading environments are deliberately explicit. Each asset uses either Binance
+Futures Testnet or live execution; missing and invalid modes are rejected.
 """
 
 from dataclasses import dataclass, field
@@ -13,7 +13,6 @@ import yaml
 
 
 class ExecutionMode(str, Enum):
-    PAPER = "paper"
     TESTNET = "testnet"
     LIVE = "live"
 
@@ -53,9 +52,7 @@ class ExecutionSettings:
     ) -> "ExecutionSettings":
         """Load per-symbol order modes from ``config/strategies.yaml``.
 
-        Every asset must explicitly select Testnet or live execution. Missing and
-        paper modes are rejected rather than silently falling back to a non-trading
-        environment.
+        Every asset must explicitly select Testnet or live execution.
         """
         path = Path(strategy_config)
         try:

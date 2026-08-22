@@ -22,8 +22,9 @@ OHLCV history, sentiment results, trade decisions, and exchange income.
 
 ## Safety model
 
-- Every configured strategy and monitored position symbol explicitly selects
-  `testnet` or `live`; all checked-in mappings currently use `testnet`.
+- There are exactly two execution modes: `testnet` and `live`. Every configured
+  strategy and monitored position symbol selects one explicitly; all checked-in
+  mappings currently use `testnet`.
 - Startup rejects missing, paper, and invalid execution modes.
 - `OrderManager` is the only exchange-order gateway.
 - The daily-loss gate fails closed when exchange income cannot be synchronized.

@@ -28,7 +28,7 @@ Execution is configured per asset in `config/strategies.yaml` with the singular
 `execution_mode` field:
 
 - Every configured strategy currently declares `execution_mode: testnet`.
-- The only accepted values are `testnet` and `live`; missing, `paper`, and
+- The system has exactly two execution modes: `testnet` and `live`; missing or
   invalid values fail startup validation.
 - Symbols monitored only for existing positions are listed under
   `monitored_assets` with an explicit testnet or live environment.

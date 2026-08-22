@@ -25,11 +25,11 @@ analyzer selects a strategy through the registry, then delegates risk and exchan
 work to the order manager. Redis stores active trades and order-to-trade mappings;
 MongoDB stores OHLCV, sentiment, decisions, and income history. The trade checker
 reconciles Redis with Binance and maintains protective orders. The sentiment cron
-runs one half-hourly web-grounded Responses analysis using provisioned Codex credentials.
+runs one hourly web-grounded Responses analysis using provisioned Codex credentials.
 
 ## Safety invariants
 
-- Assets must explicitly select testnet or live mode; paper and missing modes fail startup.
+- The only execution modes are testnet and live; every asset must select one.
 - Testnet and live modes require credentials for their selected exchange environment.
 - `OrderManager` is the only exchange-order gateway.
 - `RedisManager` owns trade and order key formats.
