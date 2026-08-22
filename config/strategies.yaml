@@ -8,7 +8,7 @@ monitored_assets:
 
 strategies:
   BCHUSDT:
-    strategy: orbit.strategies.reversal_strategy.BollingerAdaptiveReversalStrategyBCH
+    strategy: orbit.strategies.bch_strategy.BCHUSDTStrategy
     execution_mode: testnet
 
   ETHUSDT:
