@@ -17,6 +17,9 @@ through the constructor for easier testing and looser coupling.
 
 import time
 import logging
+import os
+from dataclasses import dataclass
+from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -32,6 +35,15 @@ from orbit.core.risk_manager import PreTradeRiskGuard
 from orbit.core.performance import PerformanceTracker
 
 logger = logging.getLogger("Orbit")
+
+
+@dataclass(frozen=True)
+class OrderPreflight:
+    """Result of validating an order without submitting it."""
+    allowed: bool
+    reason: str
+    request: Dict[str, Any]
+    metrics: Dict[str, Any]
 
 
 class OrderManager(AuthenticationManager, RedisManager):
@@ -127,15 +139,15 @@ class OrderManager(AuthenticationManager, RedisManager):
         if not price_filter:
             return price
 
-        tick = float(price_filter["tickSize"])
-        min_price = float(price_filter["minPrice"])
+        tick = Decimal(str(price_filter["tickSize"]))
+        min_price = Decimal(str(price_filter["minPrice"]))
+        price_value = max(Decimal(str(price)), min_price)
 
-        price = max(price, min_price)
         if tick <= 0:
-            return price
+            return float(price_value)
 
-        corrected = price - (price % tick)
-        return round(corrected, 8)
+        corrected = price_value - (price_value % tick)
+        return round(float(corrected), 8)
 
     def adjust_quantity_step(self, symbol: str, qty: float) -> float:
         """Round *qty* down to the nearest valid step size for *symbol*."""
@@ -144,15 +156,15 @@ class OrderManager(AuthenticationManager, RedisManager):
         if not lot_size:
             return qty
 
-        step = float(lot_size["stepSize"])
-        min_qty = float(lot_size["minQty"])
+        step = Decimal(str(lot_size["stepSize"]))
+        min_qty = Decimal(str(lot_size["minQty"]))
+        qty_value = max(Decimal(str(qty)), min_qty)
 
-        qty = max(qty, min_qty)
         if step <= 0:
-            return qty
+            return float(qty_value)
 
-        corrected = qty - (qty % step)
-        return round(corrected, 8)
+        corrected = qty_value - (qty_value % step)
+        return round(float(corrected), 8)
 
     def validate_notional(self, symbol: str, price: float, qty: float) -> bool:
         """Return ``True`` if ``price * qty`` meets the MIN_NOTIONAL filter."""
@@ -448,6 +460,60 @@ class OrderManager(AuthenticationManager, RedisManager):
         logger.info(f"Calculated position size for {symbol}: Qty={qty}, Required Margin={required_margin}")
         return qty, required_margin
 
+    def preflight_paper_order(
+        self, risk_management: Dict[str, Any], symbol: str, side: str,
+        price: Optional[float], sl: Optional[float], target: Optional[float],
+        leverage: int,
+    ) -> OrderPreflight:
+        """Run production risk and exchange-filter checks without submitting."""
+        request = {
+            "symbol": symbol, "side": side, "price": price,
+            "stop_loss": sl, "take_profit": target, "leverage": leverage,
+        }
+        try:
+            if price is None or sl is None:
+                return OrderPreflight(False, "missing_entry_or_stop", request, {})
+            if symbol not in risk_management:
+                return OrderPreflight(False, "missing_symbol_risk", request, {})
+
+            equity = float(os.getenv("ORBIT_PAPER_EQUITY", "10000"))
+            entry_price = self.adjust_price_tick(symbol, float(price))
+            stop_loss = float(sl)
+            take_profit = float(target) if target is not None else None
+            stop_distance = abs(entry_price - stop_loss)
+            if equity <= 0 or stop_distance <= 0:
+                return OrderPreflight(False, "invalid_paper_equity_or_stop", request, {})
+
+            risk_fraction = min(
+                float(risk_management[symbol]), self.risk_guard.max_risk_per_trade_pct
+            )
+            precision = self.config["trading_pairs_precision"][symbol]
+            quantity = self.adjust_quantity_step(
+                symbol, round((equity * risk_fraction) / stop_distance, precision)
+            )
+            request.update({"price": entry_price, "quantity": quantity})
+            decision = self.risk_guard.evaluate(
+                equity=equity, entry_price=entry_price, stop_loss=stop_loss,
+                take_profit=take_profit, quantity=quantity, leverage=leverage,
+                side=side,
+            )
+            if not decision.allowed:
+                return OrderPreflight(False, decision.reason, request, decision.metrics)
+            if not self.validate_notional(symbol, entry_price, quantity):
+                return OrderPreflight(
+                    False, "notional_below_exchange_minimum", request, decision.metrics
+                )
+            return OrderPreflight(True, "paper_validated", request, decision.metrics)
+        except (KeyError, TypeError, ValueError) as error:
+            logger.warning("Paper preflight configuration failed for %s: %s", symbol, error)
+            return OrderPreflight(False, "invalid_order_configuration", request, {})
+        except Exception as error:
+            logger.exception("Paper preflight failed for %s", symbol)
+            return OrderPreflight(
+                False, "preflight_dependency_error", request,
+                {"error_type": type(error).__name__},
+            )
+
     def place_order(
         self,
         risk_management: Dict[str, Any],
@@ -493,12 +559,7 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             execution_mode = self.execution_settings.mode_for(symbol)
             if execution_mode is ExecutionMode.PAPER:
-                logger.warning("Order blocked: %s is configured for paper mode", symbol)
-                self.send_alerts(
-                    data=None,
-                    description="Order blocked in paper mode",
-                    fields={"symbol": symbol, "side": side},
-                )
+                logger.info("Order submission skipped: %s is configured for paper mode", symbol)
                 return None, None, None
 
             effective_trade_id = trade_id or symbol

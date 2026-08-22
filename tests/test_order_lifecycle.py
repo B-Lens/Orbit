@@ -8,13 +8,13 @@ from orbit.core.order_manager import OrderManager
 from orbit.core.trade_checker import TradeChecker, is_stop_order, is_take_profit_order
 
 
-def _order_manager():
+def _order_manager(mode=ExecutionMode.TESTNET):
     manager = OrderManager(
         mongo_handler=MagicMock(),
         redis_client=MagicMock(),
         spot_client=MagicMock(),
         futures_client=MagicMock(),
-        execution_settings=ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET}),
+        execution_settings=ExecutionSettings({"BTCUSDT": mode}),
     )
     manager.config["trading_pairs_precision"]["BTCUSDT"] = 3
     manager.get_symbol_filters = MagicMock(
@@ -35,6 +35,7 @@ class TestOrderManager(unittest.TestCase):
 
     def test_exchange_filter_normalization(self):
         self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 12.34), 12.3)
+        self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 100.0), 100.0)
         self.assertEqual(self.manager.adjust_quantity_step("BTCUSDT", 0.0056), 0.005)
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
@@ -66,6 +67,27 @@ class TestOrderManager(unittest.TestCase):
         )
         self.assertEqual(response, {"algoId": 123})
         self.manager.redis_client.set.assert_called_once_with("order:123", "trade-1")
+
+    @patch.dict("os.environ", {"ORBIT_PAPER_EQUITY": "10000"})
+    def test_paper_preflight_runs_production_risk_checks_without_submission(self):
+        manager = _order_manager(ExecutionMode.PAPER)
+        result = manager.preflight_paper_order(
+            {"BTCUSDT": 0.01}, "BTCUSDT", "BUY", 100, 98, 104, 2
+        )
+
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.reason, "paper_validated")
+        self.assertEqual(result.request["quantity"], 12.5)
+        manager.future_client.new_order.assert_not_called()
+
+    def test_paper_preflight_returns_actionable_risk_reason(self):
+        manager = _order_manager(ExecutionMode.PAPER)
+        result = manager.preflight_paper_order(
+            {"BTCUSDT": 0.01}, "BTCUSDT", "BUY", 100, 98, 99, 2
+        )
+
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason, "target_on_wrong_side")
 
 
 class TestTradeChecker(unittest.TestCase):
