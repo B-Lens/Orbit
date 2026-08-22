@@ -110,6 +110,28 @@ class TestSentimentCron(unittest.TestCase):
         self.assertEqual(result["signal_action"], "directional_rejected_low_confidence")
         self.assertEqual(result["effective_sentiment"], "BULLISH")
 
+    def test_run_slot_claim_is_atomic_and_fails_closed(self):
+        redis = MagicMock()
+        croner = Croner(sentiment_workflow=_workflow(), redis_client=redis)
+        redis.eval.return_value = 1
+        self.assertTrue(croner.claim_sentiment_run_slot(20260822190))
+        redis.eval.return_value = 0
+        self.assertFalse(croner.claim_sentiment_run_slot(20260822190))
+        redis.eval.side_effect = RuntimeError("Redis unavailable")
+        self.assertFalse(croner.claim_sentiment_run_slot(20260822191))
+
+    def test_run_slot_completion_and_failure_release_are_atomic(self):
+        redis = MagicMock()
+        redis.eval.return_value = 1
+        croner = Croner(sentiment_workflow=_workflow(), redis_client=redis)
+
+        self.assertTrue(croner.complete_sentiment_run_slot(20260822190))
+        complete_args = redis.eval.call_args.args
+        self.assertEqual(complete_args[1], 2)
+        self.assertTrue(croner.release_sentiment_run_slot(20260822191))
+        release_args = redis.eval.call_args.args
+        self.assertEqual(release_args[1], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
