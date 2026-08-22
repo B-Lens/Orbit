@@ -22,8 +22,8 @@ OHLCV history, sentiment results, trade decisions, and exchange income.
 
 ## Safety model
 
-- Every asset defaults to `paper` unless explicitly mapped to `testnet` or `live`.
-- Live assets require an exact `ORBIT_LIVE_ASSETS` allowlist.
+- Every configured strategy is explicitly pinned to `testnet`.
+- Startup rejects missing, paper, or live strategy modes.
 - `OrderManager` is the only exchange-order gateway.
 - The daily-loss gate fails closed when exchange income cannot be synchronized.
 - Market intelligence can filter signals but cannot place orders.
@@ -43,9 +43,9 @@ cp .env.example .env
 poetry run orbit
 ```
 
-The example environment maps BTC, ETH, and BCH to Futures Testnet. PAXG is
-configured as a strategy but remains paper-only unless it is explicitly added to
-`ORBIT_ASSET_EXECUTION_MODES`.
+`config/strategies.yaml` is the single source of truth for strategy ownership and
+order mode. BTC, ETH, BCH, and PAXG are currently pinned to Futures Testnet;
+startup rejects missing, paper, or live modes.
 
 Market intelligence uses `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
 CLI `auth.json`. Credentials must stay outside the repository. Each run fails

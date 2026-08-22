@@ -6,7 +6,7 @@
 - Registry: `config/strategies.yaml`
 - Timeframe: 1 hour; complete 15-minute candles are resampled internally
 - Current eligibility: **Testnet only**
-- Promotion rule: do not add `live` to `execution_modes` until the criteria below pass
+- Promotion rule: do not change `execution_mode` from `testnet` until the criteria below pass
 
 ## Signal contract
 
@@ -50,7 +50,8 @@ Before live eligibility, record the evaluated commit and dataset, then require:
 3. Testnet reaches a predeclared minimum trade count across multiple regimes.
 4. Testnet profit factor, drawdown, slippage, and order-reconciliation limits pass.
 5. Stop/target placement, incomplete-candle exclusion, and restart recovery are verified.
-6. A human approves `ETHUSDT:live` and the exact `ORBIT_LIVE_ASSETS` allowlist.
+6. Any future live-mode work requires a separately reviewed configuration and
+   authorization design; the current runtime rejects it.
 
 Record each evaluation in the promoting PR; never replace failed evidence with
 an unversioned result.

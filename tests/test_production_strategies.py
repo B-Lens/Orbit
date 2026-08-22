@@ -5,6 +5,7 @@ import pandas as pd
 
 from orbit.strategies.eth_strategy import ETHStrategy
 from orbit.strategies.reversal_strategy import BollingerAdaptiveReversalStrategyBCH
+from orbit.strategies.paxgusdt_strategy import PAXGUSDTStrategy
 from orbit.strategies.strategies_base import Strategy
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY, _LazyStrategyRegistry
 from orbit.strategies.swing_strategy import SwingStrategyBTC
@@ -13,51 +14,34 @@ from orbit.strategies.swing_strategy import SwingStrategyBTC
 class TestProductionStrategyOwnership(unittest.TestCase):
     def test_registry_resolves_internal_classes(self):
         self.assertIs(STRATEGY_REGISTRY["BTCUSDT"], SwingStrategyBTC)
-        self.assertNotIn("ETHUSDT", STRATEGY_REGISTRY)
+        self.assertIs(STRATEGY_REGISTRY["ETHUSDT"], ETHStrategy)
         self.assertIs(
             STRATEGY_REGISTRY["BCHUSDT"], BollingerAdaptiveReversalStrategyBCH
         )
+        self.assertIs(STRATEGY_REGISTRY["PAXGUSDT"], PAXGUSDTStrategy)
 
     def test_all_production_strategies_use_orbit_contract(self):
         for strategy_class in (
             SwingStrategyBTC,
             BollingerAdaptiveReversalStrategyBCH,
+            ETHStrategy,
+            PAXGUSDTStrategy,
         ):
             self.assertTrue(issubclass(strategy_class, Strategy))
             self.assertTrue(strategy_class.__module__.startswith("orbit.strategies."))
 
-    @patch.dict(
-        "os.environ", {"ORBIT_ASSET_EXECUTION_MODES": "ETHUSDT:testnet"}, clear=False
-    )
-    def test_eth_candidate_is_selected_only_for_testnet(self):
+    def test_registry_loads_configured_strategy(self):
         registry = _LazyStrategyRegistry(
             {
                 "strategies": {
                     "ETHUSDT": {
                         "strategy": "orbit.strategies.eth_strategy.ETHStrategy",
-                        "execution_modes": ["testnet"],
+                        "execution_mode": "testnet",
                     }
                 }
             }
         )
         self.assertIs(registry["ETHUSDT"], ETHStrategy)
-
-    @patch.dict(
-        "os.environ", {"ORBIT_ASSET_EXECUTION_MODES": "ETHUSDT:live"}, clear=False
-    )
-    def test_live_eth_does_not_load_testnet_strategy(self):
-        registry = _LazyStrategyRegistry(
-            {
-                "strategies": {
-                    "ETHUSDT": {
-                        "strategy": "orbit.strategies.eth_strategy.ETHStrategy",
-                        "execution_modes": ["testnet"],
-                    }
-                }
-            }
-        )
-        self.assertNotIn("ETHUSDT", registry)
-
 
 class TestBCHStrategyRiskContract(unittest.TestCase):
     def setUp(self):

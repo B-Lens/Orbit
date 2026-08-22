@@ -1,5 +1,6 @@
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from orbit.core.authentication_manager import AuthenticationManager
@@ -9,47 +10,53 @@ from orbit.core.risk_manager import PreTradeRiskGuard
 
 
 class TestExecutionSettings(unittest.TestCase):
-    def test_safe_default_is_paper(self):
-        with patch.dict(os.environ, {}, clear=True):
-            settings = ExecutionSettings.from_env()
-        self.assertFalse(settings.can_submit_orders)
-        self.assertEqual(settings.mode_for("BTCUSDT"), ExecutionMode.PAPER)
-
-    def test_single_asset_can_use_testnet(self):
+    def test_all_configured_assets_use_testnet(self):
         env = {
-            "ORBIT_ASSET_EXECUTION_MODES": "BCHUSDT:testnet",
             "BINANCE_TESTNET_API_KEY": "key",
             "BINANCE_TESTNET_SECRET_KEY": "secret",
         }
         with patch.dict(os.environ, env, clear=True):
-            settings = ExecutionSettings.from_env()
+            settings = ExecutionSettings.from_config()
         self.assertTrue(settings.can_submit_orders)
-        self.assertTrue(settings.can_submit_orders_for("BCHUSDT"))
-        self.assertFalse(settings.can_submit_orders_for("BTCUSDT"))
-        self.assertEqual(settings.mode_for("BCHUSDT"), ExecutionMode.TESTNET)
+        self.assertEqual(
+            settings.asset_modes,
+            {
+                "BTCUSDT": ExecutionMode.TESTNET,
+                "ETHUSDT": ExecutionMode.TESTNET,
+                "BCHUSDT": ExecutionMode.TESTNET,
+                "PAXGUSDT": ExecutionMode.TESTNET,
+            },
+        )
 
-    def test_live_approval_must_exactly_match_live_assets(self):
-        env = {
-            "ORBIT_ASSET_EXECUTION_MODES": "BCHUSDT:live",
-            "ORBIT_LIVE_ASSETS": "BTCUSDT",
-            "BINANCE_API_KEY": "key",
-            "BINANCE_SECRET_KEY": "secret",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            with self.assertRaises(RuntimeError):
-                ExecutionSettings.from_env()
+    def test_missing_mode_is_rejected(self):
+        with (
+            patch.object(
+                Path,
+                "read_text",
+                return_value="strategies:\n  BCHUSDT:\n    strategy: example.Strategy\n",
+            ),
+            self.assertRaisesRegex(ValueError, "execution_mode: testnet"),
+        ):
+            ExecutionSettings.from_config("strategies.yaml")
 
-    def test_exact_live_asset_approval_is_accepted(self):
-        env = {
-            "ORBIT_ASSET_EXECUTION_MODES": "BCHUSDT:live",
-            "ORBIT_LIVE_ASSETS": "BCHUSDT",
-            "BINANCE_API_KEY": "key",
-            "BINANCE_SECRET_KEY": "secret",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            settings = ExecutionSettings.from_env()
-        self.assertEqual(settings.mode_for("BCHUSDT"), ExecutionMode.LIVE)
-        self.assertEqual(settings.mode_for("BTCUSDT"), ExecutionMode.PAPER)
+    def test_non_testnet_mode_is_rejected(self):
+        with (
+            patch.object(
+                Path,
+                "read_text",
+                return_value=(
+                    "strategies:\n  BCHUSDT:\n    strategy: example.Strategy\n"
+                    "    execution_mode: live\n"
+                ),
+            ),
+            self.assertRaisesRegex(ValueError, "only testnet is allowed"),
+        ):
+            ExecutionSettings.from_config("strategies.yaml")
+
+    def test_testnet_credentials_are_required(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "testnet credentials"):
+                ExecutionSettings.from_config()
 
     def test_futures_client_is_routed_by_asset_mode(self):
         paper_client = MagicMock()
@@ -78,6 +85,26 @@ class TestExecutionSettings(unittest.TestCase):
                 spot_client=MagicMock(),
                 futures_client=MagicMock(),
                 execution_settings=settings,
+            )
+
+    def test_trading_asset_without_configured_mode_is_rejected(self):
+        settings = ExecutionSettings(
+            {"BCHUSDT": ExecutionMode.TESTNET},
+        )
+        with (
+            patch.object(ExecutionSettings, "from_config", return_value=settings),
+            self.assertRaisesRegex(ValueError, "missing strategy execution modes"),
+        ):
+            AuthenticationManager(
+                spot_client=MagicMock(),
+                futures_clients={
+                    ExecutionMode.PAPER: MagicMock(),
+                    ExecutionMode.TESTNET: MagicMock(),
+                },
+                config={
+                    "trading_pairs": ["BCHUSDT", "PAXGUSDT"],
+                    "trade_checker_pair": ["BCHUSDT", "PAXGUSDT"],
+                },
             )
 
 

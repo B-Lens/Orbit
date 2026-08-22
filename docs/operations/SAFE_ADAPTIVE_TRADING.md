@@ -24,18 +24,17 @@ production strategy contract and reviewed in Orbit.
 
 ## Execution environments
 
-Execution is configured only per asset with `ORBIT_ASSET_EXECUTION_MODES`:
+Execution is configured per asset in `config/strategies.yaml` with the singular
+`execution_mode` field:
 
-- `BCHUSDT:testnet` routes only BCH orders to Binance Futures Testnet.
-- Symbols omitted from the mapping remain paper-only.
-- `BCHUSDT:live` routes only BCH orders to production and is accepted only when
-  `ORBIT_LIVE_ASSETS=BCHUSDT` exactly matches every live mapping.
+- Every configured strategy currently declares `execution_mode: testnet`.
+- Missing modes and `paper` or `live` values fail startup validation.
+- BTC, ETH, BCH, and PAXG orders all route to Binance Futures Testnet.
 
-There is no global execution-mode setting, so approving one asset cannot unlock
-the rest of the automation. Testnet uses `BINANCE_TESTNET_API_KEY`,
-`BINANCE_TESTNET_SECRET_KEY`, and `https://demo-fapi.binance.com`. Live assets
-use the production credentials. A mixed mapping creates and routes through
-separate clients; credentials are never shared between environments.
+There is no environment-variable execution-mode override. Testnet uses
+`BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_SECRET_KEY`, and
+`https://demo-fapi.binance.com`. Production credentials are not used by the
+current rollout.
 
 Testnet and production credentials must be different and should be loaded from
 AWS Systems Manager Parameter Store or Secrets Manager by the EC2 service. Never
@@ -117,9 +116,8 @@ order path fails closed instead of trading with a stale daily-loss value.
 
 1. Back up `.env`, MongoDB, and the current deployed commit IDs.
 2. Install Orbit from its lockfile; no second repository is required.
-3. For the current rollout, set
-   `ORBIT_ASSET_EXECUTION_MODES=BTCUSDT:testnet,ETHUSDT:testnet,BCHUSDT:testnet`
-   and load Testnet-only credentials. Omitted assets remain paper-only.
+3. Keep every strategy in `config/strategies.yaml` pinned to
+   `execution_mode: testnet` and load Testnet-only credentials.
 4. Start Redis and MongoDB, then start Orbit from the repository root.
 5. Confirm logs show Testnet mode and the expected Orbit commit.
 6. Confirm `trade_decisions` receives no-signal and rejected decisions.
@@ -127,8 +125,8 @@ order path fails closed instead of trading with a stale daily-loss value.
    the Binance Testnet UI.
 8. Confirm `futures_income` includes realized P&L, commissions, and funding.
 9. Observe at least the agreed number of independent trades and market regimes.
-10. To approve that asset for live, change only its mapping to `live`, add the
-    same symbol to `ORBIT_LIVE_ASSETS`, deploy, and verify the decision ledger.
+10. Do not promote an asset to live in this rollout. Live-mode support requires
+    a separately reviewed authorization and configuration change.
 11. Review drawdown and net performance before approving another asset.
 
 ## Deployment health and rollback

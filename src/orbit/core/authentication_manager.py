@@ -83,7 +83,8 @@ class AuthenticationManager(ExceptionManager):
 
         self.config: Dict[str, Any] = config if config is not None else load_config()
 
-        self.execution_settings = execution_settings or ExecutionSettings.from_env()
+        settings_loaded_from_config = execution_settings is None
+        self.execution_settings = execution_settings or ExecutionSettings.from_config()
         live_enabled = ExecutionMode.LIVE in self.execution_settings.active_modes
         self.client: Spot = spot_client or _build_spot_client(
             os.getenv("BINANCE_API_KEY") if live_enabled else None,
@@ -122,6 +123,12 @@ class AuthenticationManager(ExceptionManager):
             raise ValueError(
                 "Execution modes configured for unknown trading assets: "
                 + ", ".join(sorted(unknown_assets))
+            )
+        missing_assets = set(self.trading_pairs) - set(self.execution_settings.asset_modes)
+        if missing_assets and settings_loaded_from_config:
+            raise ValueError(
+                "Trading assets missing strategy execution modes: "
+                + ", ".join(sorted(missing_assets))
             )
         logger.info(
             "Asset execution modes: %s",
