@@ -133,8 +133,8 @@ class AuthenticationManager(ExceptionManager):
         logger.info(
             "Asset execution modes: %s",
             {
-                symbol: self.execution_settings.mode_for(symbol).value
-                for symbol in self.trading_pairs
+                symbol: mode.value
+                for symbol, mode in self.execution_settings.asset_modes.items()
             },
         )
 
