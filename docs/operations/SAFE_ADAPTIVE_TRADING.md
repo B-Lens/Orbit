@@ -28,16 +28,14 @@ Execution is configured per asset in `config/strategies.yaml` with the singular
 `execution_mode` field:
 
 - Every configured strategy currently declares `execution_mode: testnet`.
-- Missing modes and `paper` values fail startup validation; `live` requires an
-  exact matching entry in the same file's `live_assets` confirmation list.
+- Missing modes and `paper` values fail startup validation.
 - Symbols monitored only for existing positions are listed under
   `monitored_assets` with an explicit testnet or live environment.
 - BTC, ETH, BCH, and PAXG orders all route to Binance Futures Testnet.
 
 There is no environment-variable execution-mode override. Testnet uses
 `BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_SECRET_KEY`, and
-`https://demo-fapi.binance.com`. Live assets use production credentials only
-when both their execution mode and confirmation-list entry are present.
+`https://demo-fapi.binance.com`. Live assets require production credentials.
 
 Testnet and production credentials must be different and should be loaded from
 AWS Systems Manager Parameter Store or Secrets Manager by the EC2 service. Never

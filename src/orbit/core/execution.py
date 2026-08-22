@@ -106,20 +106,6 @@ class ExecutionSettings:
                 )
             asset_modes[symbol] = mode
 
-        raw_live_assets = document.get("live_assets", [])
-        if not isinstance(raw_live_assets, list):
-            raise ValueError("live_assets must be a list of symbols")
-        configured_live_assets = {
-            str(symbol).strip().upper() for symbol in raw_live_assets
-        }
-        actual_live_assets = {
-            symbol for symbol, mode in asset_modes.items() if mode is ExecutionMode.LIVE
-        }
-        if configured_live_assets != actual_live_assets:
-            raise ValueError(
-                "live_assets must exactly match symbols configured for live execution"
-            )
-
         active_modes = frozenset(asset_modes.values())
         if ExecutionMode.TESTNET in active_modes and not (
             os.getenv("BINANCE_TESTNET_API_KEY")
