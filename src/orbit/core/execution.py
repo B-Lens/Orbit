@@ -112,6 +112,14 @@ class ExecutionSettings:
         if ExecutionMode.LIVE in active_modes and not (
             os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_SECRET_KEY")
         ):
-            raise RuntimeError("Binance live credentials are required")
+            missing_keys = [
+                key
+                for key in ("BINANCE_API_KEY", "BINANCE_SECRET_KEY")
+                if not os.getenv(key)
+            ]
+            raise ValueError(
+                "Missing environment keys required for live mode: "
+                + ", ".join(missing_keys)
+            )
 
         return cls(asset_modes)

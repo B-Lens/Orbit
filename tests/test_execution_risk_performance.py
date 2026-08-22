@@ -101,7 +101,11 @@ class TestExecutionSettings(unittest.TestCase):
                     "    execution_mode: live\n"
                 ),
             ),
-            self.assertRaisesRegex(RuntimeError, "live credentials"),
+            self.assertRaisesRegex(
+                ValueError,
+                "Missing environment keys required for live mode: "
+                "BINANCE_API_KEY, BINANCE_SECRET_KEY",
+            ),
         ):
             ExecutionSettings.from_config("strategies.yaml")
 
