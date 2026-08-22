@@ -186,7 +186,15 @@ class Croner(ExceptionManager, RedisManager):
                 now = get_indian_time()
                 current_slot = int(now.strftime("%Y%m%d%H")) * 2 + now.minute // 30
                 if self.claim_sentiment_run_slot(current_slot):
-                    asyncio.run(self.run_once())
+                    try:
+                        result = asyncio.run(self.run_once())
+                    except Exception:
+                        self.release_sentiment_run_slot(current_slot)
+                        raise
+                    if result.get("success"):
+                        self.complete_sentiment_run_slot(current_slot)
+                    else:
+                        self.release_sentiment_run_slot(current_slot)
 
                 time.sleep(self.scheduler_poll_interval)
             except Exception as e:

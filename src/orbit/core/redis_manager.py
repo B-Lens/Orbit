@@ -24,6 +24,7 @@ Key schema
 ``sentiment:pending_base``          – directional regime the candidate is measured against
 ``sentiment:pending_count``         – expiring consecutive-observation count
 ``sentiment:last_run_slot``         – dated half-hour slot of last analysis
+``sentiment:run_slot_lease``        – in-progress analysis slot lease
 ``sentiment:last_news_fetch``       – ISO-8601 last news fetch time
 ``sentiment:last_reddit_fetch``     – ISO-8601 last Reddit fetch time
 ``sentiment:last_twitter_fetch``    – ISO-8601 last Twitter fetch time
@@ -51,6 +52,7 @@ REDIS_KEY_PENDING_SENTIMENT: str = "sentiment:pending_label"
 REDIS_KEY_PENDING_SENTIMENT_BASE: str = "sentiment:pending_base"
 REDIS_KEY_PENDING_SENTIMENT_COUNT: str = "sentiment:pending_count"
 REDIS_KEY_SENTIMENT_LAST_RUN_SLOT: str = "sentiment:last_run_slot"
+REDIS_KEY_SENTIMENT_RUN_SLOT_LEASE: str = "sentiment:run_slot_lease"
 REDIS_KEY_LAST_NEWS_FETCH: str = "sentiment:last_news_fetch"
 REDIS_KEY_LAST_REDDIT_FETCH: str = "sentiment:last_reddit_fetch"
 REDIS_KEY_LAST_TWITTER_FETCH: str = "sentiment:last_twitter_fetch"
@@ -60,6 +62,7 @@ _TIMESTAMP_TTL: int = 172_800
 
 # Pending observations must remain recent across half-hour confirmation windows.
 _PENDING_SENTIMENT_TTL: int = 7_200
+_SENTIMENT_RUN_LEASE_TTL: int = 3_600
 
 
 def _trade_key(trade_id: str) -> str:
@@ -359,29 +362,77 @@ class RedisManager:
     # ------------------------------------------------------------------
 
     def claim_sentiment_run_slot(self, slot: int) -> bool:
-        """Atomically claim a half-hour analysis slot.
+        """Atomically lease an incomplete half-hour analysis slot.
 
-        The claim happens before analysis. This prevents concurrent workers or
-        Redis write failures from generating repeated observations in one slot.
-        Redis errors fail closed: no sentiment analysis is allowed without a
-        durable claim.
+        A lease for an older slot may be superseded, while the completed-slot
+        marker prevents repeated observations. Redis errors fail closed.
         """
         script = """
-        local current = redis.call('GET', KEYS[1])
-        if current == ARGV[1] then
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
             return 0
         end
-        redis.call('SET', KEYS[1], ARGV[1])
+        if redis.call('GET', KEYS[2]) == ARGV[1] then
+            return 0
+        end
+        redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2])
         return 1
         """
         try:
             return bool(
                 self.redis_client.eval(
-                    script, 1, REDIS_KEY_SENTIMENT_LAST_RUN_SLOT, str(slot)
+                    script,
+                    2,
+                    REDIS_KEY_SENTIMENT_LAST_RUN_SLOT,
+                    REDIS_KEY_SENTIMENT_RUN_SLOT_LEASE,
+                    str(slot),
+                    str(_SENTIMENT_RUN_LEASE_TTL),
                 )
             )
         except Exception as e:
             logger.exception("[Redis] Claiming sentiment run slot failed: %s", e)
+            return False
+
+    def complete_sentiment_run_slot(self, slot: int) -> bool:
+        """Mark a leased slot complete and clear its lease atomically."""
+        script = """
+        if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+            return 0
+        end
+        redis.call('SET', KEYS[2], ARGV[1])
+        redis.call('DEL', KEYS[1])
+        return 1
+        """
+        try:
+            return bool(
+                self.redis_client.eval(
+                    script,
+                    2,
+                    REDIS_KEY_SENTIMENT_RUN_SLOT_LEASE,
+                    REDIS_KEY_SENTIMENT_LAST_RUN_SLOT,
+                    str(slot),
+                )
+            )
+        except Exception as e:
+            logger.exception("[Redis] Completing sentiment run slot failed: %s", e)
+            return False
+
+    def release_sentiment_run_slot(self, slot: int) -> bool:
+        """Release a failed analysis lease without disturbing another worker."""
+        script = """
+        if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+            return 0
+        end
+        redis.call('DEL', KEYS[1])
+        return 1
+        """
+        try:
+            return bool(
+                self.redis_client.eval(
+                    script, 1, REDIS_KEY_SENTIMENT_RUN_SLOT_LEASE, str(slot)
+                )
+            )
+        except Exception as e:
+            logger.exception("[Redis] Releasing sentiment run slot failed: %s", e)
             return False
 
     # ------------------------------------------------------------------
