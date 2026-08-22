@@ -67,6 +67,27 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(response, {"algoId": 123})
         self.manager.redis_client.set.assert_called_once_with("order:123", "trade-1")
 
+    def test_notional_rejection_is_attached_to_decision(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.calculate_risk_position_size = MagicMock(return_value=(0.004, 2))
+        self.manager.validate_notional = MagicMock(return_value=False)
+
+        response = self.manager.place_order(
+            {"BTCUSDT": 0.01},
+            "BTCUSDT",
+            "BUY",
+            price=1000,
+            sl=990,
+            target=1020,
+            trade_id="decision-1",
+        )
+
+        self.assertEqual(response, (None, None, None))
+        self.manager.mongo_handler.append_decision_event.assert_called_once()
+        decision_id, event = self.manager.mongo_handler.append_decision_event.call_args.args
+        self.assertEqual(decision_id, "decision-1")
+        self.assertEqual(event["reason"], "minimum_notional")
+
 
 class TestTradeChecker(unittest.TestCase):
     def test_order_classification(self):

@@ -40,6 +40,7 @@ from orbit.core.order_manager import OrderManager
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
 from orbit.core.performance_reporter import PerformanceReporter
+from orbit.core.testnet_reporter import TestnetDailyReporter
 from orbit.core.execution import ExecutionMode
 from orbit.utils.utils import get_indian_time
 
@@ -100,6 +101,7 @@ class BinanceAutomation(ExceptionManager):
         trade_checker: Optional[TradeChecker] = None,
         order_manager: Optional[OrderManager] = None,
         croner: Optional[Croner] = None,
+        testnet_reporter: Optional[TestnetDailyReporter] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__()
@@ -111,6 +113,7 @@ class BinanceAutomation(ExceptionManager):
         self.order_manager: OrderManager = order_manager or OrderManager()
         self.trade_checker: TradeChecker = trade_checker or TradeChecker(order_manager=self.order_manager)
         self._croner: Optional[Croner] = croner
+        self._testnet_reporter = testnet_reporter
 
         # Configuration
         self.trading_pairs: List[str] = config_json["trading_pairs"]
@@ -248,10 +251,6 @@ class BinanceAutomation(ExceptionManager):
         time.sleep(0.5)
 
         if not order_response:
-            if decision_id and self.order_manager.mongo_handler is not None:
-                self.order_manager.mongo_handler.append_decision_event(
-                    decision_id, {"status": "order_rejected"}
-                )
             self.send_alerts(data=None, description=f"Order failed for {symbol}")
             return
 
@@ -408,6 +407,18 @@ class BinanceAutomation(ExceptionManager):
         monitor_thread.start()
 
         self.handle_crons()
+
+        reporter = self._testnet_reporter or TestnetDailyReporter.from_env(
+            self.order_manager.mongo_handler
+        )
+        if reporter is not None:
+            report_thread = threading.Thread(
+                target=reporter.run_forever,
+                daemon=True,
+                name="TestnetDailyReporterThread",
+            )
+            report_thread.start()
+            self.workers_to_monitor.append(report_thread)
 
         trade_thread = threading.Thread(target=self.start_trade_checker, daemon=True, name="TradeCheckerThread")
         trade_thread.start()

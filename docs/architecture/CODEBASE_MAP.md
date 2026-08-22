@@ -10,6 +10,7 @@ Use this page as the entry point when loading Orbit into a limited context windo
 | Positions | Maintains stops, targets, cooldowns, and live prices | `core/trade_checker.py`, `core/binance_ws_manager.py` |
 | State | Owns MongoDB market data and Redis trade mappings | `core/mongo_handler.py`, `core/redis_manager.py` |
 | Intelligence | Runs Codex-authenticated web analysis and persists validated sentiment | `core/sentimen_cron.py`, `market_intelligence/sentimental_workflow.py` |
+| Testnet reporting | Publishes daily decision-ledger evidence to the linked GitHub Project for guarded Codex analysis | `core/testnet_reporter.py` |
 | Strategies | Implements production and research signal logic | `strategies/` |
 
 All package paths above are relative to `src/orbit/`. Configuration belongs in
