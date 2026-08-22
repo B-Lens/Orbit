@@ -212,6 +212,11 @@ class OrderManager(AuthenticationManager, RedisManager):
                 {"status": "order_rejected", "reason": reason, **details},
             )
 
+    @staticmethod
+    def client_order_id_for_trade(trade_id: str) -> str:
+        """Return Orbit's deterministic Binance client order identifier."""
+        return f"o{str(trade_id).replace('-', '')[:32]}"
+
     def fixed_asset_allocated(self, symbol: str, price: float) -> float:
         """Compute the coin quantity affordable from the fixed USDT allocation.
 
@@ -557,6 +562,13 @@ class OrderManager(AuthenticationManager, RedisManager):
                 self._record_order_rejection(trade_id, "missing_limit_price")
                 return None, None, None
 
+            time_in_force = time_in_force.upper()
+            if time_in_force == "GTD":
+                minimum_gtd = int((time.time() + 600) * 1000)
+                if good_till_date is None or good_till_date <= minimum_gtd:
+                    self._record_order_rejection(trade_id, "invalid_good_till_date")
+                    return None, None, None
+
             execution_mode = self.execution_settings.mode_for(symbol)
             if execution_mode is ExecutionMode.PAPER:
                 logger.warning("Order blocked: %s is configured for paper mode", symbol)
@@ -722,14 +734,10 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "recvWindow": 60000,
             }
             if time_in_force == "GTD":
-                if good_till_date is None:
-                    self._record_order_rejection(trade_id, "missing_good_till_date")
-                    return None, None, None
                 params["goodTillDate"] = good_till_date
             if trade_id:
                 # Binance client order IDs are capped at 36 characters.
-                compact_id = str(trade_id).replace("-", "")[:32]
-                params["newClientOrderId"] = f"o{compact_id}"
+                params["newClientOrderId"] = self.client_order_id_for_trade(trade_id)
 
             order_response = futures_client.new_order(**params)
             time.sleep(2)

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import uuid
 
 import yaml
+from binance.error import ClientError
 
 from config.config import load_config
 from orbit.core.execution import ExecutionMode, ExecutionSettings, FUTURES_TESTNET_URL
@@ -104,9 +105,46 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
             f"{symbol} Testnet account must be flat; position amounts={amounts}",
         )
 
-    def _cleanup_probe(self, symbol: str, order_id: int) -> None:
+    def _flatten_probe_position(self, symbol: str) -> None:
+        client = self.manager.future_client_for(symbol)
+        for position in self._positions_for(symbol):
+            amount = float(position.get("positionAmt", 0) or 0)
+            if amount:
+                client.new_order(
+                    symbol=symbol,
+                    side="SELL" if amount > 0 else "BUY",
+                    type="MARKET",
+                    quantity=str(abs(amount)),
+                    reduceOnly="true",
+                    recvWindow=60000,
+                )
+
+    def _cleanup_probe(
+        self, symbol: str, order_id: int | None, client_order_id: str
+    ) -> None:
         client = self.manager.future_client_for(symbol)
         order = None
+        if order_id is None:
+            for _ in range(5):
+                try:
+                    order = client.query_order(
+                        symbol=symbol,
+                        origClientOrderId=client_order_id,
+                        recvWindow=60000,
+                    )
+                    order_id = int(order["orderId"])
+                    break
+                except ClientError as error:
+                    if getattr(error, "error_code", None) != -2013:
+                        time.sleep(1)
+                        continue
+                    time.sleep(1)
+
+        if order_id is None:
+            self._flatten_probe_position(symbol)
+            self._assert_flat(symbol)
+            return
+
         for _ in range(5):
             self.manager.cancel_order(symbol, order_id)
             order = client.query_order(
@@ -119,16 +157,7 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
         assert order is not None
         self.assertIn(order.get("status"), {"CANCELED", "FILLED", "EXPIRED"})
 
-        executed_quantity = float(order.get("executedQty", 0) or 0)
-        if executed_quantity > 0:
-            client.new_order(
-                symbol=symbol,
-                side="SELL",
-                type="MARKET",
-                quantity=str(executed_quantity),
-                reduceOnly="true",
-                recvWindow=60000,
-            )
+        self._flatten_probe_position(symbol)
 
         open_orders = client.get_open_orders(symbol=symbol, recvWindow=60000)
         self.assertNotIn(order_id, {int(item["orderId"]) for item in open_orders})
@@ -147,6 +176,7 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
                 stop_loss = entry_price * 0.99
                 take_profit = entry_price * 1.02
                 decision_id = f"ci-{symbol.lower()}-{uuid.uuid4().hex[:12]}"
+                client_order_id = self.manager.client_order_id_for_trade(decision_id)
                 order_id = None
 
                 try:
@@ -181,8 +211,11 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
                     self.assertEqual(request["symbol"], symbol)
                     self.assertEqual(str(response.get("symbol", symbol)), symbol)
                 finally:
-                    if order_id is not None:
-                        self._cleanup_probe(symbol, int(order_id))
+                    self._cleanup_probe(
+                        symbol,
+                        int(order_id) if order_id is not None else None,
+                        client_order_id,
+                    )
 
 
 if __name__ == "__main__":

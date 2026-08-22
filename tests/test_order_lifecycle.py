@@ -119,6 +119,23 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(params["timeInForce"], "GTD")
         self.assertEqual(params["goodTillDate"], 1_900_000_000_000)
 
+    def test_invalid_gtd_is_rejected_before_exchange_mutation(self):
+        response = self.manager.place_order(
+            {"BTCUSDT": 0.01},
+            "BTCUSDT",
+            "BUY",
+            price=100,
+            sl=98,
+            target=104,
+            trade_id="probe-2",
+            time_in_force="GTD",
+            good_till_date=None,
+        )
+
+        self.assertEqual(response, (None, None, None))
+        self.manager.future_client.change_leverage.assert_not_called()
+        self.manager.future_client.new_order.assert_not_called()
+
 
 class TestTradeChecker(unittest.TestCase):
     def test_order_classification(self):
