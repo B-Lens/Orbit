@@ -22,8 +22,9 @@ OHLCV history, sentiment results, trade decisions, and exchange income.
 
 ## Safety model
 
-- Every configured strategy is explicitly pinned to `testnet`.
-- Startup rejects missing, paper, or live strategy modes.
+- Every configured strategy and monitored position symbol explicitly selects
+  `testnet` or `live`; all checked-in mappings currently use `testnet`.
+- Startup rejects missing, paper, and invalid execution modes.
 - `OrderManager` is the only exchange-order gateway.
 - The daily-loss gate fails closed when exchange income cannot be synchronized.
 - Market intelligence can filter signals but cannot place orders.
@@ -45,7 +46,10 @@ poetry run orbit
 
 `config/strategies.yaml` is the single source of truth for strategy ownership and
 order mode. BTC, ETH, BCH, and PAXG are currently pinned to Futures Testnet;
-startup rejects missing, paper, or live modes.
+changing an asset to `live` routes that asset to Binance Futures production and
+requires production credentials. Missing, paper, and invalid modes fail startup.
+Symbols monitored for pre-existing positions are assigned an environment under
+`monitored_assets` in the same file.
 
 Market intelligence uses `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
 CLI `auth.json`. Credentials must stay outside the repository. Each run fails
@@ -58,7 +62,7 @@ closed and preserves the cached sentiment if web-grounded analysis fails.
 | `config/config.json` | Symbols, leverage, fixed allocations, precision, cooldowns, and risk limits. |
 | `config/strategies.yaml` | Symbol-to-strategy ownership and allowed execution modes. |
 | `config/webhooks.yaml` | Discord channel mapping; URLs come from environment variables. |
-| `.env` | Credentials, service endpoints, and per-asset execution modes. |
+| `.env` | Testnet/live credentials and service endpoints; it does not control execution modes. |
 
 ## Architecture
 

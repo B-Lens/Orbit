@@ -28,7 +28,8 @@ Execution is configured per asset in `config/strategies.yaml` with the singular
 `execution_mode` field:
 
 - Every configured strategy currently declares `execution_mode: testnet`.
-- Missing modes and `paper` values fail startup validation.
+- The only accepted values are `testnet` and `live`; missing, `paper`, and
+  invalid values fail startup validation.
 - Symbols monitored only for existing positions are listed under
   `monitored_assets` with an explicit testnet or live environment.
 - BTC, ETH, BCH, and PAXG orders all route to Binance Futures Testnet.
@@ -117,8 +118,9 @@ order path fails closed instead of trading with a stale daily-loss value.
 
 1. Back up `.env`, MongoDB, and the current deployed commit IDs.
 2. Install Orbit from its lockfile; no second repository is required.
-3. Keep every strategy in `config/strategies.yaml` pinned to
-   `execution_mode: testnet` and load Testnet-only credentials.
+3. Select `testnet` or `live` for every strategy and monitored asset in
+   `config/strategies.yaml`. For the initial rollout, keep every mapping on
+   `testnet` and load Testnet credentials.
 4. Start Redis and MongoDB, then start Orbit from the repository root.
 5. Confirm logs show Testnet mode and the expected Orbit commit.
 6. Confirm `trade_decisions` receives no-signal and rejected decisions.
@@ -126,8 +128,9 @@ order path fails closed instead of trading with a stale daily-loss value.
    the Binance Testnet UI.
 8. Confirm `futures_income` includes realized P&L, commissions, and funding.
 9. Observe at least the agreed number of independent trades and market regimes.
-10. Do not promote an asset to live in this rollout. Live-mode support requires
-    a separately reviewed authorization and configuration change.
+10. Promote an asset only through a reviewed change from `execution_mode:
+    testnet` to `execution_mode: live`, with production credentials provisioned
+    outside the repository.
 11. Review drawdown and net performance before approving another asset.
 
 ## Deployment health and rollback
