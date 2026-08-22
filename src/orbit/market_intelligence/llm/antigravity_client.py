@@ -3,6 +3,7 @@
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Callable, Optional
 
@@ -11,6 +12,8 @@ DEFAULT_ANTIGRAVITY_AGENT = "antigravity-preview-05-2026"
 DEFAULT_ANTIGRAVITY_URL = (
     "https://generativelanguage.googleapis.com/v1beta/interactions"
 )
+TRUSTED_ANTIGRAVITY_HOSTS = {"generativelanguage.googleapis.com"}
+GROUNDING_RESULT_TYPES = {"google_search_result", "url_context_result"}
 
 
 class AntigravityClient:
@@ -40,6 +43,18 @@ class AntigravityClient:
         self.endpoint = endpoint or os.getenv(
             "ANTIGRAVITY_API_URL", DEFAULT_ANTIGRAVITY_URL
         )
+        parsed_endpoint = urllib.parse.urlparse(self.endpoint)
+        if (
+            parsed_endpoint.scheme != "https"
+            or parsed_endpoint.hostname not in TRUSTED_ANTIGRAVITY_HOSTS
+            or parsed_endpoint.port not in (None, 443)
+            or parsed_endpoint.username is not None
+            or parsed_endpoint.password is not None
+        ):
+            raise ValueError(
+                "ANTIGRAVITY_API_URL must use HTTPS on "
+                "generativelanguage.googleapis.com"
+            )
         self._urlopen = urlopen
 
     def invoke(self, prompt: str) -> str:
@@ -93,7 +108,14 @@ class AntigravityClient:
 
         output = ""
         steps = data.get("steps")
+        grounded = False
         if isinstance(steps, list):
+            grounded = any(
+                isinstance(step, dict)
+                and step.get("type") in GROUNDING_RESULT_TYPES
+                and bool(step.get("result"))
+                for step in steps
+            )
             for step in reversed(steps):
                 if not isinstance(step, dict) or step.get("type") != "model_output":
                     continue
@@ -107,6 +129,10 @@ class AntigravityClient:
                         and isinstance(part.get("text"), str)
                     )
                 break
+        if not grounded:
+            raise RuntimeError(
+                "Antigravity response contained no successful web-grounding result"
+            )
         if not output.strip():
             raise RuntimeError("Antigravity returned an empty response")
         return output.strip()

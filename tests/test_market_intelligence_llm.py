@@ -238,7 +238,10 @@ def test_antigravity_client_uses_search_tools() -> None:
                 {
                     "status": "completed",
                     "steps": [
-                        {"type": "google_search_call", "arguments": {}},
+                        {
+                            "type": "google_search_result",
+                            "result": [{"url": "https://example.com/market"}],
+                        },
                         {
                             "type": "model_output",
                             "content": [
@@ -265,6 +268,47 @@ def test_antigravity_client_uses_search_tools() -> None:
         {"type": "google_search"},
         {"type": "url_context"},
     ]
+
+
+def test_antigravity_client_rejects_ungrounded_output() -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "status": "completed",
+                    "steps": [
+                        {
+                            "type": "model_output",
+                            "content": [{"type": "text", "text": "NEUTRAL"}],
+                        }
+                    ],
+                }
+            ).encode()
+
+    client = AntigravityClient(
+        api_key="secret", urlopen=lambda *_args, **_kwargs: Response()
+    )
+    with pytest.raises(RuntimeError, match="no successful web-grounding result"):
+        client.invoke_web_search("Assess crypto")
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://generativelanguage.googleapis.com/v1beta/interactions",
+        "https://attacker.example/v1beta/interactions",
+        "https://generativelanguage.googleapis.com.attacker.example/interactions",
+    ],
+)
+def test_antigravity_client_rejects_untrusted_endpoint(endpoint: str) -> None:
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        AntigravityClient(api_key="secret", endpoint=endpoint)
 
 
 def test_llm_web_search_falls_back_to_antigravity() -> None:
