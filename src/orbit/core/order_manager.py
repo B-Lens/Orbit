@@ -192,8 +192,25 @@ class OrderManager(AuthenticationManager, RedisManager):
             * 1000
         )
         client = self.future_client_for(symbol) if symbol else self.future_client
-        tracker = PerformanceTracker(client, self.mongo_handler)
+        tracker = PerformanceTracker(
+            client,
+            self.mongo_handler,
+            self.execution_settings.mode_for(symbol or "").value,
+        )
         return tracker.sync(start_ms).net_pnl
+
+    def _record_order_rejection(
+        self,
+        trade_id: Optional[str],
+        reason: str,
+        **details: Any,
+    ) -> None:
+        """Attach an exact execution rejection to its immutable decision row."""
+        if trade_id and self.mongo_handler is not None:
+            self.mongo_handler.append_decision_event(
+                trade_id,
+                {"status": "order_rejected", "reason": reason, **details},
+            )
 
     def fixed_asset_allocated(self, symbol: str, price: float) -> float:
         """Compute the coin quantity affordable from the fixed USDT allocation.
@@ -489,6 +506,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                     description="place_order called without price",
                     fields={"symbol": symbol, "side": side},
                 )
+                self._record_order_rejection(trade_id, "missing_limit_price")
                 return None, None, None
 
             execution_mode = self.execution_settings.mode_for(symbol)
@@ -499,6 +517,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                     description="Order blocked in paper mode",
                     fields={"symbol": symbol, "side": side},
                 )
+                self._record_order_rejection(trade_id, "paper_mode")
                 return None, None, None
 
             effective_trade_id = trade_id or symbol
@@ -524,6 +543,12 @@ class OrderManager(AuthenticationManager, RedisManager):
                     description=f"Not Enough funds for {symbol}, quantity: {quantity}, balance_available: {balance_available}",
                     fields=None,
                 )
+                self._record_order_rejection(
+                    trade_id,
+                    "insufficient_funds_or_quantity",
+                    balance=balance_available,
+                    quantity=quantity,
+                )
                 return None, None, None
 
             precision = self.config["trading_pairs_precision"][symbol]
@@ -534,6 +559,9 @@ class OrderManager(AuthenticationManager, RedisManager):
                     data=None,
                     description=f"Computed quantity <= 0 for {symbol}",
                     fields={"symbol": symbol, "raw_quantity": quantity, "leverage": leverage, "balance_available": balance_available},
+                )
+                self._record_order_rejection(
+                    trade_id, "quantity_non_positive", quantity=quantity
                 )
                 return None, None, None
 
@@ -549,6 +577,7 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             if sl is None:
                 logger.error("Order rejected: a stop loss is required by risk policy")
+                self._record_order_rejection(trade_id, "stop_loss_required")
                 return None, None, None
 
             risk_decision = self.risk_guard.evaluate(
@@ -568,16 +597,33 @@ class OrderManager(AuthenticationManager, RedisManager):
                     description=f"Order rejected by risk guard: {risk_decision.reason}",
                     fields={"symbol": symbol, **risk_decision.metrics},
                 )
+                self._record_order_rejection(
+                    trade_id, risk_decision.reason, **risk_decision.metrics
+                )
                 return None, None, None
 
             if not self.validate_notional(symbol, price, quantity):
                 filters = self.get_symbol_filters(symbol)
-                min_notional = filters["MIN_NOTIONAL"]["notional"] if filters.get("MIN_NOTIONAL") else "N/A"
-                logger.error(f"[NOTIONAL ERROR] {symbol} LIMIT order rejected. Required: {min_notional}, Got: {price * quantity}")
+                minimum_notional = (
+                    filters["MIN_NOTIONAL"]["notional"]
+                    if filters.get("MIN_NOTIONAL")
+                    else "N/A"
+                )
+                logger.error(
+                    f"[NOTIONAL ERROR] {symbol} LIMIT order rejected. "
+                    f"Required: {minimum_notional}, Got: {price * quantity}"
+                )
                 self.send_alerts(
                     data=None,
                     description="Order rejected – Notional too small",
                     fields={"symbol": symbol, "price": price, "qty": quantity},
+                )
+                self._record_order_rejection(
+                    trade_id,
+                    "minimum_notional",
+                    price=price,
+                    quantity=quantity,
+                    minimum_notional=minimum_notional,
                 )
                 return None, None, None
 
@@ -619,6 +665,7 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             if not order_response:
                 logger.error(f"Failed to place LIMIT order for {symbol}")
+                self._record_order_rejection(trade_id, "empty_exchange_response")
                 return None, None, None
 
             self.send_signal_updates(
@@ -652,8 +699,14 @@ class OrderManager(AuthenticationManager, RedisManager):
             return order_response, quantity, field_params
 
         except ClientError as error:
+            self._record_order_rejection(
+                trade_id,
+                "exchange_client_error",
+                error_code=getattr(error, "error_code", None),
+            )
             self.clientExceptionHandler(symbol=symbol, error=error, Location="Order Manager -> place_order")
         except Exception as e:
+            self._record_order_rejection(trade_id, "order_exception")
             self.handle_exception(e, context_description="Exception caught while Placing order")
 
         return None, None, None

@@ -49,6 +49,40 @@ class, strategy package version, execution mode, sentiment, pattern, prices,
 outcome, and reason. This makes rejected opportunities measurable and connects
 returns to the exact signal implementation.
 
+Order-stage failures append an immutable execution event with a machine-readable
+reason such as `minimum_notional`, `daily_loss_limit`, `paper_mode`, or
+`exchange_client_error`. This preserves the difference between a strategy being
+accepted and its exchange order being rejected.
+
+## GitHub Testnet reporting and analysis
+
+When `ORBIT_GITHUB_REPORTING_ENABLED=true`, `TestnetDailyReporterThread` publishes
+the previous UTC day's accepted, rejected, and errored Testnet attempts to one
+idempotent GitHub issue and adds it to the configured Project. The issue includes
+prices, sentiment, strategy identity, decision reason, all execution transitions,
+and fee-aware net P&L. No-signal evaluations are counted but are not trade attempts.
+Before publication, the reporter synchronizes Binance Testnet income from the
+start of the reporting window. Income rows are tagged by execution mode, and the
+report queries only `testnet` rows so mixed live/Testnet deployments cannot blend
+account performance.
+
+The publisher then applies `ai-autonomous`. The existing Codex workflow analyzes
+the evidence and may create a reviewed pull request only for a demonstrated code
+defect. Its task explicitly forbids weakening risk limits, bypassing sentiment, or
+enabling live trading. Keep the `Codex-Automation` environment approval required.
+
+Configure the EC2 service with a fine-grained GitHub token limited to Issues
+(write) on `ipankaj18/Orbit` and Projects (write) on the private Project:
+
+```text
+ORBIT_GITHUB_REPORTING_ENABLED=true
+ORBIT_GITHUB_TOKEN=<secret supplied by the service manager>
+ORBIT_GITHUB_REPOSITORY=ipankaj18/Orbit
+ORBIT_GITHUB_PROJECT_ID=PVT_kwHOBPU1Qs4BhHzU
+```
+
+Never store the token in `.env` inside the checkout, logs, MongoDB, or GitHub.
+
 ## Performance accounting
 
 MongoDB collection `futures_income` upserts exchange income rows by transaction

@@ -36,6 +36,12 @@ Removing and re-adding the label retries the workflow. Only one run per issue
 is allowed at a time. If the generated branch already exists, delete or rename
 that branch before retrying.
 
+Daily Testnet report issues also receive `ai-autonomous` after their complete
+decision evidence has been added to the GitHub Project. Codex must distinguish
+software defects from intentional policy blocks. It may fix a demonstrated bug,
+but must not loosen notional/risk limits, bypass sentiment, or enable live mode.
+Reports with no warranted code change produce only the retained workflow artifact.
+
 ## Requested-change repair
 
 The `repair` job in `.github/workflows/codex-automation.yml` starts when a review

@@ -96,8 +96,19 @@ class MongoHandler(ExceptionManager):
                 [("symbol", ASCENDING), ("timestamp", ASCENDING)]
             )
             self.income_collection = self.db["futures_income"]
+            legacy_income_index = "tranId_1_incomeType_1"
+            if legacy_income_index in self.income_collection.index_information():
+                self.income_collection.drop_index(legacy_income_index)
             self.income_collection.create_index(
-                [("tranId", ASCENDING), ("incomeType", ASCENDING)], unique=True
+                [
+                    ("execution_mode", ASCENDING),
+                    ("tranId", ASCENDING),
+                    ("incomeType", ASCENDING),
+                ],
+                unique=True,
+            )
+            self.income_collection.create_index(
+                [("execution_mode", ASCENDING), ("time", ASCENDING)]
             )
         except Exception as exc:
             logger.exception(f"Error initializing MongoDB: {exc}")
@@ -342,7 +353,48 @@ class MongoHandler(ExceptionManager):
         except Exception as exc:
             self.handle_exception(exc, "Error appending trade decision event")
 
-    def store_income_records(self, records: List[Dict[str, Any]]) -> None:
+    def get_trade_decisions(
+        self,
+        start: datetime,
+        end: datetime,
+        execution_mode: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return decision-ledger rows for a half-open UTC reporting window."""
+        collection = getattr(self, "decision_collection", None)
+        if collection is None:
+            return []
+        query: Dict[str, Any] = {"timestamp": {"$gte": start, "$lt": end}}
+        if execution_mode:
+            query["execution_mode"] = execution_mode
+        try:
+            return list(collection.find(query, {"_id": 0}).sort("timestamp", ASCENDING))
+        except Exception as exc:
+            self.handle_exception(exc, "Error reading trade decisions")
+            return []
+
+    def get_income_records(
+        self, start_ms: int, end_ms: int, execution_mode: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Return immutable exchange-income rows for a half-open time window."""
+        collection = getattr(self, "income_collection", None)
+        if collection is None:
+            return []
+        try:
+            query: Dict[str, Any] = {"time": {"$gte": start_ms, "$lt": end_ms}}
+            if execution_mode:
+                query["execution_mode"] = execution_mode
+            return list(
+                collection.find(
+                    query, {"_id": 0}
+                ).sort("time", ASCENDING)
+            )
+        except Exception as exc:
+            self.handle_exception(exc, "Error reading futures income records")
+            return []
+
+    def store_income_records(
+        self, records: List[Dict[str, Any]], execution_mode: str = "unknown"
+    ) -> None:
         """Upsert Binance income rows used for fee-aware return accounting."""
         collection = getattr(self, "income_collection", None)
         if collection is None:
@@ -350,11 +402,15 @@ class MongoHandler(ExceptionManager):
             return
         for record in records:
             try:
+                stored_record = {**record, "execution_mode": execution_mode}
                 identity = {
+                    "execution_mode": execution_mode,
                     "tranId": record.get("tranId"),
                     "incomeType": record.get("incomeType"),
                 }
-                collection.update_one(identity, {"$setOnInsert": record}, upsert=True)
+                collection.update_one(
+                    identity, {"$setOnInsert": stored_record}, upsert=True
+                )
             except Exception as exc:
                 self.handle_exception(exc, "Error storing futures income record")
 

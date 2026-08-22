@@ -23,12 +23,20 @@ class PerformanceSummary:
 class PerformanceTracker:
     """Normalise and aggregate the exchange's immutable income ledger."""
 
-    def __init__(self, futures_client: Any, mongo_handler: Any = None) -> None:
+    def __init__(
+        self,
+        futures_client: Any,
+        mongo_handler: Any = None,
+        execution_mode: str = "unknown",
+    ) -> None:
         self.futures_client = futures_client
         self.mongo_handler = mongo_handler
+        self.execution_mode = execution_mode
 
     @staticmethod
-    def summarize(records: Iterable[dict[str, Any]], starting_equity: float | None = None) -> PerformanceSummary:
+    def summarize(
+        records: Iterable[dict[str, Any]], starting_equity: float | None = None
+    ) -> PerformanceSummary:
         totals: defaultdict[str, float] = defaultdict(float)
         count = 0
         for record in records:
@@ -63,7 +71,50 @@ class PerformanceTracker:
             params["startTime"] = start_time_ms
         records = self.futures_client.get_income_history(**params)
         if self.mongo_handler is not None:
-            self.mongo_handler.store_income_records(records)
+            self.mongo_handler.store_income_records(records, self.execution_mode)
+        return self.summarize(records)
+
+    def sync_window(
+        self, start_time_ms: int, end_time_ms: int, page_size: int = 1000
+    ) -> PerformanceSummary:
+        """Synchronize all income pages in a half-open exchange-time window."""
+        records: list[dict[str, Any]] = []
+        seen: set[tuple[Any, ...]] = set()
+        cursor = start_time_ms
+        while cursor < end_time_ms:
+            page_records = self.futures_client.get_income_history(
+                startTime=cursor,
+                endTime=end_time_ms - 1,
+                limit=page_size,
+                recvWindow=60000,
+            )
+            if not page_records:
+                break
+            added = 0
+            for record in page_records:
+                identity = (
+                    record.get("tranId"),
+                    record.get("incomeType"),
+                    record.get("time"),
+                    record.get("asset"),
+                    record.get("symbol"),
+                )
+                if identity not in seen:
+                    seen.add(identity)
+                    records.append(record)
+                    added += 1
+            if len(page_records) < page_size:
+                break
+            latest_time = max(int(row.get("time", cursor)) for row in page_records)
+            if latest_time > cursor:
+                cursor = latest_time
+            elif not added:
+                raise RuntimeError(
+                    "Binance income history cannot advance past a full-page "
+                    "timestamp; refusing to publish incomplete accounting"
+                )
+        if self.mongo_handler is not None:
+            self.mongo_handler.store_income_records(records, self.execution_mode)
         return self.summarize(records)
 
     @staticmethod

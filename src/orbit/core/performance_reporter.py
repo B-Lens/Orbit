@@ -11,10 +11,17 @@ logger = logging.getLogger("Orbit")
 
 
 class PerformanceReporter(DiscordManager):
-    def __init__(self, futures_client: Any, mongo_handler: Any = None) -> None:
+    def __init__(
+        self,
+        futures_client: Any,
+        mongo_handler: Any = None,
+        execution_mode: str = "unknown",
+    ) -> None:
         super().__init__()
         self.client = futures_client
-        self.tracker = PerformanceTracker(futures_client, mongo_handler)
+        self.tracker = PerformanceTracker(
+            futures_client, mongo_handler, execution_mode
+        )
 
     def report_last_24_hours(self) -> dict[str, Any]:
         start = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -22,7 +29,9 @@ class PerformanceReporter(DiscordManager):
             startTime=int(start.timestamp() * 1000), recvWindow=60000
         )
         if self.tracker.mongo_handler is not None:
-            self.tracker.mongo_handler.store_income_records(records)
+            self.tracker.mongo_handler.store_income_records(
+                records, self.tracker.execution_mode
+            )
         wallet = float(self.client.account()["totalWalletBalance"])
         summary = self.tracker.summarize(records)
         starting_equity = wallet - summary.net_pnl
