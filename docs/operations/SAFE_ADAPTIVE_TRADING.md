@@ -137,7 +137,11 @@ order path fails closed instead of trading with a stale daily-loss value.
 `OrderManager` path for every symbol in `config/config.json` `trading_pairs`.
 It fetches current Testnet filters and balance, applies the configured precision,
 position sizing, leverage, stop/target geometry, and risk policy, submits a deeply
-off-market limit order with `ros=True`, and cancels the order in `finally`.
+off-market, time-bounded `GTD` limit order with `ros=True`, and cleans it up in
+`finally`. The dedicated Testnet account must start flat. Cleanup retries
+cancellation, reduce-only closes any unexpected fill, and verifies that the probe
+is no longer open and the position is flat; GTD expiry bounds exposure if the
+runner is interrupted.
 
 Create a protected GitHub environment named `Testnet-Integration`, store
 `BINANCE_TESTNET_API_KEY` and `BINANCE_TESTNET_SECRET_KEY` there, and set the

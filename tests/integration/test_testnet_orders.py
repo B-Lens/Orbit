@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
 import unittest
 from unittest.mock import MagicMock
 import uuid
@@ -79,6 +80,59 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
         cls.manager.send_alerts = MagicMock()
         cls.manager.send_logs = MagicMock()
         cls.manager.send_signal_updates = MagicMock()
+        position_mode = cls.manager.future_client_for(cls.symbols[0]).get_position_mode(
+            recvWindow=60000
+        )
+        if position_mode.get("dualSidePosition"):
+            raise AssertionError(
+                "Testnet integration account must use one-way position mode"
+            )
+
+    def _positions_for(self, symbol: str) -> list[dict]:
+        positions = self.manager.future_client_for(symbol).get_position_risk(
+            symbol=symbol, recvWindow=60000
+        )
+        return positions if isinstance(positions, list) else [positions]
+
+    def _assert_flat(self, symbol: str) -> None:
+        amounts = [
+            float(position.get("positionAmt", 0))
+            for position in self._positions_for(symbol)
+        ]
+        self.assertTrue(
+            all(amount == 0 for amount in amounts),
+            f"{symbol} Testnet account must be flat; position amounts={amounts}",
+        )
+
+    def _cleanup_probe(self, symbol: str, order_id: int) -> None:
+        client = self.manager.future_client_for(symbol)
+        order = None
+        for _ in range(5):
+            self.manager.cancel_order(symbol, order_id)
+            order = client.query_order(
+                symbol=symbol, orderId=order_id, recvWindow=60000
+            )
+            if order.get("status") in {"CANCELED", "FILLED", "EXPIRED"}:
+                break
+            time.sleep(1)
+        self.assertIsNotNone(order)
+        assert order is not None
+        self.assertIn(order.get("status"), {"CANCELED", "FILLED", "EXPIRED"})
+
+        executed_quantity = float(order.get("executedQty", 0) or 0)
+        if executed_quantity > 0:
+            client.new_order(
+                symbol=symbol,
+                side="SELL",
+                type="MARKET",
+                quantity=str(executed_quantity),
+                reduceOnly="true",
+                recvWindow=60000,
+            )
+
+        open_orders = client.get_open_orders(symbol=symbol, recvWindow=60000)
+        self.assertNotIn(order_id, {int(item["orderId"]) for item in open_orders})
+        self._assert_flat(symbol)
 
     def test_submit_and_cancel_limit_order_for_every_asset(self) -> None:
         for symbol in self.symbols:
@@ -87,6 +141,7 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
                     self.manager.execution_settings.mode_for(symbol),
                     ExecutionMode.TESTNET,
                 )
+                self._assert_flat(symbol)
                 market_price = self.manager.get_symbol_price(symbol)
                 entry_price = self.manager.adjust_price_tick(symbol, market_price * 0.5)
                 stop_loss = entry_price * 0.99
@@ -105,6 +160,8 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
                         leverage=int(self.config["FUTURE_LEVERAGE"]),
                         ros=True,
                         trade_id=decision_id,
+                        time_in_force="GTD",
+                        good_till_date=int((time.time() + 650) * 1000),
                     )
                     rejection_events = [
                         call.args[1]
@@ -125,11 +182,7 @@ class TestAllAssetTestnetOrders(unittest.TestCase):
                     self.assertEqual(str(response.get("symbol", symbol)), symbol)
                 finally:
                     if order_id is not None:
-                        cancelled = self.manager.cancel_order(symbol, int(order_id))
-                        self.assertIsNotNone(
-                            cancelled,
-                            f"Failed to cancel Testnet order {order_id} for {symbol}",
-                        )
+                        self._cleanup_probe(symbol, int(order_id))
 
 
 if __name__ == "__main__":
