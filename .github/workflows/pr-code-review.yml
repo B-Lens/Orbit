@@ -11,16 +11,10 @@ permissions:
 
 jobs:
   review:
+    # Pin the reusable workflow revision that loads policy from the PR base commit.
     uses: ipankaj18/code-kit/.github/workflows/pr-code-review.yml@main
     with:
-      review_prompt: >-
-        Review this pull request as a strict production-safety gate for a
-        continuously running automated cryptocurrency trading system. Inspect the
-        complete diff and enough surrounding code to prove each finding. Focus only
-        on actionable correctness, security, data-integrity, trading-risk, and
-        deployment defects introduced by the diff. Preserve paper/Testnet/live
-        environment separation. Ignore style, documentation preferences,
-        speculative concerns, and pre-existing issues outside the diff.
+      review_prompt_path: .github/codex/prompt-review.md
     secrets:
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
       ANTIGRAVITY_OAUTH_TOKEN: ${{ secrets.ANTIGRAVITY_OAUTH_TOKEN }}
