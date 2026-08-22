@@ -81,7 +81,7 @@ class TestExecutionSettings(unittest.TestCase):
                     "    execution_mode: paper\n"
                 ),
             ),
-            self.assertRaisesRegex(ValueError, "only testnet or live is allowed"),
+            self.assertRaisesRegex(ValueError, "execution_mode: testnet or live"),
         ):
             ExecutionSettings.from_config("strategies.yaml")
 
