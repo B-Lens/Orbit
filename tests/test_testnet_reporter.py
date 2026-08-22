@@ -115,6 +115,29 @@ class TestGitHubProjectClient(unittest.TestCase):
             graphql_call.kwargs["json"]["variables"]["content"], "issue-node"
         )
 
+    def test_obsolete_generated_report_comments_are_removed(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        existing = {
+            "title": "daily",
+            "number": 7,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/7",
+            "labels": [{"name": "testnet-report"}, {"name": "ai-autonomous"}],
+        }
+        stale = {
+            "body": "<!-- orbit-testnet-report-part:2 -->\nold evidence",
+            "url": "https://api.github.test/comments/2",
+        }
+        client._call = MagicMock(side_effect=[[existing], existing, {}, [stale], {}])
+
+        client.publish("daily", "corrected short body")
+
+        delete_call = client._call.call_args_list[-1]
+        self.assertEqual(delete_call.args, ("DELETE", stale["url"]))
+
 
 if __name__ == "__main__":
     unittest.main()

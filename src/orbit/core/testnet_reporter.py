@@ -254,6 +254,10 @@ class GitHubProjectClient:
                 "<!-- orbit-testnet-report-part:"
             )
         }
+        expected_markers = {
+            f"<!-- orbit-testnet-report-part:{part_number} -->"
+            for part_number in range(2, len(parts) + 1)
+        }
         for part_number, part in enumerate(parts[1:], start=2):
             marker = f"<!-- orbit-testnet-report-part:{part_number} -->"
             comment_body = f"{marker}\n{part}"
@@ -264,6 +268,9 @@ class GitHubProjectClient:
                 )
             else:
                 self._call("POST", comments_url, json={"body": comment_body})
+        for marker, stale_comment in report_comments.items():
+            if marker not in expected_markers:
+                self._call("DELETE", str(stale_comment["url"]))
 
         current_labels = {item["name"] for item in issue.get("labels", [])}
         if AGENT_LABEL not in current_labels:
