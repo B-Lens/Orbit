@@ -19,14 +19,21 @@ class TestExecutionSettings(unittest.TestCase):
             settings = ExecutionSettings.from_config()
         self.assertTrue(settings.can_submit_orders)
         self.assertEqual(
-            settings.asset_modes,
+            set(settings.asset_modes),
             {
-                "BTCUSDT": ExecutionMode.TESTNET,
-                "ETHUSDT": ExecutionMode.TESTNET,
-                "BCHUSDT": ExecutionMode.TESTNET,
-                "PAXGUSDT": ExecutionMode.TESTNET,
+                "BTCUSDT",
+                "ETHUSDT",
+                "BCHUSDT",
+                "PAXGUSDT",
+                "BNBUSDT",
+                "MKRUSDT",
+                "LTCUSDT",
+                "SOLUSDT",
+                "ATOMUSDT",
+                "XRPUSDT",
             },
         )
+        self.assertEqual(set(settings.asset_modes.values()), {ExecutionMode.TESTNET})
 
     def test_missing_mode_is_rejected(self):
         with (
@@ -50,6 +57,7 @@ class TestExecutionSettings(unittest.TestCase):
                 Path,
                 "read_text",
                 return_value=(
+                    "live_assets: [BCHUSDT]\n"
                     "strategies:\n  BCHUSDT:\n    strategy: example.Strategy\n"
                     "    execution_mode: live\n"
                 ),
@@ -72,6 +80,21 @@ class TestExecutionSettings(unittest.TestCase):
         ):
             ExecutionSettings.from_config("strategies.yaml")
 
+    def test_live_mode_requires_exact_config_allowlist(self):
+        with (
+            patch.object(
+                Path,
+                "read_text",
+                return_value=(
+                    "live_assets: []\n"
+                    "strategies:\n  BCHUSDT:\n    strategy: example.Strategy\n"
+                    "    execution_mode: live\n"
+                ),
+            ),
+            self.assertRaisesRegex(ValueError, "live_assets must exactly match"),
+        ):
+            ExecutionSettings.from_config("strategies.yaml")
+
     def test_testnet_credentials_are_required(self):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "testnet credentials"):
@@ -84,6 +107,7 @@ class TestExecutionSettings(unittest.TestCase):
                 Path,
                 "read_text",
                 return_value=(
+                    "live_assets: [BCHUSDT]\n"
                     "strategies:\n  BCHUSDT:\n    strategy: example.Strategy\n"
                     "    execution_mode: live\n"
                 ),

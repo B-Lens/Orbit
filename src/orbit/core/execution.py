@@ -86,6 +86,40 @@ class ExecutionSettings:
                 )
             asset_modes[symbol] = mode
 
+        monitored_assets = document.get("monitored_assets", {})
+        if not isinstance(monitored_assets, dict):
+            raise ValueError("monitored_assets must be a symbol-to-mode map")
+        for raw_symbol, raw_mode in monitored_assets.items():
+            symbol = str(raw_symbol).strip().upper()
+            if not symbol or symbol in asset_modes:
+                raise ValueError(f"Invalid or duplicate monitored asset: {symbol}")
+            try:
+                mode = ExecutionMode(str(raw_mode).lower())
+            except (ValueError, AttributeError) as exc:
+                raise ValueError(
+                    f"Monitored asset {symbol} must define testnet or live mode"
+                ) from exc
+            if mode not in (ExecutionMode.TESTNET, ExecutionMode.LIVE):
+                raise ValueError(
+                    f"Monitored asset {symbol} uses {mode.value}; "
+                    "only testnet or live is allowed"
+                )
+            asset_modes[symbol] = mode
+
+        raw_live_assets = document.get("live_assets", [])
+        if not isinstance(raw_live_assets, list):
+            raise ValueError("live_assets must be a list of symbols")
+        configured_live_assets = {
+            str(symbol).strip().upper() for symbol in raw_live_assets
+        }
+        actual_live_assets = {
+            symbol for symbol, mode in asset_modes.items() if mode is ExecutionMode.LIVE
+        }
+        if configured_live_assets != actual_live_assets:
+            raise ValueError(
+                "live_assets must exactly match symbols configured for live execution"
+            )
+
         active_modes = frozenset(asset_modes.values())
         if ExecutionMode.TESTNET in active_modes and not (
             os.getenv("BINANCE_TESTNET_API_KEY")

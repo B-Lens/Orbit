@@ -118,13 +118,14 @@ class AuthenticationManager(ExceptionManager):
 
         self.trading_pairs: List[str] = self.config["trading_pairs"]
         self.trade_checker_pair: List[str] = self.config["trade_checker_pair"]
-        unknown_assets = set(self.execution_settings.asset_modes) - set(self.trading_pairs)
+        configured_assets = set(self.trading_pairs) | set(self.trade_checker_pair)
+        unknown_assets = set(self.execution_settings.asset_modes) - configured_assets
         if unknown_assets:
             raise ValueError(
                 "Execution modes configured for unknown trading assets: "
                 + ", ".join(sorted(unknown_assets))
             )
-        missing_assets = set(self.trading_pairs) - set(self.execution_settings.asset_modes)
+        missing_assets = configured_assets - set(self.execution_settings.asset_modes)
         if missing_assets and settings_loaded_from_config:
             raise ValueError(
                 "Trading assets missing strategy execution modes: "

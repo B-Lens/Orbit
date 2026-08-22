@@ -1,3 +1,13 @@
+live_assets: []
+
+monitored_assets:
+  BNBUSDT: testnet
+  MKRUSDT: testnet
+  LTCUSDT: testnet
+  SOLUSDT: testnet
+  ATOMUSDT: testnet
+  XRPUSDT: testnet
+
 strategies:
   BCHUSDT:
     strategy: orbit.strategies.reversal_strategy.BollingerAdaptiveReversalStrategyBCH
