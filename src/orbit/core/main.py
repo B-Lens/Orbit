@@ -140,6 +140,7 @@ class BinanceAutomation(ExceptionManager):
         action: str,
         quantity: float,
         price: float,
+        decision_id: Optional[str] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
 
@@ -167,6 +168,18 @@ class BinanceAutomation(ExceptionManager):
                         break
 
                     if status in ("CANCELED", "REJECTED", "EXPIRED"):
+                        if (
+                            decision_id
+                            and self.order_manager.mongo_handler is not None
+                        ):
+                            self.order_manager.mongo_handler.append_decision_event(
+                                decision_id,
+                                {
+                                    "event_id": f"order_{status.lower()}:{symbol}:{order_id}",
+                                    "status": f"order_{status.lower()}",
+                                    "order_id": order_id,
+                                },
+                            )
                         self.send_alerts(
                             data=None,
                             description=f"Order {order_id} for {symbol} was {status.lower()}",
@@ -175,6 +188,20 @@ class BinanceAutomation(ExceptionManager):
                         return
 
                     if status == "FILLED":
+                        if (
+                            decision_id
+                            and self.order_manager.mongo_handler is not None
+                        ):
+                            self.order_manager.mongo_handler.append_decision_event(
+                                decision_id,
+                                {
+                                    "event_id": f"order_filled:{symbol}:{order_id}",
+                                    "status": "order_filled",
+                                    "order_id": order_id,
+                                    "executed_quantity": order.get("executedQty", quantity),
+                                    "average_price": order.get("avgPrice"),
+                                },
+                            )
                         self.trade_checker.set_cooldown(symbol)
                         self.trades[symbol] = {
                             "symbol": symbol,
@@ -199,12 +226,21 @@ class BinanceAutomation(ExceptionManager):
         # TIMEOUT → Cancel order
         try:
             cancel_result = self.order_manager.cancel_order(symbol, order_id)
+            assert cancel_result and cancel_result.get("status") == "CANCELED", "Cancellation failed"
+            if decision_id and self.order_manager.mongo_handler is not None:
+                self.order_manager.mongo_handler.append_decision_event(
+                    decision_id,
+                    {
+                        "event_id": f"order_timeout_cancelled:{symbol}:{order_id}",
+                        "status": "order_timeout_cancelled",
+                        "order_id": order_id,
+                    },
+                )
             self.send_alerts(
                 data=None,
                 description=f"Order {order_id} for {symbol} cancelled (10 min timeout)",
                 fields=cancel_result,
             )
-            assert cancel_result.get("status") == "CANCELED", "Cancellation failed"
         except Exception as e:
             self.handle_exception(e, context_description=f"Exception cancelling timed-out order {order_id} for {symbol}")
 
@@ -255,18 +291,16 @@ class BinanceAutomation(ExceptionManager):
             return
 
         order_id = order_response.get("orderId")
-        if decision_id and self.order_manager.mongo_handler is not None:
-            self.order_manager.mongo_handler.append_decision_event(
-                decision_id,
-                {
-                    "status": "order_submitted",
-                    "order_id": order_id,
-                    "client_order_id": order_response.get("clientOrderId"),
-                },
-            )
         monitor_thread = threading.Thread(
             target=self.monitor_order_execution,
-            args=(symbol, order_id, action, quantity, order_request["price"]),
+            args=(
+                symbol,
+                order_id,
+                action,
+                quantity,
+                order_request["price"],
+                decision_id,
+            ),
             daemon=True,
             name=f"OrderMonitor-{symbol}-{order_id}",
         )

@@ -7,6 +7,22 @@ from orbit.core.mongo_handler import MongoHandler
 
 
 class TestDataCollector(unittest.TestCase):
+    def test_decision_event_identity_prevents_duplicate_append(self):
+        handler = MongoHandler.__new__(MongoHandler)
+        handler.decision_collection = MagicMock()
+
+        handler.append_decision_event(
+            "decision-1",
+            {"event_id": "order_submitted:BTCUSDT:123", "status": "order_submitted"},
+        )
+
+        query = handler.decision_collection.update_one.call_args.args[0]
+        self.assertEqual(query["decision_id"], "decision-1")
+        self.assertEqual(
+            query["execution_events.event_id"],
+            {"$ne": "order_submitted:BTCUSDT:123"},
+        )
+
     def test_converts_binance_klines_without_network_or_database(self):
         handler = MongoHandler.__new__(MongoHandler)
         handler.get_binance_klines = MagicMock(

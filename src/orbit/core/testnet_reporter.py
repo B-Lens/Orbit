@@ -19,6 +19,57 @@ logger = logging.getLogger("Orbit")
 REPORT_LABEL = "testnet-report"
 AGENT_LABEL = "ai-autonomous"
 REPORTABLE_OUTCOMES = {"accepted", "rejected", "error"}
+WEEKLY_TITLE_PREFIX = "Orbit Testnet weekly report: "
+
+
+def _in_window(value: Any, start: datetime, end: datetime) -> bool:
+    if not isinstance(value, datetime):
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return start <= value.astimezone(timezone.utc) < end
+
+
+def _event_counts(
+    decisions: Iterable[Mapping[str, Any]],
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> Counter[str]:
+    return Counter(
+        str(event.get("status", "unknown"))
+        for row in decisions
+        for event in row.get("execution_events", [])
+        if start is None
+        or end is None
+        or _in_window(event.get("timestamp"), start, end)
+    )
+
+
+def _income_risk_metrics(
+    income_records: Iterable[Mapping[str, Any]],
+) -> tuple[Optional[float], float, int]:
+    """Return realized-PnL profit factor, max net-income drawdown, and exit events."""
+    records = sorted(income_records, key=lambda row: int(row.get("time", 0) or 0))
+    realized = [
+        float(row.get("income", 0) or 0)
+        for row in records
+        if str(row.get("incomeType", "")).upper() == "REALIZED_PNL"
+        and float(row.get("income", 0) or 0) != 0
+    ]
+    gross_profit = sum(value for value in realized if value > 0)
+    gross_loss = abs(sum(value for value in realized if value < 0))
+    profit_factor = gross_profit / gross_loss if gross_loss else None
+
+    equity = peak = max_drawdown = 0.0
+    for row in records:
+        equity += float(row.get("income", 0) or 0)
+        peak = max(peak, equity)
+        max_drawdown = max(max_drawdown, peak - equity)
+    return profit_factor, max_drawdown, len(realized)
+
+
+def _format_metric(value: Optional[float]) -> str:
+    return "N/A" if value is None else f"{value:.2f}"
 
 
 def _format_value(value: Any) -> str:
@@ -36,20 +87,33 @@ def build_report_body(
 ) -> str:
     """Render every testnet trade attempt and execution transition as Markdown."""
     all_decisions = list(decisions)
-    trade_attempts = [
-        row for row in all_decisions if str(row.get("outcome")) in REPORTABLE_OUTCOMES
+    start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    window_decisions = [
+        row
+        for row in all_decisions
+        if _in_window(row.get("timestamp"), start, end)
     ]
-    counts = Counter(str(row.get("outcome", "unknown")) for row in all_decisions)
+    trade_attempts = [
+        row
+        for row in window_decisions
+        if str(row.get("outcome")) in REPORTABLE_OUTCOMES
+    ]
+    counts = Counter(str(row.get("outcome", "unknown")) for row in window_decisions)
     reasons = Counter(
         str(row.get("reason", "unknown"))
         for row in trade_attempts
         if row.get("outcome") != "accepted"
     )
-    for row in trade_attempts:
+    for row in all_decisions:
         for event in row.get("execution_events", []):
-            if event.get("status") == "order_rejected":
+            if (
+                event.get("status") == "order_rejected"
+                and _in_window(event.get("timestamp"), start, end)
+            ):
                 reasons[str(event.get("reason", "unknown"))] += 1
 
+    events = _event_counts(all_decisions, start, end)
     performance = PerformanceTracker.summarize(dict(row) for row in income_records)
     lines = [
         f"# Orbit Testnet daily report — {report_date.isoformat()}",
@@ -61,6 +125,9 @@ def build_report_body(
         "",
         f"- Trade attempts: **{len(trade_attempts)}**",
         f"- Accepted signals: **{counts['accepted']}**",
+        f"- Orders submitted: **{events['order_submitted']}**",
+        f"- Orders filled: **{events['order_filled']}**",
+        f"- Order-stage rejections: **{events['order_rejected']}**",
         f"- Strategy/risk rejections: **{counts['rejected']}**",
         f"- Errors: **{counts['error']}**",
         f"- No-signal evaluations (counted, not expanded): **{counts['no_signal']}**",
@@ -87,6 +154,7 @@ def build_report_body(
             "; ".join(
                 json.dumps(event, default=str, sort_keys=True)
                 for event in row.get("execution_events", [])
+                if _in_window(event.get("timestamp"), start, end)
             )
             or "—"
         )
@@ -124,6 +192,107 @@ def build_report_body(
             "a demonstrated software defect. Do not relax risk limits, bypass sentiment, "
             "change an asset to live mode, or expose credentials. If behavior is intentional, "
             "make no code change and explain that conclusion in the workflow artifact.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_weekly_report_body(
+    week_start: date,
+    decisions: Iterable[Mapping[str, Any]],
+    income_records: Iterable[Mapping[str, Any]],
+) -> str:
+    """Render one completed UTC week's operational and performance evidence."""
+    all_decisions = list(decisions)
+    income = list(income_records)
+    start = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
+    end = start + timedelta(days=7)
+    attempts = [
+        row
+        for row in all_decisions
+        if _in_window(row.get("timestamp"), start, end)
+        and str(row.get("outcome")) in REPORTABLE_OUTCOMES
+    ]
+    outcomes = Counter(str(row.get("outcome", "unknown")) for row in attempts)
+    events = _event_counts(all_decisions, start, end)
+    performance = PerformanceTracker.summarize(dict(row) for row in income)
+    profit_factor, max_drawdown, realized_events = _income_risk_metrics(income)
+    accepted = outcomes["accepted"]
+    order_rejections = events["order_rejected"]
+    cohort_rejections = _event_counts(attempts, start, end)["order_rejected"]
+    rejection_rate = (cohort_rejections / accepted * 100) if accepted else None
+    week_end = week_start + timedelta(days=6)
+
+    symbol_income: dict[str, list[dict[str, Any]]] = {}
+    for row in income:
+        symbol_income.setdefault(str(row.get("symbol") or "ACCOUNT"), []).append(
+            dict(row)
+        )
+    strategy_rows = Counter(
+        (str(row.get("symbol") or "—"), str(row.get("strategy") or "—"))
+        for row in attempts
+    )
+
+    lines = [
+        f"# Orbit Testnet weekly report — {week_start.isoformat()} to {week_end.isoformat()}",
+        "",
+        "> Completed UTC week. Submitted, filled, and realized-PnL events are reported "
+        "separately; none is inferred to mean another.",
+        "",
+        "## Weekly scorecard",
+        "",
+        f"- Trade attempts: **{len(attempts)}**",
+        f"- Accepted signals: **{accepted}**",
+        f"- Orders submitted: **{events['order_submitted']}**",
+        f"- Orders filled: **{events['order_filled']}**",
+        f"- Order-stage rejections: **{order_rejections}** "
+        f"(**{_format_metric(rejection_rate)}%** of same-week accepted signals)",
+        f"- Strategy/risk rejections: **{outcomes['rejected']}**",
+        f"- Errors: **{outcomes['error']}**",
+        f"- Realized-PnL events: **{realized_events}**",
+        f"- Net P&L after fees/funding: **{performance.net_pnl:.8f} USDT**",
+        f"- Realized-PnL profit factor: **{_format_metric(profit_factor)}**",
+        f"- Maximum ledger drawdown: **{max_drawdown:.8f} USDT**",
+        f"- Protective orders submitted: **{events['protective_order_submitted']}**",
+        f"- Protective-order failures: **{events['protective_order_failed']}**",
+        "",
+        "## Performance by symbol",
+        "",
+        "| Symbol | Realized P&L | Commission | Funding | Net P&L |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for symbol, records in sorted(symbol_income.items()):
+        summary = PerformanceTracker.summarize(records)
+        lines.append(
+            f"| {_format_value(symbol)} | {summary.realized_pnl:.8f} | "
+            f"{summary.commission:.8f} | {summary.funding:.8f} | {summary.net_pnl:.8f} |"
+        )
+    if not symbol_income:
+        lines.append("| — | 0.00000000 | 0.00000000 | 0.00000000 | 0.00000000 |")
+
+    lines.extend(
+        [
+            "",
+            "## Attempts by strategy",
+            "",
+            "| Symbol | Strategy | Attempts |",
+            "| --- | --- | ---: |",
+        ]
+    )
+    for (symbol, strategy), count in sorted(strategy_rows.items()):
+        lines.append(
+            f"| {_format_value(symbol)} | {_format_value(strategy)} | {count} |"
+        )
+    if not strategy_rows:
+        lines.append("| — | — | 0 |")
+    lines.extend(
+        [
+            "",
+            "## Scope notes",
+            "",
+            "- Slippage is not reported until requested and filled prices are both persisted.",
+            "- Realized-PnL rows may represent partial exits, so they are not labelled closed trades.",
+            "- Uptime is not inferred from decision frequency; use service telemetry for availability.",
         ]
     )
     return "\n".join(lines)
@@ -187,17 +356,24 @@ class GitHubProjectClient:
             return
         response.raise_for_status()
 
-    def publish(self, title: str, body: str) -> str:
-        """Create the daily issue, label it for Codex, and add it to the Project."""
-        parts = _split_report(body)
-        issue_body = parts[0]
-        self._ensure_label(REPORT_LABEL, "1d76db", "Automated Orbit Testnet report")
-        self._ensure_label(AGENT_LABEL, "5319e7", "Approved Codex implementation task")
+    def _report_issues(self) -> list[Mapping[str, Any]]:
         issues = self._call(
             "GET",
             f"https://api.github.com/repos/{self.repository}/issues",
             params={"state": "all", "labels": REPORT_LABEL, "per_page": 100},
         )
+        return list(issues)
+
+    def publish(self, title: str, body: str, *, autonomous: bool = True) -> str:
+        """Create or update a report issue and add it to the Project."""
+        parts = _split_report(body)
+        issue_body = parts[0]
+        self._ensure_label(REPORT_LABEL, "1d76db", "Automated Orbit Testnet report")
+        if autonomous:
+            self._ensure_label(
+                AGENT_LABEL, "5319e7", "Approved Codex implementation task"
+            )
+        issues = self._report_issues()
         existing = next(
             (issue for issue in issues if issue.get("title") == title), None
         )
@@ -273,7 +449,7 @@ class GitHubProjectClient:
                 self._call("DELETE", str(stale_comment["url"]))
 
         current_labels = {item["name"] for item in issue.get("labels", [])}
-        if AGENT_LABEL not in current_labels:
+        if autonomous and AGENT_LABEL not in current_labels:
             self._call(
                 "POST",
                 f"https://api.github.com/repos/{self.repository}/issues/{issue['number']}/labels",
@@ -302,7 +478,9 @@ class TestnetDailyReporter:
             PerformanceTracker(
                 self.futures_client, self.mongo_handler, "testnet"
             ).sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
-        decisions = self.mongo_handler.get_trade_decisions(start, end, "testnet")
+        decisions = self.mongo_handler.get_trade_decisions(
+            start, end, "testnet", include_event_window=True
+        )
         income = self.mongo_handler.get_income_records(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
@@ -311,10 +489,33 @@ class TestnetDailyReporter:
             title, build_report_body(report_date, decisions, income)
         )
 
+    def publish_week(self, week_start: date) -> str:
+        """Publish a completed Monday-through-Sunday UTC reporting window."""
+        start = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
+        end = start + timedelta(days=7)
+        if self.futures_client is not None:
+            PerformanceTracker(
+                self.futures_client, self.mongo_handler, "testnet"
+            ).sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
+        decisions = self.mongo_handler.get_trade_decisions(
+            start, end, "testnet", include_event_window=True
+        )
+        income = self.mongo_handler.get_income_records(
+            int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
+        )
+        title = f"{WEEKLY_TITLE_PREFIX}{week_start.isoformat()}"
+        return self.github.publish(
+            title,
+            build_weekly_report_body(week_start, decisions, income),
+            autonomous=False,
+        )
+
     def run_forever(self, interval_seconds: int = 3600) -> None:
         last_published: Optional[date] = None
+        last_week_published: Optional[date] = None
         while True:
-            yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+            today = datetime.now(timezone.utc).date()
+            yesterday = today - timedelta(days=1)
             if yesterday != last_published:
                 try:
                     url = self.publish_date(yesterday)
@@ -322,6 +523,14 @@ class TestnetDailyReporter:
                     last_published = yesterday
                 except Exception:
                     logger.exception("Failed to publish Testnet daily report")
+            previous_week = today - timedelta(days=today.weekday() + 7)
+            if previous_week != last_week_published:
+                try:
+                    url = self.publish_week(previous_week)
+                    logger.info("Published Testnet weekly report: %s", url)
+                    last_week_published = previous_week
+                except Exception:
+                    logger.exception("Failed to publish Testnet weekly report")
             time_module.sleep(interval_seconds)
 
     @classmethod

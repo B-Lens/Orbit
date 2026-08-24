@@ -126,7 +126,9 @@ class TestOrderManager(unittest.TestCase):
 
         self.assertEqual(response, (None, None, None))
         self.manager.mongo_handler.append_decision_event.assert_called_once()
-        decision_id, event = self.manager.mongo_handler.append_decision_event.call_args.args
+        decision_id, event = (
+            self.manager.mongo_handler.append_decision_event.call_args.args
+        )
         self.assertEqual(decision_id, "decision-1")
         self.assertEqual(event["reason"], "minimum_notional")
 
@@ -152,6 +154,43 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(response, {"orderId": 1})
         self.assertEqual(quantity, 0.1)
         self.manager.future_client.new_order.assert_called_once()
+
+    def test_order_submission_is_persisted_before_post_submission_work(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
+        self.manager.future_client.new_order.return_value = {
+            "orderId": 123,
+            "clientOrderId": "exchange-client-id",
+        }
+
+        def assert_submission_already_persisted(_seconds):
+            self.manager.mongo_handler.append_decision_event.assert_called_once_with(
+                "decision-1",
+                {
+                    "event_id": "order_submitted:BTCUSDT:123",
+                    "status": "order_submitted",
+                    "order_id": 123,
+                    "client_order_id": "exchange-client-id",
+                },
+            )
+
+        with patch(
+            "orbit.core.order_manager.time.sleep",
+            side_effect=assert_submission_already_persisted,
+        ):
+            response, _, _ = self.manager.place_order(
+                {"BTCUSDT": 0.01},
+                "BTCUSDT",
+                "BUY",
+                price=100,
+                sl=99,
+                target=102,
+                quantity=0.1,
+                ros=True,
+                trade_id="decision-1",
+            )
+
+        self.assertEqual(response["orderId"], 123)
 
 
 class TestTradeChecker(unittest.TestCase):
