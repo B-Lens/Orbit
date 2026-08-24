@@ -133,7 +133,9 @@ class TestDailyReporter(unittest.TestCase):
     ):
         datetime_mock.now.return_value = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
         sleep_mock.side_effect = [None, RuntimeError("stop loop")]
-        reporter = DailyReporter(MagicMock(), MagicMock())
+        github = MagicMock()
+        github.latest_weekly_report_start.return_value = None
+        reporter = DailyReporter(MagicMock(), github)
         reporter.publish_date = MagicMock(return_value="daily")
         reporter.publish_week = MagicMock(
             side_effect=[RuntimeError("GitHub unavailable"), "weekly"]
@@ -144,6 +146,48 @@ class TestDailyReporter(unittest.TestCase):
 
         self.assertEqual(reporter.publish_week.call_count, 2)
         reporter.publish_week.assert_called_with(date(2026, 8, 17))
+
+    @patch("orbit.core.testnet_reporter.time_module.sleep")
+    @patch("orbit.core.testnet_reporter.datetime")
+    def test_weekly_publication_backfills_every_week_in_order(
+        self, datetime_mock, sleep_mock
+    ):
+        datetime_mock.now.return_value = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
+        sleep_mock.side_effect = RuntimeError("stop loop")
+        github = MagicMock()
+        github.latest_weekly_report_start.return_value = date(2026, 8, 3)
+        reporter = DailyReporter(MagicMock(), github)
+        reporter.publish_date = MagicMock(return_value="daily")
+        reporter.publish_week = MagicMock(return_value="weekly")
+
+        with self.assertRaisesRegex(RuntimeError, "stop loop"):
+            reporter.run_forever(interval_seconds=0)
+
+        self.assertEqual(
+            [call.args[0] for call in reporter.publish_week.call_args_list],
+            [date(2026, 8, 10), date(2026, 8, 17)],
+        )
+
+    @patch("orbit.core.testnet_reporter.time_module.sleep")
+    @patch("orbit.core.testnet_reporter.datetime")
+    def test_weekly_cursor_lookup_retries_without_publishing_out_of_order(
+        self, datetime_mock, sleep_mock
+    ):
+        datetime_mock.now.return_value = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
+        sleep_mock.side_effect = [None, RuntimeError("stop loop")]
+        github = MagicMock()
+        github.latest_weekly_report_start.side_effect = [
+            RuntimeError("GitHub unavailable"),
+            date(2026, 8, 10),
+        ]
+        reporter = DailyReporter(MagicMock(), github)
+        reporter.publish_date = MagicMock(return_value="daily")
+        reporter.publish_week = MagicMock(return_value="weekly")
+
+        with self.assertRaisesRegex(RuntimeError, "stop loop"):
+            reporter.run_forever(interval_seconds=0)
+
+        reporter.publish_week.assert_called_once_with(date(2026, 8, 17))
 
     def test_reads_only_testnet_window_and_publishes_idempotent_title(self):
         mongo = MagicMock()
@@ -194,9 +238,79 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet weekly report: 2026-08-17"
         )
+        self.assertFalse(github.publish.call_args.kwargs["autonomous"])
 
 
 class TestGitHubProjectClient(unittest.TestCase):
+    def test_latest_weekly_report_start_uses_published_issue_titles(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client._call = MagicMock(
+            return_value=[
+                {"title": "Orbit Testnet daily report: 2026-08-20"},
+                {"title": "Orbit Testnet weekly report: 2026-08-03"},
+                {"title": "Orbit Testnet weekly report: 2026-08-10"},
+            ]
+        )
+
+        self.assertEqual(client.latest_weekly_report_start(), date(2026, 8, 10))
+
+    def test_non_autonomous_report_does_not_add_agent_label(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        created = {
+            "title": "weekly",
+            "number": 8,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/8",
+            "labels": [{"name": "testnet-report"}],
+        }
+        client._call = MagicMock(side_effect=[[], created, {}, [], {}])
+
+        client.publish("weekly", "body", autonomous=False)
+
+        self.assertEqual(client._ensure_label.call_count, 2)
+        client._ensure_label.assert_any_call(
+            "testnet-report", "1d76db", "Automated Orbit Testnet report"
+        )
+        client._ensure_label.assert_any_call(
+            "testnet-weekly-report",
+            "0e8a16",
+            "Completed Orbit Testnet weekly report",
+        )
+        label_call = client._call.call_args_list[-1]
+        self.assertEqual(
+            label_call.kwargs["json"], {"labels": ["testnet-weekly-report"]}
+        )
+
+    def test_weekly_completion_label_is_not_added_after_project_failure(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        created = {
+            "title": "weekly",
+            "number": 8,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/8",
+            "labels": [{"name": "testnet-report"}],
+        }
+        client._call = MagicMock(
+            side_effect=[[], created, {"errors": [{"message": "denied"}]}]
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Project insertion failed"):
+            client.publish("weekly", "body", autonomous=False)
+
+        self.assertFalse(
+            any(
+                call.kwargs.get("json", {}).get("labels") == ["testnet-weekly-report"]
+                for call in client._call.call_args_list
+            )
+        )
+
     def test_existing_issue_is_retried_into_project(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
         client.repository = "ipankaj18/Orbit"

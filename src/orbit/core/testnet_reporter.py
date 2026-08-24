@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import json
 import logging
 import os
+import re
 import time as time_module
 from typing import Any, Callable, Iterable, Mapping, Optional
 
@@ -17,8 +18,10 @@ from orbit.core.performance import PerformanceTracker
 logger = logging.getLogger("Orbit")
 
 REPORT_LABEL = "testnet-report"
+WEEKLY_REPORT_LABEL = "testnet-weekly-report"
 AGENT_LABEL = "ai-autonomous"
 REPORTABLE_OUTCOMES = {"accepted", "rejected", "error"}
+WEEKLY_TITLE_PREFIX = "Orbit Testnet weekly report: "
 
 
 def _event_counts(decisions: Iterable[Mapping[str, Any]]) -> Counter[str]:
@@ -326,17 +329,42 @@ class GitHubProjectClient:
             return
         response.raise_for_status()
 
-    def publish(self, title: str, body: str) -> str:
-        """Create the daily issue, label it for Codex, and add it to the Project."""
-        parts = _split_report(body)
-        issue_body = parts[0]
-        self._ensure_label(REPORT_LABEL, "1d76db", "Automated Orbit Testnet report")
-        self._ensure_label(AGENT_LABEL, "5319e7", "Approved Codex implementation task")
+    def _report_issues(self, label: str = REPORT_LABEL) -> list[Mapping[str, Any]]:
         issues = self._call(
             "GET",
             f"https://api.github.com/repos/{self.repository}/issues",
-            params={"state": "all", "labels": REPORT_LABEL, "per_page": 100},
+            params={"state": "all", "labels": label, "per_page": 100},
         )
+        return list(issues)
+
+    def latest_weekly_report_start(self) -> Optional[date]:
+        """Return the newest successfully published weekly issue's start date."""
+        starts: list[date] = []
+        for issue in self._report_issues(WEEKLY_REPORT_LABEL):
+            title = str(issue.get("title", ""))
+            match = re.fullmatch(
+                rf"{re.escape(WEEKLY_TITLE_PREFIX)}(\d{{4}}-\d{{2}}-\d{{2}})", title
+            )
+            if match:
+                starts.append(date.fromisoformat(match.group(1)))
+        return max(starts, default=None)
+
+    def publish(self, title: str, body: str, *, autonomous: bool = True) -> str:
+        """Create or update a report issue and add it to the Project."""
+        parts = _split_report(body)
+        issue_body = parts[0]
+        self._ensure_label(REPORT_LABEL, "1d76db", "Automated Orbit Testnet report")
+        if autonomous:
+            self._ensure_label(
+                AGENT_LABEL, "5319e7", "Approved Codex implementation task"
+            )
+        else:
+            self._ensure_label(
+                WEEKLY_REPORT_LABEL,
+                "0e8a16",
+                "Completed Orbit Testnet weekly report",
+            )
+        issues = self._report_issues()
         existing = next(
             (issue for issue in issues if issue.get("title") == title), None
         )
@@ -412,11 +440,17 @@ class GitHubProjectClient:
                 self._call("DELETE", str(stale_comment["url"]))
 
         current_labels = {item["name"] for item in issue.get("labels", [])}
-        if AGENT_LABEL not in current_labels:
+        if autonomous and AGENT_LABEL not in current_labels:
             self._call(
                 "POST",
                 f"https://api.github.com/repos/{self.repository}/issues/{issue['number']}/labels",
                 json={"labels": [AGENT_LABEL]},
+            )
+        if not autonomous and WEEKLY_REPORT_LABEL not in current_labels:
+            self._call(
+                "POST",
+                f"https://api.github.com/repos/{self.repository}/issues/{issue['number']}/labels",
+                json={"labels": [WEEKLY_REPORT_LABEL]},
             )
         return str(issue["html_url"])
 
@@ -462,14 +496,17 @@ class TestnetDailyReporter:
         income = self.mongo_handler.get_income_records(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
-        title = f"Orbit Testnet weekly report: {week_start.isoformat()}"
+        title = f"{WEEKLY_TITLE_PREFIX}{week_start.isoformat()}"
         return self.github.publish(
-            title, build_weekly_report_body(week_start, decisions, income)
+            title,
+            build_weekly_report_body(week_start, decisions, income),
+            autonomous=False,
         )
 
     def run_forever(self, interval_seconds: int = 3600) -> None:
         last_published: Optional[date] = None
         last_week_published: Optional[date] = None
+        weekly_cursor_loaded = False
         while True:
             today = datetime.now(timezone.utc).date()
             yesterday = today - timedelta(days=1)
@@ -481,13 +518,26 @@ class TestnetDailyReporter:
                 except Exception:
                     logger.exception("Failed to publish Testnet daily report")
             latest_completed_week = _latest_completed_week(today)
-            if latest_completed_week != last_week_published:
+            if not weekly_cursor_loaded:
                 try:
-                    url = self.publish_week(latest_completed_week)
+                    last_week_published = self.github.latest_weekly_report_start()
+                    weekly_cursor_loaded = True
+                except Exception:
+                    logger.exception("Failed to read Testnet weekly report cursor")
+            next_week = (
+                last_week_published + timedelta(days=7)
+                if last_week_published
+                else latest_completed_week
+            )
+            while weekly_cursor_loaded and next_week <= latest_completed_week:
+                try:
+                    url = self.publish_week(next_week)
                     logger.info("Published Testnet weekly report: %s", url)
-                    last_week_published = latest_completed_week
+                    last_week_published = next_week
+                    next_week += timedelta(days=7)
                 except Exception:
                     logger.exception("Failed to publish Testnet weekly report")
+                    break
             time_module.sleep(interval_seconds)
 
     @classmethod
