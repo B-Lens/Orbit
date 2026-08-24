@@ -66,6 +66,7 @@ class DiscordManager:
     MAX_FIELD_VALUE = 1024
     MAX_FIELDS = 25
     MAX_TITLE = 256
+    MAX_EMBED_TEXT = 6000
 
     def __init__(self):
         pass
@@ -128,6 +129,11 @@ class DiscordManager:
                     name, cut_name = self._truncate(str(k), self.MAX_TITLE)
                     value, cut_val = self._truncate(str(v), self.MAX_FIELD_VALUE)
 
+                    # Discord requires both properties to contain at least one
+                    # character.
+                    name = name or "(unnamed)"
+                    value = value or "(empty)"
+
                     if cut_name or cut_val:
                         truncated = True
 
@@ -144,6 +150,9 @@ class DiscordManager:
 
             # 🔹 If anything was truncated, add warning field
             if truncated:
+                # Keep room for the warning itself; Discord rejects embeds with
+                # more than 25 fields.
+                processed_fields = processed_fields[:self.MAX_FIELDS - 1]
                 processed_fields.append({
                     "name": "⚠ Warning",
                     "value": "Message was truncated due to Discord size limits.",
@@ -151,18 +160,54 @@ class DiscordManager:
                 })
 
             embed = {
-                "description": description,
                 "color": self.EMBED_COLOR,
-                "fields": processed_fields,
             }
 
-            if description or processed_fields:
+            if description:
+                embed["description"] = description
+            if processed_fields:
+                embed["fields"] = processed_fields
+            if embed.get("description") or embed.get("fields"):
                 embed["title"] = self.get_current_time()[:self.MAX_TITLE]
 
-            payload = {
-                "content": data,
-                "embeds": [embed],
-            }
+            if not data and "title" not in embed:
+                logger.debug("Webhook '%s' has no message content; notification skipped", key)
+                return None
+
+            # Discord limits the combined text in an embed to 6,000
+            # characters, in addition to each property's individual limit.
+            total = sum(
+                len(str(value))
+                for name, value in embed.items()
+                if name in ("title", "description")
+            )
+            for field in embed.get("fields", []):
+                total += len(field["name"]) + len(field["value"])
+            if total > self.MAX_EMBED_TEXT:
+                overflow = total - self.MAX_EMBED_TEXT
+                for field in reversed(embed.get("fields", [])):
+                    for property_name in ("value", "name"):
+                        reducible = max(0, len(field[property_name]) - 1)
+                        reduction = min(overflow, reducible)
+                        if reduction:
+                            field[property_name] = field[property_name][:-reduction]
+                            overflow -= reduction
+                        if not overflow:
+                            break
+                    if not overflow:
+                        break
+                if overflow and embed.get("description"):
+                    reduction = min(overflow, len(embed["description"]) - 1)
+                    if reduction:
+                        embed["description"] = embed["description"][:-reduction]
+                        overflow -= reduction
+                if overflow and embed.get("title"):
+                    keep = max(1, len(embed["title"]) - overflow)
+                    embed["title"] = embed["title"][:keep]
+
+            payload = {"content": data}
+            if "title" in embed:
+                payload["embeds"] = [embed]
 
             file_path = kwargs.get("file_path")
 
