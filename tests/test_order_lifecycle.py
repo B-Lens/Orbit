@@ -26,6 +26,7 @@ def _order_manager():
     )
     manager.send_sl_update_notifier = MagicMock()
     manager.send_signal_updates = MagicMock()
+    manager.get_available_usdt_balance = MagicMock(return_value=5000)
     return manager
 
 
@@ -38,6 +39,47 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(self.manager.adjust_quantity_step("BTCUSDT", 0.0056), 0.005)
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
+
+    def test_risk_position_size_respects_position_notional_limit(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=5000)
+
+        quantity, required_margin = self.manager.calculate_risk_position_size(
+            "BTCUSDT", entry_price=4593.35, stop_price=4591.244, risk_perc=0.01
+        )
+
+        notional = 4593.35 * quantity
+        self.assertLessEqual(notional, 5000 * 0.25)
+        self.assertAlmostEqual(required_margin, notional)
+
+    def test_risk_position_size_respects_leveraged_available_margin(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=100)
+        self.manager.get_available_usdt_balance = MagicMock(return_value=40)
+        self.manager.risk_guard.max_position_notional_pct = 10.0
+
+        quantity, required_margin = self.manager.calculate_risk_position_size(
+            "BTCUSDT", entry_price=100, stop_price=99.9, risk_perc=0.01, leverage=2
+        )
+
+        self.assertEqual(quantity, 0.784)
+        self.assertEqual(required_margin, 39.2)
+
+    def test_risk_position_size_rejects_leverage_above_policy(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=100)
+
+        result = self.manager.calculate_risk_position_size(
+            "BTCUSDT", entry_price=100, stop_price=99, risk_perc=0.01, leverage=6
+        )
+
+        self.assertEqual(result, (0.0, 0.0))
+
+    def test_exchange_minimum_does_not_raise_quantity_above_safe_cap(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=10)
+
+        result = self.manager.calculate_risk_position_size(
+            "BTCUSDT", entry_price=1000, stop_price=999, risk_perc=0.01
+        )
+
+        self.assertEqual(result, (0.0, 0.0))
 
     def test_sl_and_target_share_normalized_exit_order_path(self):
         self.manager.place_algo_conditional_order = MagicMock(
@@ -87,6 +129,29 @@ class TestOrderManager(unittest.TestCase):
         decision_id, event = self.manager.mongo_handler.append_decision_event.call_args.args
         self.assertEqual(decision_id, "decision-1")
         self.assertEqual(event["reason"], "minimum_notional")
+
+    def test_order_uses_actual_required_margin_below_fixed_spend(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.get_available_usdt_balance = MagicMock(return_value=20)
+        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
+        self.manager.future_client.new_order.return_value = {"orderId": 1}
+
+        response, quantity, _ = self.manager.place_order(
+            {"BTCUSDT": 0.01},
+            "BTCUSDT",
+            "BUY",
+            price=100,
+            sl=99,
+            target=102,
+            leverage=2,
+            quantity=0.1,
+            ros=True,
+            trade_id="decision-low-margin",
+        )
+
+        self.assertEqual(response, {"orderId": 1})
+        self.assertEqual(quantity, 0.1)
+        self.manager.future_client.new_order.assert_called_once()
 
 
 class TestTradeChecker(unittest.TestCase):
