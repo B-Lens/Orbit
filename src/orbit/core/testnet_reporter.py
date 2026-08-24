@@ -56,6 +56,12 @@ def _format_metric(value: Optional[float]) -> str:
     return "N/A" if value is None else f"{value:.2f}"
 
 
+def _latest_completed_week(today: date) -> date:
+    """Return the Monday starting the latest fully completed UTC week."""
+    current_week_start = today - timedelta(days=today.weekday())
+    return current_week_start - timedelta(days=7)
+
+
 def _format_value(value: Any) -> str:
     if value is None:
         return "—"
@@ -474,15 +480,14 @@ class TestnetDailyReporter:
                     last_published = yesterday
                 except Exception:
                     logger.exception("Failed to publish Testnet daily report")
-            if today.weekday() == 0:
-                previous_week = today - timedelta(days=7)
-                if previous_week != last_week_published:
-                    try:
-                        url = self.publish_week(previous_week)
-                        logger.info("Published Testnet weekly report: %s", url)
-                        last_week_published = previous_week
-                    except Exception:
-                        logger.exception("Failed to publish Testnet weekly report")
+            latest_completed_week = _latest_completed_week(today)
+            if latest_completed_week != last_week_published:
+                try:
+                    url = self.publish_week(latest_completed_week)
+                    logger.info("Published Testnet weekly report: %s", url)
+                    last_week_published = latest_completed_week
+                except Exception:
+                    logger.exception("Failed to publish Testnet weekly report")
             time_module.sleep(interval_seconds)
 
     @classmethod
