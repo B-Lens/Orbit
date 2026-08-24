@@ -219,7 +219,8 @@ def build_weekly_report_body(
     profit_factor, max_drawdown, realized_events = _income_risk_metrics(income)
     accepted = outcomes["accepted"]
     order_rejections = events["order_rejected"]
-    rejection_rate = (order_rejections / accepted * 100) if accepted else 0.0
+    cohort_rejections = _event_counts(attempts, start, end)["order_rejected"]
+    rejection_rate = (cohort_rejections / accepted * 100) if accepted else None
     week_end = week_start + timedelta(days=6)
 
     symbol_income: dict[str, list[dict[str, Any]]] = {}
@@ -244,7 +245,8 @@ def build_weekly_report_body(
         f"- Accepted signals: **{accepted}**",
         f"- Orders submitted: **{events['order_submitted']}**",
         f"- Orders filled: **{events['order_filled']}**",
-        f"- Order-stage rejections: **{order_rejections}** ({rejection_rate:.2f}% of accepted signals)",
+        f"- Order-stage rejections: **{order_rejections}** "
+        f"(**{_format_metric(rejection_rate)}%** of same-week accepted signals)",
         f"- Strategy/risk rejections: **{outcomes['rejected']}**",
         f"- Errors: **{outcomes['error']}**",
         f"- Realized-PnL events: **{realized_events}**",

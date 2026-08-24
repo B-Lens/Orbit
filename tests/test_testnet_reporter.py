@@ -141,7 +141,7 @@ class TestReportRendering(unittest.TestCase):
 
         self.assertIn("Orders submitted: **1**", body)
         self.assertIn("Orders filled: **1**", body)
-        self.assertIn("Order-stage rejections: **1** (50.00%", body)
+        self.assertIn("Order-stage rejections: **1** (**50.00%**", body)
         self.assertIn("Realized-PnL events: **2**", body)
         self.assertIn("Realized-PnL profit factor: **2.00**", body)
         self.assertIn("Maximum ledger drawdown: **6.00000000 USDT**", body)
