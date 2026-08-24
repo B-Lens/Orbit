@@ -16,7 +16,7 @@ strategies:
     execution_mode: testnet
 
   BTCUSDT:
-    strategy: orbit.strategies.swing_strategy.SwingStrategyBTC
+    strategy: orbit.strategies.btc_strategy.BTCStrategy
     execution_mode: testnet
 
   PAXGUSDT:

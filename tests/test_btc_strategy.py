@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from orbit.strategies.swing_strategy import SwingStrategyBTC
+from orbit.strategies.btc_strategy import BTCStrategy
 
 
 def hourly_frame(closes: list[float]) -> pd.DataFrame:
@@ -20,21 +20,21 @@ def hourly_frame(closes: list[float]) -> pd.DataFrame:
     )
 
 
-class TestSwingStrategyBTC(unittest.TestCase):
-    @patch("orbit.strategies.swing_strategy.generate_chart", return_value=None)
+class TestBTCStrategy(unittest.TestCase):
+    @patch("orbit.strategies.btc_strategy.generate_chart", return_value=None)
     def test_long_breakout_has_three_to_one_reward_risk(self, _chart):
         data = hourly_frame([100.0] * 55 + [105.0])
-        signal = SwingStrategyBTC(data).generate_signals(symbol="BTCUSDT")
+        signal = BTCStrategy(data).generate_signals(symbol="BTCUSDT")
 
         self.assertEqual(signal["signal"], "BUY")
         risk = signal["entry_price"] - signal["stop_loss"]
         reward = signal["take_profit"] - signal["entry_price"]
         self.assertAlmostEqual(reward / risk, 3.0)
 
-    @patch("orbit.strategies.swing_strategy.generate_chart", return_value=None)
+    @patch("orbit.strategies.btc_strategy.generate_chart", return_value=None)
     def test_short_breakout_has_three_to_one_reward_risk(self, _chart):
         data = hourly_frame([100.0] * 55 + [95.0])
-        signal = SwingStrategyBTC(data).generate_signals(symbol="BTCUSDT")
+        signal = BTCStrategy(data).generate_signals(symbol="BTCUSDT")
 
         self.assertEqual(signal["signal"], "SELL")
         risk = signal["stop_loss"] - signal["entry_price"]
@@ -51,11 +51,11 @@ class TestSwingStrategyBTC(unittest.TestCase):
         data = pd.DataFrame([row for _, row in rows], index=[time for time, _ in rows])
         data = data.iloc[:-1]
 
-        self.assertIsNone(SwingStrategyBTC(data).generate_signals(symbol="BTCUSDT"))
+        self.assertIsNone(BTCStrategy(data).generate_signals(symbol="BTCUSDT"))
 
     def test_trailing_stop_uses_recent_price_structure(self):
         data = hourly_frame([100.0] * 55 + [105.0])
-        signal = SwingStrategyBTC(data).generate_signals(
+        signal = BTCStrategy(data).generate_signals(
             symbol="BTCUSDT", position_side="LONG"
         )
 

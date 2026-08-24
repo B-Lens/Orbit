@@ -4,16 +4,16 @@ from unittest.mock import patch
 import pandas as pd
 
 from orbit.strategies.eth_strategy import ETHStrategy
+from orbit.strategies.btc_strategy import BTCStrategy
 from orbit.strategies.reversal_strategy import BollingerAdaptiveReversalStrategyBCH
 from orbit.strategies.paxgusdt_strategy import PAXGUSDTStrategy
 from orbit.strategies.strategies_base import Strategy
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY, _LazyStrategyRegistry
-from orbit.strategies.swing_strategy import SwingStrategyBTC
 
 
 class TestProductionStrategyOwnership(unittest.TestCase):
     def test_registry_resolves_internal_classes(self):
-        self.assertIs(STRATEGY_REGISTRY["BTCUSDT"], SwingStrategyBTC)
+        self.assertIs(STRATEGY_REGISTRY["BTCUSDT"], BTCStrategy)
         self.assertIs(STRATEGY_REGISTRY["ETHUSDT"], ETHStrategy)
         self.assertIs(
             STRATEGY_REGISTRY["BCHUSDT"], BollingerAdaptiveReversalStrategyBCH
@@ -22,7 +22,7 @@ class TestProductionStrategyOwnership(unittest.TestCase):
 
     def test_all_production_strategies_use_orbit_contract(self):
         for strategy_class in (
-            SwingStrategyBTC,
+            BTCStrategy,
             BollingerAdaptiveReversalStrategyBCH,
             ETHStrategy,
             PAXGUSDTStrategy,

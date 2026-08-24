@@ -13,7 +13,7 @@ logger = logging.getLogger("Orbit")
 
 
 @dataclass
-class SwingStrategyBTC(Strategy):
+class BTCStrategy(Strategy):
     """Trade hourly BTC breakouts in the direction of the prevailing trend.
 
     The parameters were selected on BTCUSDT hourly data from 2021 onward using
