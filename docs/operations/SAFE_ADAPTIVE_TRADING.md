@@ -108,9 +108,21 @@ reports the last 24 hours when Orbit starts and every 24 hours thereafter.
 - daily net-loss halt: 2% of wallet equity
 - minimum expected reward/risk: 1.5
 
-Position size is derived from wallet equity and stop distance, then capped by the
-maximum position-notional policy. Exchange minimums do not override policy: if a
-minimum-sized order exceeds a limit, it is rejected.
+Position size is the smallest quantity allowed by stop-loss risk, maximum
+position notional, and leveraged available margin. A 2% sizing buffer reserves
+room for price movement, fees, and exchange rounding. The quantity is rounded
+down to the exchange step size and validated again immediately before submission.
+Exchange minimums do not override policy: if a minimum-sized order exceeds a
+limit, it is rejected.
+
+For example, with 1,000 USDT available, 2x leverage, a 100 USDT entry, a 99 USDT
+stop, 1% risk, and the default 25% notional limit, the independent limits are 10
+units from stop risk, 2.5 units from position notional, and 20 units from
+available margin. Orbit selects 2.5, applies the 2% buffer, and submits at most
+2.45 units after rounding down. The position notional is 245 USDT and its
+required margin at 2x is 122.50 USDT. At 1x the same policy still selects 2.45
+units, but required margin is 245 USDT. Leverage changes margin usage; it does
+not expand the configured position-notional or stop-risk limits.
 Immediately before an order, the daily loss gate refreshes today's income from
 Binance and persists it locally. If this authenticated synchronization fails, the
 order path fails closed instead of trading with a stale daily-loss value.

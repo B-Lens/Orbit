@@ -62,16 +62,21 @@ class PreTradeRiskGuard:
         stop_distance = abs(entry_price - stop_loss)
         risk_usdt = stop_distance * quantity
         risk_pct = risk_usdt / equity
-        notional_pct = (entry_price * quantity) / equity
+        position_notional = entry_price * quantity
+        notional_pct = position_notional / equity
+        required_margin = position_notional / leverage
         metrics = {
             "risk_usdt": risk_usdt,
             "risk_pct": risk_pct,
             "notional_pct": notional_pct,
+            "required_margin": required_margin,
         }
         if risk_pct > self.max_risk_per_trade_pct:
             return RiskDecision(False, "risk_per_trade_limit", metrics)
         if notional_pct > self.max_position_notional_pct:
             return RiskDecision(False, "position_notional_limit", metrics)
+        if required_margin > equity:
+            return RiskDecision(False, "insufficient_margin", metrics)
 
         if take_profit is not None:
             reward_risk = abs(take_profit - entry_price) / stop_distance
