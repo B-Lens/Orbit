@@ -7,6 +7,7 @@ from orbit.core.testnet_reporter import (
     TestnetDailyReporter as DailyReporter,
     _split_report,
     build_report_body,
+    build_weekly_report_body,
 )
 
 
@@ -48,6 +49,9 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("blocked-1", body)
         self.assertIn("minimum_notional", body)
         self.assertIn("sentiment_conflict", body)
+        self.assertIn("Accepted signals: **1**", body)
+        self.assertIn("Orders submitted: **0**", body)
+        self.assertIn("Order-stage rejections: **1**", body)
         self.assertIn("No-signal evaluations (counted, not expanded): **1**", body)
         self.assertNotIn("quiet-1", body)
 
@@ -56,6 +60,61 @@ class TestReportRendering(unittest.TestCase):
         parts = _split_report(body, limit=100)
         self.assertGreater(len(parts), 1)
         self.assertEqual("\n".join(parts), body)
+
+    def test_weekly_report_separates_signals_submissions_and_fills(self):
+        decisions = [
+            {
+                "symbol": "ETHUSDT",
+                "strategy": "orbit.strategies.ETHStrategy",
+                "outcome": "accepted",
+                "execution_events": [
+                    {"status": "protective_order_submitted"},
+                    {"status": "order_submitted"},
+                    {"status": "order_filled"},
+                ],
+            },
+            {
+                "symbol": "PAXGUSDT",
+                "strategy": "orbit.strategies.PAXGUSDTStrategy",
+                "outcome": "accepted",
+                "execution_events": [
+                    {"status": "order_rejected", "reason": "position_notional_limit"},
+                    {"status": "protective_order_failed"},
+                ],
+            },
+            {"symbol": "ETHUSDT", "outcome": "rejected"},
+        ]
+        income = [
+            {
+                "time": 1,
+                "symbol": "ETHUSDT",
+                "incomeType": "REALIZED_PNL",
+                "income": "10",
+            },
+            {
+                "time": 2,
+                "symbol": "ETHUSDT",
+                "incomeType": "COMMISSION",
+                "income": "-1",
+            },
+            {
+                "time": 3,
+                "symbol": "PAXGUSDT",
+                "incomeType": "REALIZED_PNL",
+                "income": "-5",
+            },
+        ]
+
+        body = build_weekly_report_body(date(2026, 8, 17), decisions, income)
+
+        self.assertIn("Orders submitted: **1**", body)
+        self.assertIn("Orders filled: **1**", body)
+        self.assertIn("Order-stage rejections: **1** (50.00%", body)
+        self.assertIn("Realized-PnL events: **2**", body)
+        self.assertIn("Realized-PnL profit factor: **2.00**", body)
+        self.assertIn("Maximum ledger drawdown: **6.00000000 USDT**", body)
+        self.assertIn("Protective-order failures: **1**", body)
+        self.assertIn("| ETHUSDT | 10.00000000 | -1.00000000", body)
 
 
 class TestDailyReporter(unittest.TestCase):
@@ -88,6 +147,25 @@ class TestDailyReporter(unittest.TestCase):
         )
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet daily report: 2026-08-21"
+        )
+
+    def test_weekly_report_reads_exact_completed_utc_week(self):
+        mongo = MagicMock()
+        mongo.get_trade_decisions.return_value = []
+        mongo.get_income_records.return_value = []
+        github = MagicMock()
+        github.publish.return_value = "https://github.test/report/week"
+        reporter = DailyReporter(mongo, github)
+
+        url = reporter.publish_week(date(2026, 8, 17))
+
+        self.assertEqual(url, "https://github.test/report/week")
+        start, end, mode = mongo.get_trade_decisions.call_args.args
+        self.assertEqual(start, datetime(2026, 8, 17, tzinfo=timezone.utc))
+        self.assertEqual(end, datetime(2026, 8, 24, tzinfo=timezone.utc))
+        self.assertEqual(mode, "testnet")
+        self.assertEqual(
+            github.publish.call_args.args[0], "Orbit Testnet weekly report: 2026-08-17"
         )
 
 

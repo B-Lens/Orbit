@@ -422,15 +422,51 @@ class OrderManager(AuthenticationManager, RedisManager):
                 stop_price=round(price, 1), quantity=quantity,
                 trade_id=trade_id or symbol,
             )
-            notify(data=None, description=f"{label} Order Response for {symbol}", fields=response)
+            if trade_id and self.mongo_handler is not None:
+                self.mongo_handler.append_decision_event(
+                    trade_id,
+                    {
+                        "status": (
+                            "protective_order_submitted"
+                            if response
+                            else "protective_order_failed"
+                        ),
+                        "protective_order_type": order_type,
+                        "order_id": response.get("algoId") if response else None,
+                    },
+                )
+            notify(
+                data=None,
+                description=f"{label} Order Response for {symbol}",
+                fields=response,
+            )
             return response
         except ClientError as error:
+            if trade_id and self.mongo_handler is not None:
+                self.mongo_handler.append_decision_event(
+                    trade_id,
+                    {
+                        "status": "protective_order_failed",
+                        "protective_order_type": order_type,
+                        "error_code": getattr(error, "error_code", None),
+                    },
+                )
             self.clientExceptionHandler(
                 symbol=symbol, error=error,
                 Location=f"OrderManager -> place_{label.lower()}_order",
             )
         except Exception as error:
-            self.handle_exception(error, f"Unexpected exception in place_{label.lower()}_order")
+            if trade_id and self.mongo_handler is not None:
+                self.mongo_handler.append_decision_event(
+                    trade_id,
+                    {
+                        "status": "protective_order_failed",
+                        "protective_order_type": order_type,
+                    },
+                )
+            self.handle_exception(
+                error, f"Unexpected exception in place_{label.lower()}_order"
+            )
         return None
 
     # -------------------------------------------------------------------------

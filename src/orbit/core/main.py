@@ -140,6 +140,7 @@ class BinanceAutomation(ExceptionManager):
         action: str,
         quantity: float,
         price: float,
+        decision_id: Optional[str] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
 
@@ -167,6 +168,17 @@ class BinanceAutomation(ExceptionManager):
                         break
 
                     if status in ("CANCELED", "REJECTED", "EXPIRED"):
+                        if (
+                            decision_id
+                            and self.order_manager.mongo_handler is not None
+                        ):
+                            self.order_manager.mongo_handler.append_decision_event(
+                                decision_id,
+                                {
+                                    "status": f"order_{status.lower()}",
+                                    "order_id": order_id,
+                                },
+                            )
                         self.send_alerts(
                             data=None,
                             description=f"Order {order_id} for {symbol} was {status.lower()}",
@@ -175,6 +187,19 @@ class BinanceAutomation(ExceptionManager):
                         return
 
                     if status == "FILLED":
+                        if (
+                            decision_id
+                            and self.order_manager.mongo_handler is not None
+                        ):
+                            self.order_manager.mongo_handler.append_decision_event(
+                                decision_id,
+                                {
+                                    "status": "order_filled",
+                                    "order_id": order_id,
+                                    "executed_quantity": order.get("executedQty", quantity),
+                                    "average_price": order.get("avgPrice"),
+                                },
+                            )
                         self.trade_checker.set_cooldown(symbol)
                         self.trades[symbol] = {
                             "symbol": symbol,
@@ -199,6 +224,11 @@ class BinanceAutomation(ExceptionManager):
         # TIMEOUT → Cancel order
         try:
             cancel_result = self.order_manager.cancel_order(symbol, order_id)
+            if decision_id and self.order_manager.mongo_handler is not None:
+                self.order_manager.mongo_handler.append_decision_event(
+                    decision_id,
+                    {"status": "order_timeout_cancelled", "order_id": order_id},
+                )
             self.send_alerts(
                 data=None,
                 description=f"Order {order_id} for {symbol} cancelled (10 min timeout)",
@@ -266,7 +296,14 @@ class BinanceAutomation(ExceptionManager):
             )
         monitor_thread = threading.Thread(
             target=self.monitor_order_execution,
-            args=(symbol, order_id, action, quantity, order_request["price"]),
+            args=(
+                symbol,
+                order_id,
+                action,
+                quantity,
+                order_request["price"],
+                decision_id,
+            ),
             daemon=True,
             name=f"OrderMonitor-{symbol}-{order_id}",
         )
