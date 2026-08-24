@@ -23,14 +23,35 @@ change the level it is attempting to break.
 Hourly Binance BTCUSDT candles from 2021-01-01 through 2026-08-24 were split
 chronologically: 70% for development and 30% for holdout validation. The search
 compared hourly breakout and EMA-pullback entries across multiple EMA, breakout,
-ATR-stop, and reward/risk values. It modeled 0.04% fees per side, two basis
-points of slippage per side, next-bar-open entries, one open position, and a
-stop-first assumption when stop and target occurred within the same candle.
+ATR-stop, and reward/risk values.
 
-| Period | Return | Trades | Win rate | Profit factor | Max drawdown |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Development (70%) | 36.54% | 499 | 28.3% | 1.10 | 18.29% |
-| Holdout (30%) | 21.41% | 226 | 29.2% | 1.14 | 18.79% |
+The comparison reproduces each strategy's production signal calculations, then
+uses the shared backtester contract: entry at the next bar's open, 1% equity
+risk per trade, 0.04% fees per side, two basis points of slippage per side, one
+open position, and stop-first resolution when stop and target occur within the
+same candle. Each split starts with $10,000, so development and holdout returns
+are independently comparable rather than parts of one continuous equity curve.
+
+## Comparison with the previous strategy
+
+| Period | Strategy | Return | Trades | Win rate | Profit factor | Max drawdown |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Development (70%) | Previous 4H pivot | -16.26% | 258 | 33.33% | 0.90 | 28.07% |
+| Development (70%) | New 1H breakout | 33.22% | 507 | 28.40% | 1.08 | 18.08% |
+| Holdout (30%) | Previous 4H pivot | 11.50% | 85 | 40.00% | 1.20 | 9.44% |
+| Holdout (30%) | New 1H breakout | 22.48% | 222 | 29.73% | 1.12 | 16.89% |
+| Full period | Previous 4H pivot | -6.63% | 343 | 34.99% | 0.97 | 28.07% |
+| Full period | New 1H breakout | 63.31% | 729 | 28.81% | 1.09 | 18.08% |
+
+Over the full period, the new strategy improves return by 69.94 percentage
+points and adds 386 trades. On the untouched holdout it improves return by
+10.98 percentage points and adds 137 trades. Its lower win rate is expected
+from the 3R payoff design; profitability depends on fewer, larger winners.
+
+The holdout comparison also shows the trade-off: the new strategy has higher
+return and frequency, but the previous strategy has a higher holdout profit
+factor and lower holdout drawdown. The new strategy's advantage is therefore
+not uniform across every risk metric.
 
 These are historical simulation results, not expected returns. The modest
 profit factor means execution costs and regime changes matter materially. Keep
