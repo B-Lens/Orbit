@@ -1,266 +1,152 @@
-import os
-import pandas as pd
-import redis
-from orbit.utils.utils import generate_chart
-from orbit.strategies.strategies_base import Strategy
-from typing import Optional, Dict, Any
-from dataclasses import dataclass, field
+"""Hourly breakout strategy for Bitcoin futures."""
+
 import logging
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
+
+import pandas as pd
+
+from orbit.strategies.strategies_base import Strategy
+from orbit.utils.utils import generate_chart
 
 logger = logging.getLogger("Orbit")
 
+
 @dataclass
 class SwingStrategyBTC(Strategy):
-    """
-    Real-time Swing Strategy matching Backtrader logic:
-    - EMA200 Trend Filter
-    - Pivot breakout entries
-    - ATR Structural SL
-    - RR = 1:2 TP
-    - Non-repainting pivots
+    """Trade hourly BTC breakouts in the direction of the prevailing trend.
+
+    The parameters were selected on BTCUSDT hourly data from 2021 onward using
+    a chronological 70/30 development/holdout split.  Breakout levels only use
+    completed prior candles, so signals do not repaint.
     """
 
     data: pd.DataFrame
-
-    # Strategy parameters
-    max_sl_limit: float = 2.0     # %
-    atr_mult: float = 1.0
-    tp_rr: float = 2.0            # target = entry + (2 × risk)
-    n: int = 10
+    breakout_period: int = 12
+    ema_period: int = 50
+    atr_period: int = 14
+    atr_stop_multiple: float = 2.5
+    reward_risk: float = 3.0
     symbol: str = "BITCOIN"
 
-    # Runtime state (not constructor args)
-    redis_client: Optional[redis.StrictRedis] = field(init=False, default=None)
-    last_sw_h: Optional[float] = field(init=False, default=None)
-    last_sw_l: Optional[float] = field(init=False, default=None)
-
-    def __post_init__(self):
-        # Initialize base Strategy (sets self.data)
+    def __post_init__(self) -> None:
         super().__init__(self.data)
-        try:
-            self.redis_client = redis.StrictRedis(
-                host=os.getenv("REDIS_HOST", "localhost"),
-                port=int(os.getenv("REDIS_PORT", "6379")),
-                db=int(os.getenv("REDIS_DB", "0")),
-                decode_responses=True,
-            )
-        except Exception as e:
-            logger.error(f"Redis connection error: {e}")
-            self.redis_client = None
 
-        self.last_sw_h = None
-        self.last_sw_l = None
+    def _hourly_data(self) -> tuple[pd.DataFrame, bool]:
+        """Return complete hourly candles and whether the latest just closed."""
+        if self.data.empty or not isinstance(self.data.index, pd.DatetimeIndex):
+            return self.data.copy(), False
 
-    # ---------------------------------------------------------------------
-    # Redis helpers
-    # ---------------------------------------------------------------------
-    def _get_redis_key(self, key_type: str) -> str:
-        return f"swing:{key_type}:{self.symbol}:4h"
+        intervals = self.data.index.to_series().diff().dropna()
+        interval = intervals.median() if not intervals.empty else pd.Timedelta(hours=1)
+        if interval >= pd.Timedelta(hours=1):
+            return self.data.copy(), True
 
-    def _load_last_pivots(self):
-        try:
-            ph = self.redis_client.get(self._get_redis_key("pivot_high"))
-            pl = self.redis_client.get(self._get_redis_key("pivot_low"))
-            return (float(ph) if ph else None, float(pl) if pl else None)
-        except:
-            return (None, None)
-
-    def _save_pivots(self, ph, pl):
-        try:
-            if ph is not None:
-                self.redis_client.set(self._get_redis_key("pivot_high"), str(ph))
-            if pl is not None:
-                self.redis_client.set(self._get_redis_key("pivot_low"), str(pl))
-        except:
-            pass
-
-    # ---------------------------------------------------------------------
-    # Pivot detection
-    # ---------------------------------------------------------------------
-    def pivot_high_centered(self, series, left, right):
-        if len(series) < left + right + 1:
-            return None
-        window = series[-(left+right+1):]
-        center = window[left]
-        return center if center == max(window) else None
-
-    def pivot_low_centered(self, series, left, right):
-        if len(series) < left + right + 1:
-            return None
-        window = series[-(left+right+1):]
-        center = window[left]
-        return center if center == min(window) else None
-
-    # ---------------------------------------------------------------------
-    # SL / TP identical to Backtrader
-    # ---------------------------------------------------------------------
-    def compute_long_sl_tp(self, close):
-        fixed_sl = close * (1 - self.max_sl_limit / 100)
-        atr_val = float(self.atr.iloc[-1])
-        struct_sl = self.last_sw_l - atr_val * self.atr_mult if self.last_sw_l else fixed_sl
-        long_sl = max(fixed_sl, struct_sl)
-
-        risk = close - long_sl
-        long_tp = close + self.tp_rr * risk
-
-        return long_sl, long_tp
-
-    def compute_short_sl_tp(self, close):
-        fixed_sl = close * (1 + self.max_sl_limit / 100)
-        atr_val = float(self.atr.iloc[-1])
-        struct_sl = self.last_sw_h + atr_val * self.atr_mult if self.last_sw_h else fixed_sl
-        short_sl = min(fixed_sl, struct_sl)
-
-        risk = short_sl - close
-        short_tp = close - self.tp_rr * risk
-
-        return short_sl, short_tp
-    
-        # ---------------------------------------------------------------------
-    # Pine-style trailing SL/TP update (matches Backtrader)
-    # ---------------------------------------------------------------------
-    def update_trailing_sl_tp(self, close: float, position_side: str = None) -> Optional[Dict[str, float]]:
-        """
-        Recompute SL/TP every bar and tighten only.
-        """
-
-        stop_loss, take_profit = None, None
-        if position_side == "LONG":
-            stop_loss, take_profit = self.compute_long_sl_tp(close)
-
-        elif position_side == "SHORT":
-            stop_loss, take_profit = self.compute_short_sl_tp(close)
-
-        logger.info(
-            f"[TRAIL UPDATE] {self.symbol} {position_side} "
-            f"SL={stop_loss:.2f} TP={take_profit:.2f}"
-        )
-
-        return {
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-        }
-
-
-    # ---------------------------------------------------------------------
-    # Main Signal Generator
-    # ---------------------------------------------------------------------
-    def generate_signals(self, symbol=None, position_side=None) -> Optional[Dict[str, Any]]:
-        lookup = 168
-
-        # -----------------------
-        # RESAMPLE TO 4H
-        # -----------------------
-        df_4h = (
-            self.data.resample("4h")
-            .agg({
+        grouped = self.data.resample("1h")
+        hourly = grouped.agg(
+            {
                 "open": "first",
                 "high": "max",
                 "low": "min",
                 "close": "last",
                 "volume": "sum",
-            })
+            }
         )
+        expected_bars = round(pd.Timedelta(hours=1) / interval)
+        hourly = hourly[grouped.size() == expected_bars].dropna()
+        if hourly.empty:
+            return hourly, False
 
-        # Keep only complete 4h periods
-        df_4h = df_4h[self.data.resample("4h").size() == 16]
-        lookback_4h = df_4h.iloc[-lookup:]
-        close = df_4h['close'].iloc[-1]
-        open_ = df_4h['open'].iloc[-1]
+        # Production data contains 15-minute candle-open timestamps.  At :45,
+        # all four constituent candles of the hourly bar have been observed.
+        latest_closed = self.data.index[-1] - hourly.index[-1] == pd.Timedelta(
+            minutes=45
+        )
+        return hourly, latest_closed
 
-        # -----------------------
-        # ATR
-        # -----------------------
-        self.atr = self.compute_atr(df_4h)
+    def _indicators(self, hourly: pd.DataFrame) -> pd.DataFrame:
+        result = hourly.copy()
+        previous_close = result["close"].shift(1)
+        true_range = pd.concat(
+            [
+                result["high"] - result["low"],
+                (result["high"] - previous_close).abs(),
+                (result["low"] - previous_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        result["atr"] = true_range.ewm(
+            alpha=1 / self.atr_period, adjust=False
+        ).mean()
+        result["ema"] = result["close"].ewm(
+            span=self.ema_period, adjust=False
+        ).mean()
+        result["breakout_high"] = (
+            result["high"].shift(1).rolling(self.breakout_period).max()
+        )
+        result["breakout_low"] = (
+            result["low"].shift(1).rolling(self.breakout_period).min()
+        )
+        return result
 
-        # =====================================================
-        # TRAILING STOP UPDATE (when already in position)
-        # =====================================================
+    def _trailing_update(
+        self, frame: pd.DataFrame, position_side: str
+    ) -> Dict[str, Any]:
+        current = frame.iloc[-1]
+        if position_side == "LONG":
+            stop = (
+                frame["high"].iloc[-self.breakout_period :].max()
+                - self.atr_stop_multiple * current["atr"]
+            )
+        else:
+            stop = (
+                frame["low"].iloc[-self.breakout_period :].min()
+                + self.atr_stop_multiple * current["atr"]
+            )
+        return {"signal": "UPDATE_SL_TP", "stop_loss": float(stop), "take_profit": None}
+
+    def generate_signals(
+        self, symbol: Optional[str] = None, position_side: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        hourly, latest_closed = self._hourly_data()
+        minimum_bars = max(self.ema_period, self.breakout_period, self.atr_period) + 1
+        if len(hourly) < minimum_bars:
+            return None
+
+        frame = self._indicators(hourly)
         if position_side:
-            trail = self.update_trailing_sl_tp(close, position_side=position_side)
-            if trail:
-                return {
-                    "signal": "UPDATE_SL_TP",
-                    "stop_loss": trail["stop_loss"],
-                    "take_profit": trail["take_profit"],
-                }
+            return self._trailing_update(frame, position_side)
+        if not latest_closed:
+            return None
 
-        
-        last_time = df_4h.index[-1]
-        now = self.data.index[-1]
+        current = frame.iloc[-1]
+        close = float(current["close"])
+        long_signal = close > current["breakout_high"] and close > current["ema"]
+        short_signal = close < current["breakout_low"] and close < current["ema"]
+        if not long_signal and not short_signal:
+            return None
 
-        logger.info(f"Last 4H candle time: {last_time}, Current time: {now}")
-        logger.info(f"Time since last 4H candle: {(now - last_time).total_seconds() } seconds")
-
-        if (now - last_time).total_seconds() != 13500: # 3h45m = 13500s, ensures we only generate signal once per new 4H candle after it has fully formed
-            return None  # candle still forming based on (open candle timstamp)
-
-        self.send_params(stock_df=df_4h, symbol=symbol, duration="4 HOURS")
-
-
-        # -----------------------
-        # Pivots
-        # -----------------------
-        highs = df_4h["high"].tolist()[-(2*self.n+1):]
-        lows  = df_4h["low"].tolist()[-(2*self.n+1):]
-
-        # load previous pivots
-        self.last_sw_h, self.last_sw_l = self._load_last_pivots()
-
-        ph = self.pivot_high_centered(highs, self.n, self.n)
-        pl = self.pivot_low_centered(lows, self.n, self.n)
-
-        if ph is not None:
-            self.last_sw_h = ph
-        if pl is not None:
-            self.last_sw_l = pl
-            
-        logger.info(f"Last Pivot High: {self.last_sw_h}, Last Pivot Low: {self.last_sw_l}")
-        self.send_levels_info(data=None, description=f"Symbol = BITCOIN", fields={'swing_high': self.last_sw_h, 'swing_low': self.last_sw_l})
-
-        # save pivots
-        self._save_pivots(self.last_sw_h, self.last_sw_l)
-
-        # -----------------------
-        # Entry Conditions (same as BT)
-        # -----------------------
-        long_signal  = (self.last_sw_h is not None) and (close > self.last_sw_h) and (open_ < self.last_sw_h)
-        short_signal = (self.last_sw_l is not None) and (close < self.last_sw_l) and (open_ > self.last_sw_l)
-
-        stop, target = None, None
-
-        if long_signal:
-            stop, target = self.compute_long_sl_tp(close)
-        elif short_signal:
-            stop, target = self.compute_short_sl_tp(close)
-
-        # -----------------------
-        # Return Signal
-        # -----------------------
-        if long_signal:
-            chart_path_raw = generate_chart(lookback_4h)
-            logger.info(f"Generated LONG signal for {self.symbol} at {close}, SL: {stop}, TP: {target}")
-            return {
-                "signal": "BUY",
-                "entry_price": close,
-                "stop_loss": stop,
-                "take_profit": target,
-                "chart_path": None,
-                "chart_path_raw": chart_path_raw,
-                "pattern": "Long Swing"
-            }
-
-        if short_signal:
-            chart_path_raw = generate_chart(lookback_4h)
-            logger.info(f"Generated SHORT signal for {self.symbol} at {close}, SL: {stop}, TP: {target}")
-            return {
-                "signal": "SELL",
-                "entry_price": close,
-                "stop_loss": stop,
-                "take_profit": target,
-                "chart_path": None,
-                "chart_path_raw": chart_path_raw,
-                "pattern": "Short Swing"
-            }
-
-        return None
+        side = 1 if long_signal else -1
+        risk = self.atr_stop_multiple * float(current["atr"])
+        stop = close - side * risk
+        target = close + side * self.reward_risk * risk
+        action = "BUY" if long_signal else "SELL"
+        pattern = f"1H {self.breakout_period}-bar breakout + EMA{self.ema_period} trend"
+        chart_path_raw = generate_chart(frame.iloc[-168:])
+        logger.info(
+            "Generated %s signal for %s at %.2f, SL %.2f, TP %.2f",
+            action,
+            self.symbol,
+            close,
+            stop,
+            target,
+        )
+        return {
+            "signal": action,
+            "entry_price": close,
+            "stop_loss": float(stop),
+            "take_profit": float(target),
+            "chart_path": None,
+            "chart_path_raw": chart_path_raw,
+            "pattern": pattern,
+        }
