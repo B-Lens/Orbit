@@ -108,8 +108,9 @@ reports the last 24 hours when Orbit starts and every 24 hours thereafter.
 - daily net-loss halt: 2% of wallet equity
 - minimum expected reward/risk: 1.5
 
-Position size is derived from wallet equity and stop distance. Exchange minimums
-do not override policy: if a minimum-sized order exceeds a limit, it is rejected.
+Position size is derived from wallet equity and stop distance, then capped by the
+maximum position-notional policy. Exchange minimums do not override policy: if a
+minimum-sized order exceeds a limit, it is rejected.
 Immediately before an order, the daily loss gate refreshes today's income from
 Binance and persists it locally. If this authenticated synchronization fails, the
 order path fails closed instead of trading with a stale daily-loss value.

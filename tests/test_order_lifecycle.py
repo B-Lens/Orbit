@@ -39,6 +39,17 @@ class TestOrderManager(unittest.TestCase):
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
 
+    def test_risk_position_size_respects_position_notional_limit(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=5000)
+
+        quantity, required_margin = self.manager.calculate_risk_position_size(
+            "BTCUSDT", entry_price=4593.35, stop_price=4591.244, risk_perc=0.01
+        )
+
+        notional = 4593.35 * quantity
+        self.assertLessEqual(notional, 5000 * 0.25)
+        self.assertAlmostEqual(required_margin, notional)
+
     def test_sl_and_target_share_normalized_exit_order_path(self):
         self.manager.place_algo_conditional_order = MagicMock(
             side_effect=[{"algoId": 1}, {"algoId": 2}]

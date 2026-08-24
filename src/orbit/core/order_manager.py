@@ -452,13 +452,16 @@ class OrderManager(AuthenticationManager, RedisManager):
         if stop_distance <= 0:
             return 0.0, 0.0
         qty_risk = risk_value / stop_distance
+        qty_notional = (
+            equity * self.risk_guard.max_position_notional_pct / entry_price
+        )
 
         filters = self.get_symbol_filters(symbol)
         min_notional_filter = filters.get("MIN_NOTIONAL")
         min_notional = float(min_notional_filter["notional"]) if min_notional_filter else 5.0
         min_qty = min_notional / entry_price
         # Reject later if the exchange minimum itself would violate policy.
-        qty = max(qty_risk, min_qty)
+        qty = max(min(qty_risk, qty_notional), min_qty)
         qty = self.adjust_quantity_step(symbol, qty)
         required_margin = (entry_price * qty) / leverage
         logger.info(f"Calculated position size for {symbol}: Qty={qty}, Required Margin={required_margin}")
