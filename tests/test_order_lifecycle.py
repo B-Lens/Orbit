@@ -26,6 +26,7 @@ def _order_manager():
     )
     manager.send_sl_update_notifier = MagicMock()
     manager.send_signal_updates = MagicMock()
+    manager.get_available_usdt_balance = MagicMock(return_value=5000)
     return manager
 
 
@@ -52,14 +53,15 @@ class TestOrderManager(unittest.TestCase):
 
     def test_risk_position_size_respects_leveraged_available_margin(self):
         self.manager.get_usdt_balance = MagicMock(return_value=100)
+        self.manager.get_available_usdt_balance = MagicMock(return_value=40)
         self.manager.risk_guard.max_position_notional_pct = 10.0
 
         quantity, required_margin = self.manager.calculate_risk_position_size(
             "BTCUSDT", entry_price=100, stop_price=99.9, risk_perc=0.01, leverage=2
         )
 
-        self.assertEqual(quantity, 1.96)
-        self.assertEqual(required_margin, 98.0)
+        self.assertEqual(quantity, 0.784)
+        self.assertEqual(required_margin, 39.2)
 
     def test_risk_position_size_rejects_leverage_above_policy(self):
         self.manager.get_usdt_balance = MagicMock(return_value=100)

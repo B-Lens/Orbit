@@ -208,11 +208,13 @@ class TestRiskGuard(unittest.TestCase):
             quantity=15,
             leverage=1,
             side="BUY",
+            available_margin=100,
         )
 
         self.assertFalse(result.allowed)
         self.assertEqual(result.reason, "insufficient_margin")
         self.assertEqual(result.metrics["required_margin"], 1500)
+        self.assertEqual(result.metrics["available_margin"], 100)
 
     def test_rejects_daily_loss_limit(self):
         result = self.guard.evaluate(

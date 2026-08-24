@@ -115,14 +115,15 @@ down to the exchange step size and validated again immediately before submission
 Exchange minimums do not override policy: if a minimum-sized order exceeds a
 limit, it is rejected.
 
-For example, with 1,000 USDT available, 2x leverage, a 100 USDT entry, a 99 USDT
-stop, 1% risk, and the default 25% notional limit, the independent limits are 10
-units from stop risk, 2.5 units from position notional, and 20 units from
-available margin. Orbit selects 2.5, applies the 2% buffer, and submits at most
-2.45 units after rounding down. The position notional is 245 USDT and its
-required margin at 2x is 122.50 USDT. At 1x the same policy still selects 2.45
-units, but required margin is 245 USDT. Leverage changes margin usage; it does
-not expand the configured position-notional or stop-risk limits.
+For example, with 1,000 USDT wallet equity, 200 USDT of unreserved available
+margin, 2x leverage, a 100 USDT entry, a 99 USDT stop, 1% risk, and the default
+25% notional limit, the independent limits are 10 units from stop risk, 2.5 units
+from position notional, and 4 units from available margin. Orbit selects 2.5,
+applies the 2% buffer, and submits at most 2.45 units after rounding down. The
+position notional is 245 USDT and its required margin at 2x is 122.50 USDT. If
+only 100 USDT were available, the margin limit would be 2 units and the buffered
+quantity would instead be 1.96. Leverage changes margin usage; it does not expand
+the configured position-notional or stop-risk limits.
 Immediately before an order, the daily loss gate refreshes today's income from
 Binance and persists it locally. If this authenticated synchronization fails, the
 order path fails closed instead of trading with a stale daily-loss value.

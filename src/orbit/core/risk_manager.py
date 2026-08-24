@@ -37,6 +37,7 @@ class PreTradeRiskGuard:
         leverage: int,
         side: str,
         daily_net_pnl: float = 0.0,
+        available_margin: float | None = None,
     ) -> RiskDecision:
         if min(equity, entry_price, stop_loss, quantity) <= 0:
             return RiskDecision(False, "non_positive_input", {})
@@ -65,17 +66,19 @@ class PreTradeRiskGuard:
         position_notional = entry_price * quantity
         notional_pct = position_notional / equity
         required_margin = position_notional / leverage
+        margin_capacity = equity if available_margin is None else available_margin
         metrics = {
             "risk_usdt": risk_usdt,
             "risk_pct": risk_pct,
             "notional_pct": notional_pct,
             "required_margin": required_margin,
+            "available_margin": margin_capacity,
         }
         if risk_pct > self.max_risk_per_trade_pct:
             return RiskDecision(False, "risk_per_trade_limit", metrics)
         if notional_pct > self.max_position_notional_pct:
             return RiskDecision(False, "position_notional_limit", metrics)
-        if required_margin > equity:
+        if required_margin > margin_capacity:
             return RiskDecision(False, "insufficient_margin", metrics)
 
         if take_profit is not None:

@@ -190,6 +190,12 @@ class OrderManager(AuthenticationManager, RedisManager):
         account_info = client.account()
         return float(account_info["totalWalletBalance"])
 
+    def get_available_usdt_balance(self, symbol: Optional[str] = None) -> float:
+        """Return unreserved USDT margin available on the Futures account."""
+        client = self.future_client_for(symbol) if symbol else self.future_client
+        account_info = client.account()
+        return float(account_info["availableBalance"])
+
     def get_daily_net_pnl(self, symbol: Optional[str] = None) -> float:
         """Synchronize today's exchange income before applying the loss halt."""
         start_ms = int(
@@ -460,7 +466,8 @@ class OrderManager(AuthenticationManager, RedisManager):
         ):
             return 0.0, 0.0
         equity = self.get_usdt_balance(symbol)
-        if equity <= 0:
+        available_margin = self.get_available_usdt_balance(symbol)
+        if equity <= 0 or available_margin <= 0:
             return 0.0, 0.0
         effective_risk = min(float(risk_perc), self.risk_guard.max_risk_per_trade_pct)
         risk_value = equity * effective_risk
@@ -471,7 +478,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         qty_notional = (
             equity * self.risk_guard.max_position_notional_pct / entry_price
         )
-        qty_margin = equity * leverage / entry_price
+        qty_margin = available_margin * leverage / entry_price
 
         filters = self.get_symbol_filters(symbol)
         min_notional_filter = filters.get("MIN_NOTIONAL")
@@ -537,6 +544,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             effective_trade_id = trade_id or symbol
 
             balance_available = self.get_usdt_balance(symbol)
+            available_margin = self.get_available_usdt_balance(symbol)
             qty_from_alloc: float = 0.0
 
             if sl is not None and symbol in risk_management:
@@ -551,7 +559,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             if quantity is None:
                 quantity = qty_from_alloc
 
-            if balance_available < self.FIXED_SPEND_USDT or quantity <= 0:
+            if available_margin < self.FIXED_SPEND_USDT or quantity <= 0:
                 self.send_alerts(
                     data=None,
                     description=f"Not Enough funds for {symbol}, quantity: {quantity}, balance_available: {balance_available}",
@@ -561,6 +569,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                     trade_id,
                     "insufficient_funds_or_quantity",
                     balance=balance_available,
+                    available_margin=available_margin,
                     quantity=quantity,
                 )
                 return None, None, None
@@ -603,6 +612,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 leverage=leverage,
                 side=side,
                 daily_net_pnl=self.get_daily_net_pnl(symbol),
+                available_margin=available_margin,
             )
             if not risk_decision.allowed:
                 logger.warning("Order rejected by risk guard: %s", risk_decision.reason)
