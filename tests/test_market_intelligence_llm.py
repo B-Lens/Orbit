@@ -186,6 +186,72 @@ def test_codex_oauth_client_enables_external_web_search(tmp_path) -> None:
     assert request.get_header("Thread-id")
 
 
+def test_codex_oauth_client_retries_stream_without_completed_event(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+
+    class StreamingResponse:
+        def __init__(self, lines):
+            self.lines = lines
+
+        def __enter__(self):
+            return iter(self.lines)
+
+        def __exit__(self, *_args):
+            return False
+
+    responses = [
+        StreamingResponse(
+            [b'data: {"type":"response.output_text.delta","delta":"partial"}\n']
+        ),
+        StreamingResponse(
+            [
+                b'data: {"type":"response.output_text.delta","delta":"complete"}\n',
+                b'data: {"type":"response.completed"}\n',
+            ]
+        ),
+    ]
+    requests = []
+
+    def urlopen(request, timeout):
+        requests.append(request)
+        return responses.pop(0)
+
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    assert client.invoke_web_search("Assess markets") == "complete"
+    assert len(requests) == 2
+    assert requests[0].get_header("Session-id") != requests[1].get_header(
+        "Session-id"
+    )
+
+
+def test_codex_oauth_client_limits_incomplete_stream_retries(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+
+    class StreamingResponse:
+        def __enter__(self):
+            return iter([b"data: [DONE]\n"])
+
+        def __exit__(self, *_args):
+            return False
+
+    urlopen = MagicMock(return_value=StreamingResponse())
+    client = CodexOAuthResponsesClient(
+        auth_file=auth_file, stream_retries=1, urlopen=urlopen
+    )
+
+    with pytest.raises(RuntimeError, match="ended before response.completed"):
+        client.invoke("Assess markets")
+
+    assert urlopen.call_count == 2
+
+
 def test_llm_prefers_openai_without_startup_request() -> None:
     openai_client = MagicMock()
     openai_client.invoke.return_value = "primary"
