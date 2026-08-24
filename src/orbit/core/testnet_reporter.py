@@ -22,6 +22,14 @@ REPORTABLE_OUTCOMES = {"accepted", "rejected", "error"}
 WEEKLY_TITLE_PREFIX = "Orbit Testnet weekly report: "
 
 
+def _in_window(value: Any, start: datetime, end: datetime) -> bool:
+    if not isinstance(value, datetime):
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return start <= value.astimezone(timezone.utc) < end
+
+
 def _event_counts(
     decisions: Iterable[Mapping[str, Any]],
     start: Optional[datetime] = None,
@@ -33,7 +41,7 @@ def _event_counts(
         for event in row.get("execution_events", [])
         if start is None
         or end is None
-        or (start <= event.get("timestamp", datetime.min.replace(tzinfo=timezone.utc)) < end)
+        or _in_window(event.get("timestamp"), start, end)
     )
 
 
@@ -79,21 +87,33 @@ def build_report_body(
 ) -> str:
     """Render every testnet trade attempt and execution transition as Markdown."""
     all_decisions = list(decisions)
-    trade_attempts = [
-        row for row in all_decisions if str(row.get("outcome")) in REPORTABLE_OUTCOMES
+    start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    window_decisions = [
+        row
+        for row in all_decisions
+        if _in_window(row.get("timestamp"), start, end)
     ]
-    counts = Counter(str(row.get("outcome", "unknown")) for row in all_decisions)
+    trade_attempts = [
+        row
+        for row in window_decisions
+        if str(row.get("outcome")) in REPORTABLE_OUTCOMES
+    ]
+    counts = Counter(str(row.get("outcome", "unknown")) for row in window_decisions)
     reasons = Counter(
         str(row.get("reason", "unknown"))
         for row in trade_attempts
         if row.get("outcome") != "accepted"
     )
-    for row in trade_attempts:
+    for row in all_decisions:
         for event in row.get("execution_events", []):
-            if event.get("status") == "order_rejected":
+            if (
+                event.get("status") == "order_rejected"
+                and _in_window(event.get("timestamp"), start, end)
+            ):
                 reasons[str(event.get("reason", "unknown"))] += 1
 
-    events = _event_counts(trade_attempts)
+    events = _event_counts(all_decisions, start, end)
     performance = PerformanceTracker.summarize(dict(row) for row in income_records)
     lines = [
         f"# Orbit Testnet daily report — {report_date.isoformat()}",
@@ -134,6 +154,7 @@ def build_report_body(
             "; ".join(
                 json.dumps(event, default=str, sort_keys=True)
                 for event in row.get("execution_events", [])
+                if _in_window(event.get("timestamp"), start, end)
             )
             or "—"
         )
@@ -189,7 +210,7 @@ def build_weekly_report_body(
     attempts = [
         row
         for row in all_decisions
-        if start <= row.get("timestamp", datetime.min.replace(tzinfo=timezone.utc)) < end
+        if _in_window(row.get("timestamp"), start, end)
         and str(row.get("outcome")) in REPORTABLE_OUTCOMES
     ]
     outcomes = Counter(str(row.get("outcome", "unknown")) for row in attempts)
@@ -474,7 +495,9 @@ class TestnetDailyReporter:
             PerformanceTracker(
                 self.futures_client, self.mongo_handler, "testnet"
             ).sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
-        decisions = self.mongo_handler.get_trade_decisions(start, end, "testnet")
+        decisions = self.mongo_handler.get_trade_decisions(
+            start, end, "testnet", include_event_window=True
+        )
         income = self.mongo_handler.get_income_records(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )

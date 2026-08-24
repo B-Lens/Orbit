@@ -28,7 +28,11 @@ class TestReportRendering(unittest.TestCase):
                 "outcome": "accepted",
                 "reason": "passed_filters",
                 "execution_events": [
-                    {"status": "order_rejected", "reason": "minimum_notional"}
+                    {
+                        "status": "order_rejected",
+                        "reason": "minimum_notional",
+                        "timestamp": datetime(2026, 8, 21, 3, tzinfo=timezone.utc),
+                    }
                 ],
             },
             {
@@ -40,7 +44,23 @@ class TestReportRendering(unittest.TestCase):
                 "outcome": "rejected",
                 "reason": "sentiment_conflict",
             },
-            {"decision_id": "quiet-1", "outcome": "no_signal"},
+            {
+                "decision_id": "quiet-1",
+                "timestamp": datetime(2026, 8, 21, 4, tzinfo=timezone.utc),
+                "outcome": "no_signal",
+            },
+            {
+                "decision_id": "prior-day-order",
+                "timestamp": datetime(2026, 8, 20, 23),
+                "outcome": "accepted",
+                "execution_events": [
+                    {
+                        "status": "order_submitted",
+                        "timestamp": datetime(2026, 8, 20, 23),
+                    },
+                    {"status": "order_filled", "timestamp": datetime(2026, 8, 21, 5)},
+                ],
+            },
         ]
 
         body = build_report_body(date(2026, 8, 21), decisions, [])
@@ -51,9 +71,11 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("sentiment_conflict", body)
         self.assertIn("Accepted signals: **1**", body)
         self.assertIn("Orders submitted: **0**", body)
+        self.assertIn("Orders filled: **1**", body)
         self.assertIn("Order-stage rejections: **1**", body)
         self.assertIn("No-signal evaluations (counted, not expanded): **1**", body)
         self.assertNotIn("quiet-1", body)
+        self.assertNotIn("prior-day-order", body)
 
     def test_large_report_is_split_without_losing_evidence(self):
         body = "header\n" + "\n".join(f"decision-{index}" for index in range(100))
@@ -189,6 +211,7 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(start, datetime(2026, 8, 17, tzinfo=timezone.utc))
         self.assertEqual(end, datetime(2026, 8, 24, tzinfo=timezone.utc))
         self.assertEqual(mode, "testnet")
+        self.assertTrue(mongo.get_trade_decisions.call_args.kwargs["include_event_window"])
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet weekly report: 2026-08-17"
         )
