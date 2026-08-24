@@ -40,6 +40,24 @@ class TestOrderManager(unittest.TestCase):
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
 
+    @patch("orbit.core.order_manager.logger.info")
+    def test_open_orders_logs_only_when_snapshot_changes(self, log_info):
+        new_order = {"orderId": 123, "status": "NEW"}
+        filled_order = {"orderId": 123, "status": "FILLED"}
+        self.manager.future_client.get_all_orders.side_effect = [
+            [new_order],
+            [new_order.copy()],
+            [filled_order],
+        ]
+
+        self.assertEqual(self.manager.get_open_orders("BTCUSDT"), [new_order])
+        self.assertEqual(self.manager.get_open_orders("BTCUSDT"), [new_order])
+        self.assertEqual(self.manager.get_open_orders("BTCUSDT"), [filled_order])
+
+        self.assertEqual(log_info.call_count, 2)
+        self.assertEqual(log_info.call_args_list[0].args[1], [new_order])
+        self.assertEqual(log_info.call_args_list[1].args[1], [filled_order])
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 

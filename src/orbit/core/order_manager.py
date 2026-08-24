@@ -15,8 +15,10 @@ Dependencies (:class:`MongoHandler`, Binance clients) can be **injected**
 through the constructor for easier testing and looser coupling.
 """
 
-import time
+import json
 import logging
+import threading
+import time
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
@@ -75,6 +77,8 @@ class OrderManager(AuthenticationManager, RedisManager):
         AuthenticationManager.__init__(self, **auth_kwargs)
         RedisManager.__init__(self, redis_client=redis_client)
         self.risk_guard = PreTradeRiskGuard(self.config.get("risk_policy"))
+        self._open_orders_log_snapshots: Dict[Tuple[str, Optional[str]], str] = {}
+        self._open_orders_log_lock = threading.Lock()
 
         if mongo_handler is not None:
             self.mongo_handler: Optional[MongoHandler] = mongo_handler
@@ -899,6 +903,10 @@ class OrderManager(AuthenticationManager, RedisManager):
     def get_open_orders(self, symbol: str, orderId: Optional[str] = None) -> List[Dict[str, Any]]:
         """Return all orders for *symbol* (optionally filtered by *orderId*).
 
+        Identical consecutive responses are logged only once for each query. A
+        changed response is logged immediately, preserving order-state visibility
+        without repeating the same snapshot on every poll.
+
         Args:
             symbol: Trading pair.
             orderId: When provided, only orders with this ID are returned.
@@ -910,7 +918,12 @@ class OrderManager(AuthenticationManager, RedisManager):
             orders = self.future_client_for(symbol).get_all_orders(
                 symbol=symbol, orderId=orderId, recvWindow=60000
             )
-            logger.info(f"Open orders: {orders} for symbol {symbol}")
+            snapshot = json.dumps(orders, sort_keys=True, default=str)
+            query = (symbol, orderId)
+            with self._open_orders_log_lock:
+                if self._open_orders_log_snapshots.get(query) != snapshot:
+                    logger.info("Open orders: %s for symbol %s", orders, symbol)
+                    self._open_orders_log_snapshots[query] = snapshot
             return orders
         except ClientError as error:
             self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> get_open_orders")
