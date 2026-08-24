@@ -224,6 +224,7 @@ class BinanceAutomation(ExceptionManager):
         # TIMEOUT → Cancel order
         try:
             cancel_result = self.order_manager.cancel_order(symbol, order_id)
+            assert cancel_result and cancel_result.get("status") == "CANCELED", "Cancellation failed"
             if decision_id and self.order_manager.mongo_handler is not None:
                 self.order_manager.mongo_handler.append_decision_event(
                     decision_id,
@@ -234,7 +235,6 @@ class BinanceAutomation(ExceptionManager):
                 description=f"Order {order_id} for {symbol} cancelled (10 min timeout)",
                 fields=cancel_result,
             )
-            assert cancel_result.get("status") == "CANCELED", "Cancellation failed"
         except Exception as e:
             self.handle_exception(e, context_description=f"Exception cancelling timed-out order {order_id} for {symbol}")
 

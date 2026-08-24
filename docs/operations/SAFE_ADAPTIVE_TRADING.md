@@ -106,11 +106,10 @@ factor, ledger drawdown, protective-order failures, and symbol/strategy
 breakdowns. It does not label realized-PnL rows as closed trades or estimate
 slippage and uptime from data that the runtime does not persist.
 
-Weekly issues receive `testnet-weekly-report` only after issue publication and
-Project insertion complete. That label is the durable backfill cursor: after
-downtime, Orbit publishes each missing completed week in order and stops at the
-first failure for retry. Weekly scorecards do not receive `ai-autonomous` and
-therefore cannot start the issue-implementation workflow.
+Weekly scorecards do not receive `ai-autonomous` and therefore cannot start the
+issue-implementation workflow. Weekly scheduling assumes 100% Orbit uptime and
+exactly one active `TestnetDailyReporterThread`; the report is attempted on
+Monday UTC and missing weeks are not backfilled after downtime.
 
 ## Risk policy
 
