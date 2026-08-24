@@ -559,7 +559,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             if quantity is None:
                 quantity = qty_from_alloc
 
-            if available_margin < self.FIXED_SPEND_USDT or quantity <= 0:
+            if quantity <= 0:
                 self.send_alerts(
                     data=None,
                     description=f"Not Enough funds for {symbol}, quantity: {quantity}, balance_available: {balance_available}",
