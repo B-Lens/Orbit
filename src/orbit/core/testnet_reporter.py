@@ -337,7 +337,7 @@ class GitHubProjectClient:
         )
         return list(issues)
 
-    def latest_weekly_report_start(self) -> Optional[date]:
+    def latest_weekly_report_start(self, latest_completed_week: date) -> Optional[date]:
         """Return the newest successfully published weekly issue's start date."""
         starts: list[date] = []
         for issue in self._report_issues(WEEKLY_REPORT_LABEL):
@@ -346,7 +346,12 @@ class GitHubProjectClient:
                 rf"{re.escape(WEEKLY_TITLE_PREFIX)}(\d{{4}}-\d{{2}}-\d{{2}})", title
             )
             if match:
-                starts.append(date.fromisoformat(match.group(1)))
+                try:
+                    week_start = date.fromisoformat(match.group(1))
+                except ValueError:
+                    continue
+                if week_start.weekday() == 0 and week_start <= latest_completed_week:
+                    starts.append(week_start)
         return max(starts, default=None)
 
     def publish(self, title: str, body: str, *, autonomous: bool = True) -> str:
@@ -520,7 +525,9 @@ class TestnetDailyReporter:
             latest_completed_week = _latest_completed_week(today)
             if not weekly_cursor_loaded:
                 try:
-                    last_week_published = self.github.latest_weekly_report_start()
+                    last_week_published = self.github.latest_weekly_report_start(
+                        latest_completed_week
+                    )
                     weekly_cursor_loaded = True
                 except Exception:
                     logger.exception("Failed to read Testnet weekly report cursor")

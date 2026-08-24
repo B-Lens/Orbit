@@ -285,15 +285,6 @@ class BinanceAutomation(ExceptionManager):
             return
 
         order_id = order_response.get("orderId")
-        if decision_id and self.order_manager.mongo_handler is not None:
-            self.order_manager.mongo_handler.append_decision_event(
-                decision_id,
-                {
-                    "status": "order_submitted",
-                    "order_id": order_id,
-                    "client_order_id": order_response.get("clientOrderId"),
-                },
-            )
         monitor_thread = threading.Thread(
             target=self.monitor_order_execution,
             args=(

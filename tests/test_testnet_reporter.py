@@ -253,7 +253,27 @@ class TestGitHubProjectClient(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(client.latest_weekly_report_start(), date(2026, 8, 10))
+        self.assertEqual(
+            client.latest_weekly_report_start(date(2026, 8, 17)),
+            date(2026, 8, 10),
+        )
+
+    def test_latest_weekly_report_start_ignores_invalid_external_cursors(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client._call = MagicMock(
+            return_value=[
+                {"title": "Orbit Testnet weekly report: 2026-08-11"},
+                {"title": "Orbit Testnet weekly report: 2099-01-05"},
+                {"title": "Orbit Testnet weekly report: 2026-99-99"},
+                {"title": "Orbit Testnet weekly report: 2026-08-10"},
+            ]
+        )
+
+        self.assertEqual(
+            client.latest_weekly_report_start(date(2026, 8, 17)),
+            date(2026, 8, 10),
+        )
 
     def test_non_autonomous_report_does_not_add_agent_label(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)

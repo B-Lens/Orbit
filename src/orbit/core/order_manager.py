@@ -721,12 +721,27 @@ class OrderManager(AuthenticationManager, RedisManager):
                 params["newClientOrderId"] = f"o{compact_id}"
 
             order_response = futures_client.new_order(**params)
-            time.sleep(2)
 
             if not order_response:
                 logger.error(f"Failed to place LIMIT order for {symbol}")
                 self._record_order_rejection(trade_id, "empty_exchange_response")
                 return None, None, None
+
+            order_id = order_response.get("orderId")
+            client_order_id = order_response.get("clientOrderId") or params.get("newClientOrderId")
+            if trade_id and self.mongo_handler is not None:
+                identity = order_id or client_order_id
+                self.mongo_handler.append_decision_event(
+                    trade_id,
+                    {
+                        "event_id": f"order_submitted:{symbol}:{identity}",
+                        "status": "order_submitted",
+                        "order_id": order_id,
+                        "client_order_id": client_order_id,
+                    },
+                )
+
+            time.sleep(2)
 
             self.send_signal_updates(
                 data=None,
