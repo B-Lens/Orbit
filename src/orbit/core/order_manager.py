@@ -18,6 +18,7 @@ through the constructor for easier testing and looser coupling.
 import time
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
 
 from binance.error import ClientError
@@ -59,6 +60,9 @@ class OrderManager(AuthenticationManager, RedisManager):
 
     MAX_LOSS_PER_BRIDGE: float = 0.3
     """Maximum acceptable USDT loss for a single bridge order."""
+
+    POSITION_SIZE_BUFFER: float = 0.98
+    """Reserve 2% for price movement, fees, and exchange rounding."""
 
     _exchange_filters_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -150,8 +154,12 @@ class OrderManager(AuthenticationManager, RedisManager):
         if step <= 0:
             return qty
 
-        corrected = qty - (qty % step)
-        return round(corrected, 8)
+        quantity_decimal = Decimal(str(qty))
+        step_decimal = Decimal(str(step))
+        corrected = (quantity_decimal / step_decimal).to_integral_value(
+            rounding=ROUND_DOWN
+        ) * step_decimal
+        return round(float(corrected), 8)
 
     def validate_notional(self, symbol: str, price: float, qty: float) -> bool:
         """Return ``True`` if ``price * qty`` meets the MIN_NOTIONAL filter."""
@@ -181,6 +189,12 @@ class OrderManager(AuthenticationManager, RedisManager):
         client = self.future_client_for(symbol) if symbol else self.future_client
         account_info = client.account()
         return float(account_info["totalWalletBalance"])
+
+    def get_available_usdt_balance(self, symbol: Optional[str] = None) -> float:
+        """Return unreserved USDT margin available on the Futures account."""
+        client = self.future_client_for(symbol) if symbol else self.future_client
+        account_info = client.account()
+        return float(account_info["availableBalance"])
 
     def get_daily_net_pnl(self, symbol: Optional[str] = None) -> float:
         """Synchronize today's exchange income before applying the loss halt."""
@@ -443,23 +457,42 @@ class OrderManager(AuthenticationManager, RedisManager):
         Returns:
             A ``(quantity, required_margin)`` tuple.
         """
-        if entry_price <= 0 or stop_price is None or stop_price <= 0 or leverage <= 0:
+        if (
+            entry_price <= 0
+            or stop_price is None
+            or stop_price <= 0
+            or leverage <= 0
+            or leverage > self.risk_guard.max_leverage
+        ):
             return 0.0, 0.0
         equity = self.get_usdt_balance(symbol)
+        available_margin = self.get_available_usdt_balance(symbol)
+        if equity <= 0 or available_margin <= 0:
+            return 0.0, 0.0
         effective_risk = min(float(risk_perc), self.risk_guard.max_risk_per_trade_pct)
         risk_value = equity * effective_risk
         stop_distance = abs(entry_price - stop_price)
         if stop_distance <= 0:
             return 0.0, 0.0
         qty_risk = risk_value / stop_distance
+        qty_notional = (
+            equity * self.risk_guard.max_position_notional_pct / entry_price
+        )
+        qty_margin = available_margin * leverage / entry_price
 
         filters = self.get_symbol_filters(symbol)
         min_notional_filter = filters.get("MIN_NOTIONAL")
         min_notional = float(min_notional_filter["notional"]) if min_notional_filter else 5.0
-        min_qty = min_notional / entry_price
-        # Reject later if the exchange minimum itself would violate policy.
-        qty = max(qty_risk, min_qty)
+        lot_size_filter = filters.get("LOT_SIZE")
+        lot_size_min_qty = (
+            float(lot_size_filter["minQty"]) if lot_size_filter else 0.0
+        )
+        min_qty = max(min_notional / entry_price, lot_size_min_qty)
+        qty = min(qty_risk, qty_notional, qty_margin) * self.POSITION_SIZE_BUFFER
         qty = self.adjust_quantity_step(symbol, qty)
+        # An exchange minimum must never raise quantity above a safety cap.
+        if qty < min_qty:
+            return 0.0, 0.0
         required_margin = (entry_price * qty) / leverage
         logger.info(f"Calculated position size for {symbol}: Qty={qty}, Required Margin={required_margin}")
         return qty, required_margin
@@ -511,6 +544,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             effective_trade_id = trade_id or symbol
 
             balance_available = self.get_usdt_balance(symbol)
+            available_margin = self.get_available_usdt_balance(symbol)
             qty_from_alloc: float = 0.0
 
             if sl is not None and symbol in risk_management:
@@ -525,7 +559,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             if quantity is None:
                 quantity = qty_from_alloc
 
-            if balance_available < self.FIXED_SPEND_USDT or quantity <= 0:
+            if quantity <= 0:
                 self.send_alerts(
                     data=None,
                     description=f"Not Enough funds for {symbol}, quantity: {quantity}, balance_available: {balance_available}",
@@ -535,6 +569,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                     trade_id,
                     "insufficient_funds_or_quantity",
                     balance=balance_available,
+                    available_margin=available_margin,
                     quantity=quantity,
                 )
                 return None, None, None
@@ -577,6 +612,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 leverage=leverage,
                 side=side,
                 daily_net_pnl=self.get_daily_net_pnl(symbol),
+                available_margin=available_margin,
             )
             if not risk_decision.allowed:
                 logger.warning("Order rejected by risk guard: %s", risk_decision.reason)

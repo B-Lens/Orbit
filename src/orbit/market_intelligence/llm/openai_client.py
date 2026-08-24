@@ -15,6 +15,7 @@ logger = logging.getLogger("Orbit")
 
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_OUTPUT_TOKENS = 2_000
+MAX_PREMATURE_STREAM_RETRIES = 1
 DEFAULT_INSTRUCTIONS = (
     "You are Orbit's market-intelligence analyst. Follow the requested output "
     "schema exactly. When JSON is requested, return only valid JSON without "
@@ -170,6 +171,20 @@ class CodexOAuthResponsesClient:
         if not prompt or not prompt.strip():
             raise ValueError("prompt must not be empty")
 
+        for attempt in range(MAX_PREMATURE_STREAM_RETRIES + 1):
+            output_text = self._invoke_stream(prompt, web_search)
+            if output_text is not None:
+                logger.info("OpenAI OAuth response generated with %s", self.model)
+                return output_text
+            if attempt < MAX_PREMATURE_STREAM_RETRIES:
+                logger.warning(
+                    "OpenAI stream ended before response.completed; retrying once"
+                )
+
+        raise RuntimeError("OpenAI stream ended before response.completed")
+
+    def _invoke_stream(self, prompt: str, web_search: bool) -> Optional[str]:
+        """Run one stream, returning ``None`` when it ends prematurely."""
         access_token, account_id = self._credentials()
         request_id = str(uuid.uuid4())
         payload_data: dict[str, Any] = {
@@ -247,8 +262,7 @@ class CodexOAuthResponsesClient:
 
         output_text = "".join(assistant_text).strip()
         if not completed:
-            raise RuntimeError("OpenAI stream ended before response.completed")
+            return None
         if not output_text:
             raise RuntimeError("OpenAI returned an empty response")
-        logger.info("OpenAI OAuth response generated with %s", self.model)
         return output_text

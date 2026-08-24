@@ -197,6 +197,25 @@ class TestRiskGuard(unittest.TestCase):
         )
         self.assertTrue(result.allowed)
 
+    def test_rejects_quantity_that_requires_more_than_available_margin(self):
+        self.guard.max_position_notional_pct = 2.0
+
+        result = self.guard.evaluate(
+            equity=1000,
+            entry_price=100,
+            stop_loss=99.9,
+            take_profit=100.2,
+            quantity=15,
+            leverage=1,
+            side="BUY",
+            available_margin=100,
+        )
+
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason, "insufficient_margin")
+        self.assertEqual(result.metrics["required_margin"], 1500)
+        self.assertEqual(result.metrics["available_margin"], 100)
+
     def test_rejects_daily_loss_limit(self):
         result = self.guard.evaluate(
             equity=1000,
