@@ -22,11 +22,18 @@ REPORTABLE_OUTCOMES = {"accepted", "rejected", "error"}
 WEEKLY_TITLE_PREFIX = "Orbit Testnet weekly report: "
 
 
-def _event_counts(decisions: Iterable[Mapping[str, Any]]) -> Counter[str]:
+def _event_counts(
+    decisions: Iterable[Mapping[str, Any]],
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> Counter[str]:
     return Counter(
         str(event.get("status", "unknown"))
         for row in decisions
         for event in row.get("execution_events", [])
+        if start is None
+        or end is None
+        or (start <= event.get("timestamp", datetime.min.replace(tzinfo=timezone.utc)) < end)
     )
 
 
@@ -177,11 +184,16 @@ def build_weekly_report_body(
     """Render one completed UTC week's operational and performance evidence."""
     all_decisions = list(decisions)
     income = list(income_records)
+    start = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
+    end = start + timedelta(days=7)
     attempts = [
-        row for row in all_decisions if str(row.get("outcome")) in REPORTABLE_OUTCOMES
+        row
+        for row in all_decisions
+        if start <= row.get("timestamp", datetime.min.replace(tzinfo=timezone.utc)) < end
+        and str(row.get("outcome")) in REPORTABLE_OUTCOMES
     ]
-    outcomes = Counter(str(row.get("outcome", "unknown")) for row in all_decisions)
-    events = _event_counts(attempts)
+    outcomes = Counter(str(row.get("outcome", "unknown")) for row in attempts)
+    events = _event_counts(all_decisions, start, end)
     performance = PerformanceTracker.summarize(dict(row) for row in income)
     profit_factor, max_drawdown, realized_events = _income_risk_metrics(income)
     accepted = outcomes["accepted"]
@@ -443,7 +455,9 @@ class TestnetDailyReporter:
             PerformanceTracker(
                 self.futures_client, self.mongo_handler, "testnet"
             ).sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
-        decisions = self.mongo_handler.get_trade_decisions(start, end, "testnet")
+        decisions = self.mongo_handler.get_trade_decisions(
+            start, end, "testnet", include_event_window=True
+        )
         income = self.mongo_handler.get_income_records(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
@@ -484,15 +498,14 @@ class TestnetDailyReporter:
                     last_published = yesterday
                 except Exception:
                     logger.exception("Failed to publish Testnet daily report")
-            if today.weekday() == 0:
-                previous_week = today - timedelta(days=7)
-                if previous_week != last_week_published:
-                    try:
-                        url = self.publish_week(previous_week)
-                        logger.info("Published Testnet weekly report: %s", url)
-                        last_week_published = previous_week
-                    except Exception:
-                        logger.exception("Failed to publish Testnet weekly report")
+            previous_week = today - timedelta(days=today.weekday() + 7)
+            if previous_week != last_week_published:
+                try:
+                    url = self.publish_week(previous_week)
+                    logger.info("Published Testnet weekly report: %s", url)
+                    last_week_published = previous_week
+                except Exception:
+                    logger.exception("Failed to publish Testnet weekly report")
             time_module.sleep(interval_seconds)
 
     @classmethod

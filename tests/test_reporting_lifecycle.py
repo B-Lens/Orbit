@@ -25,6 +25,7 @@ class TestReportingLifecycle(unittest.TestCase):
         automation.order_manager.mongo_handler.append_decision_event.assert_called_once_with(
             "decision-1",
             {
+                "event_id": "order_filled:ETHUSDT:123",
                 "status": "order_filled",
                 "order_id": 123,
                 "executed_quantity": "0.5",

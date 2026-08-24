@@ -64,25 +64,35 @@ class TestReportRendering(unittest.TestCase):
     def test_weekly_report_separates_signals_submissions_and_fills(self):
         decisions = [
             {
+                "timestamp": datetime(2026, 8, 18, tzinfo=timezone.utc),
                 "symbol": "ETHUSDT",
                 "strategy": "orbit.strategies.ETHStrategy",
                 "outcome": "accepted",
                 "execution_events": [
-                    {"status": "protective_order_submitted"},
-                    {"status": "order_submitted"},
-                    {"status": "order_filled"},
+                    {"status": "protective_order_submitted", "timestamp": datetime(2026, 8, 18, tzinfo=timezone.utc)},
+                    {"status": "order_submitted", "timestamp": datetime(2026, 8, 18, tzinfo=timezone.utc)},
+                    {"status": "order_filled", "timestamp": datetime(2026, 8, 24, tzinfo=timezone.utc)},
                 ],
             },
             {
+                "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc),
                 "symbol": "PAXGUSDT",
                 "strategy": "orbit.strategies.PAXGUSDTStrategy",
                 "outcome": "accepted",
                 "execution_events": [
-                    {"status": "order_rejected", "reason": "position_notional_limit"},
-                    {"status": "protective_order_failed"},
+                    {"status": "order_rejected", "reason": "position_notional_limit", "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc)},
+                    {"status": "protective_order_failed", "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc)},
                 ],
             },
-            {"symbol": "ETHUSDT", "outcome": "rejected"},
+            {"timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc), "symbol": "ETHUSDT", "outcome": "rejected"},
+            {
+                "timestamp": datetime(2026, 8, 16, tzinfo=timezone.utc),
+                "symbol": "BTCUSDT",
+                "outcome": "accepted",
+                "execution_events": [
+                    {"status": "order_filled", "timestamp": datetime(2026, 8, 17, tzinfo=timezone.utc)}
+                ],
+            },
         ]
         income = [
             {
@@ -120,8 +130,8 @@ class TestReportRendering(unittest.TestCase):
 class TestDailyReporter(unittest.TestCase):
     @patch("orbit.core.testnet_reporter.time_module.sleep")
     @patch("orbit.core.testnet_reporter.datetime")
-    def test_weekly_report_is_published_on_monday_only(self, datetime_mock, sleep_mock):
-        datetime_mock.now.return_value = datetime(2026, 8, 24, 12, tzinfo=timezone.utc)
+    def test_weekly_report_is_repaired_after_monday(self, datetime_mock, sleep_mock):
+        datetime_mock.now.return_value = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
         sleep_mock.side_effect = RuntimeError("stop loop")
         reporter = DailyReporter(MagicMock(), MagicMock())
         reporter.publish_date = MagicMock(return_value="daily")
@@ -149,6 +159,7 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(start, datetime(2026, 8, 21, tzinfo=timezone.utc))
         self.assertEqual(end, datetime(2026, 8, 22, tzinfo=timezone.utc))
         self.assertEqual(mode, "testnet")
+        self.assertTrue(mongo.get_trade_decisions.call_args.kwargs["include_event_window"])
         futures.get_income_history.assert_called_once_with(
             recvWindow=60000,
             startTime=int(start.timestamp() * 1000),

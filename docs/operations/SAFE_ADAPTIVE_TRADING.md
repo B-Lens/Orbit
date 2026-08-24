@@ -107,9 +107,9 @@ breakdowns. It does not label realized-PnL rows as closed trades or estimate
 slippage and uptime from data that the runtime does not persist.
 
 Weekly scorecards do not receive `ai-autonomous` and therefore cannot start the
-issue-implementation workflow. Weekly scheduling assumes 100% Orbit uptime and
-exactly one active `TestnetDailyReporterThread`; the report is attempted on
-Monday UTC and missing weeks are not backfilled after downtime.
+issue-implementation workflow. On every run, the reporter idempotently publishes
+the latest completed UTC week, so a restart after Monday still repairs that
+week's report.
 
 ## Risk policy
 

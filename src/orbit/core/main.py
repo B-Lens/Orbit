@@ -175,6 +175,7 @@ class BinanceAutomation(ExceptionManager):
                             self.order_manager.mongo_handler.append_decision_event(
                                 decision_id,
                                 {
+                                    "event_id": f"order_{status.lower()}:{symbol}:{order_id}",
                                     "status": f"order_{status.lower()}",
                                     "order_id": order_id,
                                 },
@@ -194,6 +195,7 @@ class BinanceAutomation(ExceptionManager):
                             self.order_manager.mongo_handler.append_decision_event(
                                 decision_id,
                                 {
+                                    "event_id": f"order_filled:{symbol}:{order_id}",
                                     "status": "order_filled",
                                     "order_id": order_id,
                                     "executed_quantity": order.get("executedQty", quantity),
@@ -228,7 +230,11 @@ class BinanceAutomation(ExceptionManager):
             if decision_id and self.order_manager.mongo_handler is not None:
                 self.order_manager.mongo_handler.append_decision_event(
                     decision_id,
-                    {"status": "order_timeout_cancelled", "order_id": order_id},
+                    {
+                        "event_id": f"order_timeout_cancelled:{symbol}:{order_id}",
+                        "status": "order_timeout_cancelled",
+                        "order_id": order_id,
+                    },
                 )
             self.send_alerts(
                 data=None,
