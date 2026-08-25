@@ -1,8 +1,7 @@
-"""Daily exchange validation for testnet order parameters.
+"""Daily end-to-end order validation on Binance Futures Testnet.
 
-The Binance test-order endpoint validates an order without submitting it to
-the matching engine.  This catches stale filters, precision mistakes, and
-minimum-notional failures without opening a position.
+The validator places a deliberately off-market LIMIT order and immediately
+cancels it.  It never operates on a live-configured asset.
 """
 
 import logging
@@ -25,14 +24,18 @@ class TestnetOrderValidator:
         order_manager: OrderManager,
         hour_utc: int = 2,
         minute_utc: int = 7,
+        price_discount_pct: float = 2.0,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not 0 <= hour_utc <= 23 or not 0 <= minute_utc <= 59:
             raise ValueError("Testnet validation time must be a valid UTC time")
+        if not 1.0 <= price_discount_pct <= 10.0:
+            raise ValueError("Testnet validation price discount must be 1-10 percent")
         self.order_manager = order_manager
         self.hour_utc = hour_utc
         self.minute_utc = minute_utc
+        self.price_discount_pct = price_discount_pct
         self._now = now
         self._sleep = sleep
 
@@ -47,26 +50,45 @@ class TestnetOrderValidator:
                 "ORBIT_TESTNET_VALIDATION_ENABLED must be true or false"
             )
         raw_time = os.getenv("ORBIT_TESTNET_VALIDATION_TIME_UTC", "02:07")
+        raw_discount = os.getenv(
+            "ORBIT_TESTNET_VALIDATION_PRICE_DISCOUNT_PCT", "2"
+        )
         try:
             hour, minute = (int(part) for part in raw_time.split(":"))
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 "ORBIT_TESTNET_VALIDATION_TIME_UTC must use HH:MM"
             ) from exc
-        return cls(order_manager, hour, minute)
+        try:
+            discount = float(raw_discount)
+        except ValueError as exc:
+            raise ValueError(
+                "ORBIT_TESTNET_VALIDATION_PRICE_DISCOUNT_PCT must be numeric"
+            ) from exc
+        return cls(order_manager, hour, minute, discount)
 
     def validate_symbol(self, symbol: str) -> dict[str, Any]:
-        """Send a normalized LIMIT order to Binance's non-executing endpoint."""
+        """Place and cancel one safely off-market testnet LIMIT order."""
         if (
             self.order_manager.execution_settings.mode_for(symbol)
             is not ExecutionMode.TESTNET
         ):
             raise ValueError(f"Refusing validation for non-testnet asset {symbol}")
 
+        open_orders = self.order_manager.get_current_open_orders(symbol)
+        if open_orders:
+            logger.info(
+                "Skipping daily validation for %s because %s order(s) are open",
+                symbol,
+                len(open_orders),
+            )
+            return {"status": "SKIPPED", "reason": "open_order_present"}
+
         # A daily validation deliberately retrieves today's exchange filters.
         self.order_manager.refresh_symbol_filters(symbol)
+        market_price = self.order_manager.get_symbol_price(symbol)
         price = self.order_manager.adjust_price_tick(
-            symbol, self.order_manager.get_symbol_price(symbol)
+            symbol, market_price * (1.0 - self.price_discount_pct / 100.0)
         )
         quantity = self.order_manager.fixed_asset_allocated(symbol, price)
         precision = self.order_manager.config.get("trading_pairs_precision", {}).get(
@@ -92,9 +114,22 @@ class TestnetOrderValidator:
             "price": str(price),
             "recvWindow": 60000,
         }
-        response = self.order_manager.submit_test_order(symbol, **params)
-        logger.info("Daily testnet order validation passed for %s: %s", symbol, params)
-        return response
+        response = self.order_manager.submit_validation_order(symbol, **params)
+        order_id = response.get("orderId")
+        if order_id is None:
+            raise RuntimeError(f"Validation order for {symbol} returned no orderId")
+
+        cancellation = self.order_manager.cancel_order(symbol, int(order_id))
+        if not cancellation or cancellation.get("status") != "CANCELED":
+            raise RuntimeError(
+                f"Validation order {order_id} for {symbol} was not canceled"
+            )
+        logger.info(
+            "Daily testnet order validation passed and order %s was canceled for %s",
+            order_id,
+            symbol,
+        )
+        return {"order": response, "cancellation": cancellation}
 
     def run_once(self) -> dict[str, bool]:
         """Validate all and only assets configured for testnet execution."""

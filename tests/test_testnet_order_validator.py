@@ -13,28 +13,38 @@ class TestTestnetOrderValidator(unittest.TestCase):
             {"BTCUSDT": ExecutionMode.TESTNET, "ETHUSDT": ExecutionMode.LIVE}
         )
         self.manager.config = {"trading_pairs_precision": {"BTCUSDT": 3}}
+        self.manager.get_current_open_orders.return_value = []
         self.manager.get_symbol_price.return_value = 100.07
-        self.manager.adjust_price_tick.return_value = 100.0
+        self.manager.adjust_price_tick.return_value = 98.0
         self.manager.fixed_asset_allocated.return_value = 0.0567
         self.manager.adjust_quantity_step.return_value = 0.056
         self.manager.validate_notional.return_value = True
-        self.manager.submit_test_order.return_value = {}
+        self.manager.submit_validation_order.return_value = {"orderId": 123}
+        self.manager.cancel_order.return_value = {
+            "orderId": 123,
+            "status": "CANCELED",
+        }
         self.validator = TestnetOrderValidator(self.manager)
 
-    def test_uses_exchange_test_endpoint_with_normalized_values(self):
+    def test_places_off_market_order_and_cancels_it(self):
         result = self.validator.validate_symbol("BTCUSDT")
 
-        self.assertEqual(result, {})
+        self.assertEqual(result["order"], {"orderId": 123})
+        self.assertEqual(result["cancellation"]["status"], "CANCELED")
         self.manager.refresh_symbol_filters.assert_called_once_with("BTCUSDT")
-        self.manager.submit_test_order.assert_called_once_with(
+        self.manager.adjust_price_tick.assert_called_once_with(
+            "BTCUSDT", 100.07 * 0.98
+        )
+        self.manager.submit_validation_order.assert_called_once_with(
             "BTCUSDT",
             side="BUY",
             type="LIMIT",
             timeInForce="GTC",
             quantity="0.056",
-            price="100.0",
+            price="98.0",
             recvWindow=60000,
         )
+        self.manager.cancel_order.assert_called_once_with("BTCUSDT", 123)
 
     def test_run_once_skips_live_assets_and_alerts_testnet_failures(self):
         self.manager.validate_notional.return_value = False
@@ -47,7 +57,7 @@ class TestTestnetOrderValidator(unittest.TestCase):
         self.assertEqual(result, {"BTCUSDT": False})
         self.manager.send_alerts.assert_called_once()
         self.assertNotIn(call("ETHUSDT"), self.manager.get_symbol_price.call_args_list)
-        self.manager.submit_test_order.assert_not_called()
+        self.manager.submit_validation_order.assert_not_called()
 
     def test_refuses_live_asset(self):
         with self.assertRaisesRegex(ValueError, "non-testnet"):
@@ -66,13 +76,13 @@ class TestTestnetOrderValidator(unittest.TestCase):
         result = self.validator.run_once()
 
         self.assertEqual(result, {"BNBUSDT": True, "BTCUSDT": True})
-        self.manager.submit_test_order.assert_any_call(
+        self.manager.submit_validation_order.assert_any_call(
             "BNBUSDT",
             side="BUY",
             type="LIMIT",
             timeInForce="GTC",
             quantity="0.056",
-            price="100.0",
+            price="98.0",
             recvWindow=60000,
         )
 
@@ -83,10 +93,29 @@ class TestTestnetOrderValidator(unittest.TestCase):
 
         result = self.validator.validate_symbol("BNBUSDT")
 
-        self.assertEqual(result, {})
+        self.assertEqual(result["cancellation"]["status"], "CANCELED")
         self.manager.adjust_quantity_step.assert_called_once_with(
             "BNBUSDT", 0.0567
         )
+
+    def test_skips_asset_when_an_open_order_exists(self):
+        self.manager.get_current_open_orders.return_value = [{"orderId": 77}]
+
+        result = self.validator.validate_symbol("BTCUSDT")
+
+        self.assertEqual(
+            result, {"status": "SKIPPED", "reason": "open_order_present"}
+        )
+        self.manager.submit_validation_order.assert_not_called()
+        self.manager.cancel_order.assert_not_called()
+
+    def test_cancellation_failure_marks_daily_validation_failed(self):
+        self.manager.cancel_order.return_value = None
+
+        result = self.validator.run_once()
+
+        self.assertEqual(result, {"BTCUSDT": False})
+        self.manager.send_alerts.assert_called_once()
 
     def test_next_run_is_strictly_future(self):
         now = datetime(2026, 8, 25, 2, 7, tzinfo=timezone.utc)

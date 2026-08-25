@@ -141,11 +141,19 @@ class OrderManager(AuthenticationManager, RedisManager):
             self._exchange_filters_cache[symbol] = fetched
         return fetched
 
-    def submit_test_order(self, symbol: str, **params: Any) -> Dict[str, Any]:
-        """Validate an order on Futures Testnet without entering the order book."""
+    def get_current_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
+        """Return currently open orders, refusing to hide exchange failures."""
+        return self.future_client_for(symbol).get_orders(
+            symbol=symbol, recvWindow=60000
+        )
+
+    def submit_validation_order(self, symbol: str, **params: Any) -> Dict[str, Any]:
+        """Place a real validation order, restricted to Futures Testnet."""
         if self.execution_settings.mode_for(symbol) is not ExecutionMode.TESTNET:
-            raise ValueError(f"Refusing test-order submission for live asset {symbol}")
-        return self._order_client_for(symbol).new_order_test(symbol=symbol, **params)
+            raise ValueError(
+                f"Refusing validation-order submission for live asset {symbol}"
+            )
+        return self._order_client_for(symbol).new_order(symbol=symbol, **params)
 
     def adjust_price_tick(self, symbol: str, price: float) -> float:
         """Round *price* down to the nearest valid tick for *symbol*."""

@@ -40,27 +40,39 @@ class TestOrderManager(unittest.TestCase):
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
 
-    def test_test_order_submission_uses_testnet_gateway(self):
-        self.manager.future_client.new_order_test.return_value = {}
+    def test_validation_order_submission_uses_testnet_gateway(self):
+        self.manager.future_client.new_order.return_value = {"orderId": 123}
 
-        response = self.manager.submit_test_order(
+        response = self.manager.submit_validation_order(
             "BTCUSDT", side="BUY", type="LIMIT"
         )
 
-        self.assertEqual(response, {})
-        self.manager.future_client.new_order_test.assert_called_once_with(
+        self.assertEqual(response, {"orderId": 123})
+        self.manager.future_client.new_order.assert_called_once_with(
             symbol="BTCUSDT", side="BUY", type="LIMIT"
         )
 
-    def test_test_order_submission_refuses_live_asset(self):
+    def test_validation_order_submission_refuses_live_asset(self):
         self.manager.execution_settings = ExecutionSettings(
             {"BTCUSDT": ExecutionMode.LIVE}
         )
 
         with self.assertRaisesRegex(ValueError, "live asset"):
-            self.manager.submit_test_order("BTCUSDT", side="BUY", type="LIMIT")
+            self.manager.submit_validation_order(
+                "BTCUSDT", side="BUY", type="LIMIT"
+            )
 
-        self.manager.future_client.new_order_test.assert_not_called()
+        self.manager.future_client.new_order.assert_not_called()
+
+    def test_current_open_orders_uses_open_orders_endpoint(self):
+        self.manager.future_client.get_orders.return_value = [{"orderId": 1}]
+
+        result = self.manager.get_current_open_orders("BTCUSDT")
+
+        self.assertEqual(result, [{"orderId": 1}])
+        self.manager.future_client.get_orders.assert_called_once_with(
+            symbol="BTCUSDT", recvWindow=60000
+        )
 
     def test_filter_refresh_preserves_cached_value_when_fetch_fails(self):
         cached = {"MIN_NOTIONAL": {"notional": "5"}}
