@@ -137,13 +137,14 @@ class DiscordManager:
                         "inline": True
                     })
 
-            # 🔹 Respect max 25 fields
+            # 🔹 Respect max 25 fields.
             if len(processed_fields) > self.MAX_FIELDS:
                 processed_fields = processed_fields[:self.MAX_FIELDS]
                 truncated = True
 
             # 🔹 If anything was truncated, add warning field
             if truncated:
+                processed_fields = processed_fields[: self.MAX_FIELDS - 1]
                 processed_fields.append({
                     "name": "⚠ Warning",
                     "value": "Message was truncated due to Discord size limits.",
