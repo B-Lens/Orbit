@@ -155,7 +155,7 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(quantity, 0.1)
         self.manager.future_client.new_order.assert_called_once()
 
-    def test_order_does_not_round_exchange_adjusted_quantity_up(self):
+    def test_order_rounds_configured_quantity_precision_down(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
         self.manager.get_daily_net_pnl = MagicMock(return_value=0)
         self.manager.future_client.new_order.return_value = {"orderId": 1}
@@ -172,13 +172,13 @@ class TestOrderManager(unittest.TestCase):
             price=1000,
             sl=990,
             target=1020,
-            quantity=0.249,
+            quantity=0.2499,
             ros=True,
             trade_id="decision-high-priced-asset",
         )
 
         self.assertEqual(response, {"orderId": 1})
-        self.assertEqual(quantity, 0.249)
+        self.assertEqual(quantity, 0.24)
 
     def test_order_submission_is_persisted_before_post_submission_work(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
