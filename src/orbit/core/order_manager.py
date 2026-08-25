@@ -153,7 +153,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             raise ValueError(
                 f"Refusing validation-order submission for live asset {symbol}"
             )
-        return self._order_client_for(symbol).new_order(symbol=symbol, **params)
+        return self.future_client_for(symbol).new_order(symbol=symbol, **params)
 
     def adjust_price_tick(self, symbol: str, price: float) -> float:
         """Round *price* down to the nearest valid tick for *symbol*."""

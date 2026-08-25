@@ -24,7 +24,8 @@ class TestTestnetOrderValidator(unittest.TestCase):
             "orderId": 123,
             "status": "CANCELED",
         }
-        self.validator = TestnetOrderValidator(self.manager)
+        self.sleep = MagicMock()
+        self.validator = TestnetOrderValidator(self.manager, sleep=self.sleep)
 
     def test_places_off_market_order_and_cancels_it(self):
         result = self.validator.validate_symbol("BTCUSDT")
@@ -39,7 +40,7 @@ class TestTestnetOrderValidator(unittest.TestCase):
             "BTCUSDT",
             side="BUY",
             type="LIMIT",
-            timeInForce="GTC",
+            timeInForce="GTX",
             quantity="0.056",
             price="98.0",
             recvWindow=60000,
@@ -80,7 +81,7 @@ class TestTestnetOrderValidator(unittest.TestCase):
             "BNBUSDT",
             side="BUY",
             type="LIMIT",
-            timeInForce="GTC",
+            timeInForce="GTX",
             quantity="0.056",
             price="98.0",
             recvWindow=60000,
@@ -116,6 +117,15 @@ class TestTestnetOrderValidator(unittest.TestCase):
 
         self.assertEqual(result, {"BTCUSDT": False})
         self.manager.send_alerts.assert_called_once()
+        self.assertEqual(self.manager.cancel_order.call_count, 3)
+
+    def test_exchange_minimum_cannot_enlarge_validation_allocation(self):
+        self.manager.adjust_quantity_step.return_value = 0.057
+
+        with self.assertRaisesRegex(ValueError, "enlarged"):
+            self.validator.validate_symbol("BTCUSDT")
+
+        self.manager.submit_validation_order.assert_not_called()
 
     def test_next_run_is_strictly_future(self):
         now = datetime(2026, 8, 25, 2, 7, tzinfo=timezone.utc)

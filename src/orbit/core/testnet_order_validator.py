@@ -91,6 +91,7 @@ class TestnetOrderValidator:
             symbol, market_price * (1.0 - self.price_discount_pct / 100.0)
         )
         quantity = self.order_manager.fixed_asset_allocated(symbol, price)
+        intended_quantity = float(quantity)
         precision = self.order_manager.config.get("trading_pairs_precision", {}).get(
             symbol
         )
@@ -99,6 +100,11 @@ class TestnetOrderValidator:
         quantity = self.order_manager.adjust_quantity_step(symbol, quantity)
         if quantity <= 0:
             raise ValueError(f"Calculated quantity is zero for {symbol}")
+        if quantity > intended_quantity:
+            raise ValueError(
+                f"Exchange normalization enlarged {symbol} quantity beyond allocation: "
+                f"{intended_quantity} -> {quantity}"
+            )
         if not self.order_manager.validate_notional(symbol, price, quantity):
             filters = self.order_manager.get_symbol_filters(symbol)
             minimum = (filters.get("MIN_NOTIONAL") or {}).get("notional", "unknown")
@@ -109,7 +115,9 @@ class TestnetOrderValidator:
         params = {
             "side": "BUY",
             "type": "LIMIT",
-            "timeInForce": "GTC",
+            # Post-only prevents an order that crossed during request transit
+            # from immediately taking liquidity and filling.
+            "timeInForce": "GTX",
             "quantity": str(quantity),
             "price": str(price),
             "recvWindow": 60000,
@@ -119,17 +127,37 @@ class TestnetOrderValidator:
         if order_id is None:
             raise RuntimeError(f"Validation order for {symbol} returned no orderId")
 
-        cancellation = self.order_manager.cancel_order(symbol, int(order_id))
-        if not cancellation or cancellation.get("status") != "CANCELED":
-            raise RuntimeError(
-                f"Validation order {order_id} for {symbol} was not canceled"
-            )
+        cancellation = self._cancel_validation_order(symbol, int(order_id))
         logger.info(
             "Daily testnet order validation passed and order %s was canceled for %s",
             order_id,
             symbol,
         )
         return {"order": response, "cancellation": cancellation}
+
+    def _cancel_validation_order(
+        self, symbol: str, order_id: int
+    ) -> dict[str, Any]:
+        """Retry cancellation and accept a queried CANCELED terminal state."""
+        for attempt in range(3):
+            cancellation = self.order_manager.cancel_order(symbol, order_id)
+            if cancellation and cancellation.get("status") == "CANCELED":
+                return cancellation
+
+            state = self.order_manager.get_order(symbol, order_id)
+            status = state.get("status") if isinstance(state, dict) else None
+            if status == "CANCELED":
+                return state
+            if status in {"FILLED", "EXPIRED", "REJECTED"}:
+                raise RuntimeError(
+                    f"Validation order {order_id} for {symbol} reached {status}"
+                )
+            if attempt < 2:
+                self._sleep(1.0)
+
+        raise RuntimeError(
+            f"Validation order {order_id} for {symbol} was not canceled after 3 attempts"
+        )
 
     def run_once(self) -> dict[str, bool]:
         """Validate all and only assets configured for testnet execution."""
