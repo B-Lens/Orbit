@@ -13,7 +13,6 @@ class TestTestnetOrderValidator(unittest.TestCase):
             {"BTCUSDT": ExecutionMode.TESTNET, "ETHUSDT": ExecutionMode.LIVE}
         )
         self.manager.config = {"trading_pairs_precision": {"BTCUSDT": 3}}
-        self.manager.trading_pairs = ["BTCUSDT"]
         self.manager.get_symbol_price.return_value = 100.07
         self.manager.adjust_price_tick.return_value = 100.0
         self.manager.fixed_asset_allocated.return_value = 0.0567
@@ -53,6 +52,29 @@ class TestTestnetOrderValidator(unittest.TestCase):
     def test_refuses_live_asset(self):
         with self.assertRaisesRegex(ValueError, "non-testnet"):
             self.validator.validate_symbol("ETHUSDT")
+
+    def test_run_once_includes_monitored_testnet_assets(self):
+        self.manager.execution_settings = ExecutionSettings(
+            {
+                "BTCUSDT": ExecutionMode.TESTNET,
+                "BNBUSDT": ExecutionMode.TESTNET,
+                "ETHUSDT": ExecutionMode.LIVE,
+            }
+        )
+        self.manager.config["trading_pairs_precision"]["BNBUSDT"] = 2
+
+        result = self.validator.run_once()
+
+        self.assertEqual(result, {"BNBUSDT": True, "BTCUSDT": True})
+        self.manager.submit_test_order.assert_any_call(
+            "BNBUSDT",
+            side="BUY",
+            type="LIMIT",
+            timeInForce="GTC",
+            quantity="0.056",
+            price="100.0",
+            recvWindow=60000,
+        )
 
     def test_next_run_is_strictly_future(self):
         now = datetime(2026, 8, 25, 2, 7, tzinfo=timezone.utc)

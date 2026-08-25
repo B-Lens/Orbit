@@ -97,8 +97,9 @@ class TestnetOrderValidator:
     def run_once(self) -> dict[str, bool]:
         """Validate all and only assets configured for testnet execution."""
         results: dict[str, bool] = {}
-        for symbol in sorted(self.order_manager.trading_pairs):
-            mode = self.order_manager.execution_settings.mode_for(symbol)
+        for symbol, mode in sorted(
+            self.order_manager.execution_settings.asset_modes.items()
+        ):
             if mode is not ExecutionMode.TESTNET:
                 continue
             try:

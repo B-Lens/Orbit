@@ -474,15 +474,9 @@ class BinanceAutomation(ExceptionManager):
             report_thread.start()
             self.workers_to_monitor.append(report_thread)
 
-        try:
-            validator = self._testnet_order_validator or TestnetOrderValidator.from_env(
-                self.order_manager
-            )
-        except Exception as exc:
-            validator = None
-            self.handle_exception(
-                exc, "Daily testnet order validation disabled by invalid configuration"
-            )
+        validator = self._testnet_order_validator or TestnetOrderValidator.from_env(
+            self.order_manager
+        )
         if validator is not None:
             validation_thread = threading.Thread(
                 target=validator.run_forever,
