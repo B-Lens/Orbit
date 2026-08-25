@@ -26,7 +26,7 @@ class TestReportingLifecycle(unittest.TestCase):
     def test_filled_order_is_appended_to_decision_ledger(self):
         automation = BinanceAutomation.__new__(BinanceAutomation)
         automation.order_manager = MagicMock()
-        automation.order_manager.get_open_orders.return_value = {
+        automation.order_manager.get_order.return_value = {
             "status": "FILLED",
             "executedQty": "0.5",
             "avgPrice": "100.25",
@@ -49,6 +49,8 @@ class TestReportingLifecycle(unittest.TestCase):
                 "average_price": "100.25",
             },
         )
+
+        automation.order_manager.get_order.assert_called_once_with("ETHUSDT", 123)
 
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
     def test_protective_order_submission_is_appended_to_decision_ledger(self, _sleep):
