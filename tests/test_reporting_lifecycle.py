@@ -6,6 +6,23 @@ from orbit.core.order_manager import OrderManager
 
 
 class TestReportingLifecycle(unittest.TestCase):
+    def test_signal_cooldown_contains_active_and_configured_cooldown_symbols(self):
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.trading_pairs = ["BTCUSDT", "ETHUSDT", "PAXGUSDT"]
+        automation.trade_checker = MagicMock()
+        automation.trade_checker.activePosition_coolMaker.return_value = {
+            "ETHUSDT": {"symbol": "ETHUSDT"}
+        }
+        automation.trade_checker.is_in_cooldown.side_effect = (
+            lambda symbol: symbol == "PAXGUSDT"
+        )
+
+        unavailable_symbols = automation.refresh_active_positions()
+
+        self.assertEqual(unavailable_symbols, ["ETHUSDT", "PAXGUSDT"])
+        automation.trade_checker.is_in_cooldown.assert_any_call("BTCUSDT")
+        automation.trade_checker.is_in_cooldown.assert_any_call("PAXGUSDT")
+
     def test_filled_order_is_appended_to_decision_ledger(self):
         automation = BinanceAutomation.__new__(BinanceAutomation)
         automation.order_manager = MagicMock()

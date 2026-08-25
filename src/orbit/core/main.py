@@ -344,6 +344,15 @@ class BinanceAutomation(ExceptionManager):
     # Thread workers
     # ------------------------------------------------------------------
 
+    def refresh_active_positions(self) -> List[str]:
+        """Refresh broker positions and return symbols unavailable for entry."""
+        self.trades = self.trade_checker.activePosition_coolMaker()
+        return [
+            symbol
+            for symbol in self.trading_pairs
+            if symbol in self.trades or self.trade_checker.is_in_cooldown(symbol)
+        ]
+
     def start_signal_analysis(self) -> None:
         """Infinite loop: align to candle, generate signals, process them.
 
@@ -355,10 +364,10 @@ class BinanceAutomation(ExceptionManager):
             try:
                 self.candlestick_aligner(15)
 
-                self.trades = self.trade_checker.activePosition_coolMaker()
-                cooldown_list = [
-                    s for s in self.trading_pairs if self.trade_checker.is_in_cooldown(s)
-                ]
+                # Active broker positions are always unavailable for entry.
+                # Retain configured post-trade cooldowns as an additional
+                # safeguard against immediate re-entry after an exit.
+                cooldown_list = self.refresh_active_positions()
 
                 for signal in self.signal_analyzer.analyze_market(cooldown_list):
                     self.process_signal(signal)
