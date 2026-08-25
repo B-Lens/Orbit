@@ -58,6 +58,21 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(log_info.call_args_list[0].args[1], [new_order])
         self.assertEqual(log_info.call_args_list[1].args[1], [filled_order])
 
+    @patch("orbit.core.order_manager.logger.info")
+    def test_open_orders_log_snapshot_cache_is_bounded(self, log_info):
+        self.manager.OPEN_ORDERS_LOG_CACHE_SIZE = 2
+        self.manager.future_client.get_all_orders.return_value = []
+
+        self.manager.get_open_orders("BTCUSDT", orderId="1")
+        self.manager.get_open_orders("BTCUSDT", orderId="2")
+        self.manager.get_open_orders("BTCUSDT", orderId="3")
+
+        self.assertEqual(
+            list(self.manager._open_orders_log_snapshots),
+            [("BTCUSDT", "2"), ("BTCUSDT", "3")],
+        )
+        self.assertEqual(log_info.call_count, 3)
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 

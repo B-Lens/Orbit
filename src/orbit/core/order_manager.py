@@ -19,6 +19,7 @@ import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
@@ -66,6 +67,9 @@ class OrderManager(AuthenticationManager, RedisManager):
     POSITION_SIZE_BUFFER: float = 0.98
     """Reserve 2% for price movement, fees, and exchange rounding."""
 
+    OPEN_ORDERS_LOG_CACHE_SIZE: int = 256
+    """Maximum number of order queries retained for log deduplication."""
+
     _exchange_filters_cache: Dict[str, Dict[str, Any]] = {}
 
     def __init__(
@@ -77,7 +81,9 @@ class OrderManager(AuthenticationManager, RedisManager):
         AuthenticationManager.__init__(self, **auth_kwargs)
         RedisManager.__init__(self, redis_client=redis_client)
         self.risk_guard = PreTradeRiskGuard(self.config.get("risk_policy"))
-        self._open_orders_log_snapshots: Dict[Tuple[str, Optional[str]], str] = {}
+        self._open_orders_log_snapshots: OrderedDict[
+            Tuple[str, Optional[str]], str
+        ] = OrderedDict()
         self._open_orders_log_lock = threading.Lock()
 
         if mongo_handler is not None:
@@ -903,9 +909,9 @@ class OrderManager(AuthenticationManager, RedisManager):
     def get_open_orders(self, symbol: str, orderId: Optional[str] = None) -> List[Dict[str, Any]]:
         """Return all orders for *symbol* (optionally filtered by *orderId*).
 
-        Identical consecutive responses are logged only once for each query. A
-        changed response is logged immediately, preserving order-state visibility
-        without repeating the same snapshot on every poll.
+        Identical consecutive responses are logged only once for each recently
+        observed query. A changed response is logged immediately, while the
+        bounded snapshot cache avoids retaining every historical order ID.
 
         Args:
             symbol: Trading pair.
@@ -924,6 +930,12 @@ class OrderManager(AuthenticationManager, RedisManager):
                 if self._open_orders_log_snapshots.get(query) != snapshot:
                     logger.info("Open orders: %s for symbol %s", orders, symbol)
                     self._open_orders_log_snapshots[query] = snapshot
+                    self._open_orders_log_snapshots.move_to_end(query)
+                    while (
+                        len(self._open_orders_log_snapshots)
+                        > self.OPEN_ORDERS_LOG_CACHE_SIZE
+                    ):
+                        self._open_orders_log_snapshots.popitem(last=False)
             return orders
         except ClientError as error:
             self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> get_open_orders")
