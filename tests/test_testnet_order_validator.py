@@ -76,6 +76,18 @@ class TestTestnetOrderValidator(unittest.TestCase):
             recvWindow=60000,
         )
 
+    def test_monitored_asset_can_use_exchange_step_without_configured_precision(self):
+        self.manager.execution_settings = ExecutionSettings(
+            {"BNBUSDT": ExecutionMode.TESTNET}
+        )
+
+        result = self.validator.validate_symbol("BNBUSDT")
+
+        self.assertEqual(result, {})
+        self.manager.adjust_quantity_step.assert_called_once_with(
+            "BNBUSDT", 0.0567
+        )
+
     def test_next_run_is_strictly_future(self):
         now = datetime(2026, 8, 25, 2, 7, tzinfo=timezone.utc)
 

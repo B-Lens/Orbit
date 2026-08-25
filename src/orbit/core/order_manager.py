@@ -103,35 +103,43 @@ class OrderManager(AuthenticationManager, RedisManager):
             Exception: If *symbol* is not found in exchange info.
         """
         with self._exchange_filters_lock:
-            if symbol in self._exchange_filters_cache:
-                return self._exchange_filters_cache[symbol]
+            cached = self._exchange_filters_cache.get(symbol)
+        if cached is not None:
+            return cached
 
-            info = self.future_client_for(symbol).exchange_info()
-            for s in info["symbols"]:
-                if s["symbol"] == symbol:
-                    filters = s["filters"]
+        fetched = self._fetch_symbol_filters(symbol)
+        with self._exchange_filters_lock:
+            # Prefer a value another thread may have published while this
+            # request was in flight.
+            return self._exchange_filters_cache.setdefault(symbol, fetched)
 
-                    def _get_filter(ftype: str) -> Optional[Dict[str, Any]]:
-                        for f in filters:
-                            if f.get("filterType") == ftype:
-                                return f
-                        return None
+    def _fetch_symbol_filters(self, symbol: str) -> Dict[str, Any]:
+        """Retrieve current symbol rules without holding the shared cache lock."""
+        info = self.future_client_for(symbol).exchange_info()
+        for item in info["symbols"]:
+            if item["symbol"] != symbol:
+                continue
+            filters = item["filters"]
 
-                    symbol_filters = {
-                        "PRICE_FILTER": _get_filter("PRICE_FILTER"),
-                        "LOT_SIZE": _get_filter("LOT_SIZE"),
-                        "MIN_NOTIONAL": _get_filter("MIN_NOTIONAL"),
-                    }
-                    self._exchange_filters_cache[symbol] = symbol_filters
-                    return symbol_filters
+            def _get_filter(ftype: str) -> Optional[Dict[str, Any]]:
+                return next(
+                    (entry for entry in filters if entry.get("filterType") == ftype),
+                    None,
+                )
 
+            return {
+                "PRICE_FILTER": _get_filter("PRICE_FILTER"),
+                "LOT_SIZE": _get_filter("LOT_SIZE"),
+                "MIN_NOTIONAL": _get_filter("MIN_NOTIONAL"),
+            }
         raise Exception(f"Symbol {symbol} not found in exchange info")
 
     def refresh_symbol_filters(self, symbol: str) -> Dict[str, Any]:
-        """Atomically discard cached filters and retrieve current exchange rules."""
+        """Fetch current rules and replace cached filters only after success."""
+        fetched = self._fetch_symbol_filters(symbol)
         with self._exchange_filters_lock:
-            self._exchange_filters_cache.pop(symbol, None)
-            return self.get_symbol_filters(symbol)
+            self._exchange_filters_cache[symbol] = fetched
+        return fetched
 
     def submit_test_order(self, symbol: str, **params: Any) -> Dict[str, Any]:
         """Validate an order on Futures Testnet without entering the order book."""

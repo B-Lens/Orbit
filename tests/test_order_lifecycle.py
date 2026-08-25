@@ -62,6 +62,23 @@ class TestOrderManager(unittest.TestCase):
 
         self.manager.future_client.new_order_test.assert_not_called()
 
+    def test_filter_refresh_preserves_cached_value_when_fetch_fails(self):
+        cached = {"MIN_NOTIONAL": {"notional": "5"}}
+        self.manager._exchange_filters_cache["BTCUSDT"] = cached
+        self.manager._fetch_symbol_filters = MagicMock(
+            side_effect=RuntimeError("exchange unavailable")
+        )
+
+        try:
+            with self.assertRaisesRegex(RuntimeError, "exchange unavailable"):
+                self.manager.refresh_symbol_filters("BTCUSDT")
+
+            self.assertIs(
+                self.manager._exchange_filters_cache["BTCUSDT"], cached
+            )
+        finally:
+            self.manager._exchange_filters_cache.pop("BTCUSDT", None)
+
     def test_get_order_uses_endpoint_that_includes_terminal_state(self):
         self.manager.future_client.query_order.return_value = {
             "orderId": 123,

@@ -69,10 +69,12 @@ class TestnetOrderValidator:
             symbol, self.order_manager.get_symbol_price(symbol)
         )
         quantity = self.order_manager.fixed_asset_allocated(symbol, price)
-        precision = self.order_manager.config["trading_pairs_precision"][symbol]
-        quantity = self.order_manager.adjust_quantity_step(
-            symbol, round(float(quantity), precision)
+        precision = self.order_manager.config.get("trading_pairs_precision", {}).get(
+            symbol
         )
+        if precision is not None:
+            quantity = round(float(quantity), int(precision))
+        quantity = self.order_manager.adjust_quantity_step(symbol, quantity)
         if quantity <= 0:
             raise ValueError(f"Calculated quantity is zero for {symbol}")
         if not self.order_manager.validate_notional(symbol, price, quantity):
