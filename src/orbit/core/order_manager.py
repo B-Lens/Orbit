@@ -17,6 +17,7 @@ through the constructor for easier testing and looser coupling.
 
 import time
 import logging
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
@@ -30,6 +31,7 @@ from orbit.utils.utils import get_indian_time
 from orbit.core.plugins import get_swing_sl
 from orbit.core.risk_manager import PreTradeRiskGuard
 from orbit.core.performance import PerformanceTracker
+from orbit.core.execution import ExecutionMode
 
 logger = logging.getLogger("Orbit")
 
@@ -65,6 +67,7 @@ class OrderManager(AuthenticationManager, RedisManager):
     """Reserve 2% for price movement, fees, and exchange rounding."""
 
     _exchange_filters_cache: Dict[str, Dict[str, Any]] = {}
+    _exchange_filters_lock = threading.RLock()
 
     def __init__(
         self,
@@ -99,29 +102,42 @@ class OrderManager(AuthenticationManager, RedisManager):
         Raises:
             Exception: If *symbol* is not found in exchange info.
         """
-        if symbol in self._exchange_filters_cache:
-            return self._exchange_filters_cache[symbol]
+        with self._exchange_filters_lock:
+            if symbol in self._exchange_filters_cache:
+                return self._exchange_filters_cache[symbol]
 
-        info = self.future_client_for(symbol).exchange_info()
-        for s in info["symbols"]:
-            if s["symbol"] == symbol:
-                filters = s["filters"]
+            info = self.future_client_for(symbol).exchange_info()
+            for s in info["symbols"]:
+                if s["symbol"] == symbol:
+                    filters = s["filters"]
 
-                def _get_filter(ftype: str) -> Optional[Dict[str, Any]]:
-                    for f in filters:
-                        if f.get("filterType") == ftype:
-                            return f
-                    return None
+                    def _get_filter(ftype: str) -> Optional[Dict[str, Any]]:
+                        for f in filters:
+                            if f.get("filterType") == ftype:
+                                return f
+                        return None
 
-                symbol_filters = {
-                    "PRICE_FILTER": _get_filter("PRICE_FILTER"),
-                    "LOT_SIZE": _get_filter("LOT_SIZE"),
-                    "MIN_NOTIONAL": _get_filter("MIN_NOTIONAL"),
-                }
-                self._exchange_filters_cache[symbol] = symbol_filters
-                return symbol_filters
+                    symbol_filters = {
+                        "PRICE_FILTER": _get_filter("PRICE_FILTER"),
+                        "LOT_SIZE": _get_filter("LOT_SIZE"),
+                        "MIN_NOTIONAL": _get_filter("MIN_NOTIONAL"),
+                    }
+                    self._exchange_filters_cache[symbol] = symbol_filters
+                    return symbol_filters
 
         raise Exception(f"Symbol {symbol} not found in exchange info")
+
+    def refresh_symbol_filters(self, symbol: str) -> Dict[str, Any]:
+        """Atomically discard cached filters and retrieve current exchange rules."""
+        with self._exchange_filters_lock:
+            self._exchange_filters_cache.pop(symbol, None)
+            return self.get_symbol_filters(symbol)
+
+    def submit_test_order(self, symbol: str, **params: Any) -> Dict[str, Any]:
+        """Validate an order on Futures Testnet without entering the order book."""
+        if self.execution_settings.mode_for(symbol) is not ExecutionMode.TESTNET:
+            raise ValueError(f"Refusing test-order submission for live asset {symbol}")
+        return self._order_client_for(symbol).new_order_test(symbol=symbol, **params)
 
     def adjust_price_tick(self, symbol: str, price: float) -> float:
         """Round *price* down to the nearest valid tick for *symbol*."""

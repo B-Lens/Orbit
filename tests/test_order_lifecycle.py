@@ -40,6 +40,28 @@ class TestOrderManager(unittest.TestCase):
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
 
+    def test_test_order_submission_uses_testnet_gateway(self):
+        self.manager.future_client.new_order_test.return_value = {}
+
+        response = self.manager.submit_test_order(
+            "BTCUSDT", side="BUY", type="LIMIT"
+        )
+
+        self.assertEqual(response, {})
+        self.manager.future_client.new_order_test.assert_called_once_with(
+            symbol="BTCUSDT", side="BUY", type="LIMIT"
+        )
+
+    def test_test_order_submission_refuses_live_asset(self):
+        self.manager.execution_settings = ExecutionSettings(
+            {"BTCUSDT": ExecutionMode.LIVE}
+        )
+
+        with self.assertRaisesRegex(ValueError, "live asset"):
+            self.manager.submit_test_order("BTCUSDT", side="BUY", type="LIMIT")
+
+        self.manager.future_client.new_order_test.assert_not_called()
+
     def test_get_order_uses_endpoint_that_includes_terminal_state(self):
         self.manager.future_client.query_order.return_value = {
             "orderId": 123,

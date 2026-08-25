@@ -40,8 +40,12 @@ class TestnetOrderValidator:
     def from_env(cls, order_manager: OrderManager) -> Optional["TestnetOrderValidator"]:
         """Build the validator unless explicitly disabled."""
         enabled = os.getenv("ORBIT_TESTNET_VALIDATION_ENABLED", "true").lower()
-        if enabled not in {"1", "true", "yes", "on"}:
+        if enabled in {"0", "false", "no", "off"}:
             return None
+        if enabled not in {"1", "true", "yes", "on"}:
+            raise ValueError(
+                "ORBIT_TESTNET_VALIDATION_ENABLED must be true or false"
+            )
         raw_time = os.getenv("ORBIT_TESTNET_VALIDATION_TIME_UTC", "02:07")
         try:
             hour, minute = (int(part) for part in raw_time.split(":"))
@@ -59,9 +63,8 @@ class TestnetOrderValidator:
         ):
             raise ValueError(f"Refusing validation for non-testnet asset {symbol}")
 
-        # The normal cache is useful in the hot path, but a daily validation
-        # must deliberately retrieve today's exchange filters.
-        self.order_manager._exchange_filters_cache.pop(symbol, None)
+        # A daily validation deliberately retrieves today's exchange filters.
+        self.order_manager.refresh_symbol_filters(symbol)
         price = self.order_manager.adjust_price_tick(
             symbol, self.order_manager.get_symbol_price(symbol)
         )
@@ -80,7 +83,6 @@ class TestnetOrderValidator:
             )
 
         params = {
-            "symbol": symbol,
             "side": "BUY",
             "type": "LIMIT",
             "timeInForce": "GTC",
@@ -88,16 +90,15 @@ class TestnetOrderValidator:
             "price": str(price),
             "recvWindow": 60000,
         }
-        response = self.order_manager.future_client_for(symbol).new_order_test(**params)
+        response = self.order_manager.submit_test_order(symbol, **params)
         logger.info("Daily testnet order validation passed for %s: %s", symbol, params)
         return response
 
     def run_once(self) -> dict[str, bool]:
         """Validate all and only assets configured for testnet execution."""
         results: dict[str, bool] = {}
-        for symbol, mode in sorted(
-            self.order_manager.execution_settings.asset_modes.items()
-        ):
+        for symbol in sorted(self.order_manager.trading_pairs):
+            mode = self.order_manager.execution_settings.mode_for(symbol)
             if mode is not ExecutionMode.TESTNET:
                 continue
             try:
