@@ -921,7 +921,7 @@ class OrderManager(AuthenticationManager, RedisManager):
     def get_order(self, symbol: str, order_id: int) -> Dict[str, Any]:
         """Return the current state of one Futures order, including terminal states."""
         try:
-            order = self.future_client_for(symbol).get_orders(
+            order = self.future_client_for(symbol).query_order(
                 symbol=symbol, orderId=order_id, recvWindow=60000
             )
             if isinstance(order, dict):
