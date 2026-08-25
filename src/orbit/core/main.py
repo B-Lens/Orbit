@@ -41,6 +41,7 @@ from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
 from orbit.core.performance_reporter import PerformanceReporter
 from orbit.core.testnet_reporter import TestnetDailyReporter
+from orbit.core.testnet_order_validator import TestnetOrderValidator
 from orbit.core.execution import ExecutionMode
 from orbit.utils.utils import get_indian_time
 
@@ -102,6 +103,7 @@ class BinanceAutomation(ExceptionManager):
         order_manager: Optional[OrderManager] = None,
         croner: Optional[Croner] = None,
         testnet_reporter: Optional[TestnetDailyReporter] = None,
+        testnet_order_validator: Optional[TestnetOrderValidator] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__()
@@ -114,6 +116,7 @@ class BinanceAutomation(ExceptionManager):
         self.trade_checker: TradeChecker = trade_checker or TradeChecker(order_manager=self.order_manager)
         self._croner: Optional[Croner] = croner
         self._testnet_reporter = testnet_reporter
+        self._testnet_order_validator = testnet_order_validator
 
         # Configuration
         self.trading_pairs: List[str] = config_json["trading_pairs"]
@@ -470,6 +473,24 @@ class BinanceAutomation(ExceptionManager):
             )
             report_thread.start()
             self.workers_to_monitor.append(report_thread)
+
+        try:
+            validator = self._testnet_order_validator or TestnetOrderValidator.from_env(
+                self.order_manager
+            )
+        except Exception as exc:
+            validator = None
+            self.handle_exception(
+                exc, "Daily testnet order validation disabled by invalid configuration"
+            )
+        if validator is not None:
+            validation_thread = threading.Thread(
+                target=validator.run_forever,
+                daemon=True,
+                name="TestnetOrderValidatorThread",
+            )
+            validation_thread.start()
+            self.workers_to_monitor.append(validation_thread)
 
         trade_thread = threading.Thread(target=self.start_trade_checker, daemon=True, name="TradeCheckerThread")
         trade_thread.start()
