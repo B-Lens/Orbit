@@ -158,8 +158,8 @@ class BinanceAutomation(ExceptionManager):
 
         while time.time() - start_time < timeout_seconds:
             try:
-                orders = self.order_manager.get_open_orders(symbol=symbol, orderId=order_id)
-                order_list = orders if isinstance(orders, list) else [orders]
+                order = self.order_manager.get_order(symbol, order_id)
+                order_list = [order] if order else []
 
                 for order in order_list:
                     status = order.get("status")

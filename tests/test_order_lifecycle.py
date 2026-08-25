@@ -40,6 +40,19 @@ class TestOrderManager(unittest.TestCase):
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
 
+    def test_get_order_uses_endpoint_that_includes_terminal_state(self):
+        self.manager.future_client.get_orders.return_value = {
+            "orderId": 123,
+            "status": "FILLED",
+        }
+
+        order = self.manager.get_order("BTCUSDT", 123)
+
+        self.assertEqual(order["status"], "FILLED")
+        self.manager.future_client.get_orders.assert_called_once_with(
+            symbol="BTCUSDT", orderId=123, recvWindow=60000
+        )
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 
