@@ -918,6 +918,26 @@ class OrderManager(AuthenticationManager, RedisManager):
             self.handle_exception(e, context_description="Exception caught while fetching open order")
         return []
 
+    def get_order(self, symbol: str, order_id: int) -> Dict[str, Any]:
+        """Return the current state of one Futures order, including terminal states."""
+        try:
+            order = self.future_client_for(symbol).query_order(
+                symbol=symbol, orderId=order_id, recvWindow=60000
+            )
+            if isinstance(order, dict):
+                return order
+            if isinstance(order, list) and order:
+                return order[0]
+        except ClientError as error:
+            self.clientExceptionHandler(
+                symbol=symbol, error=error, Location="OrderManager -> get_order"
+            )
+        except Exception as error:
+            self.handle_exception(
+                error, context_description="Exception caught while fetching order"
+            )
+        return {}
+
     def get_conditional_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
         """Return all **open** conditional (SL/TP) algo orders for *symbol*.
 
