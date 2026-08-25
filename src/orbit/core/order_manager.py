@@ -610,8 +610,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 return None, None, None
 
-            precision = self.config["trading_pairs_precision"][symbol]
-            quantity = round(float(quantity), precision)
+            quantity = float(quantity)
 
             if quantity <= 0:
                 self.send_alerts(

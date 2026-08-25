@@ -155,6 +155,31 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(quantity, 0.1)
         self.manager.future_client.new_order.assert_called_once()
 
+    def test_order_does_not_round_exchange_adjusted_quantity_up(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
+        self.manager.future_client.new_order.return_value = {"orderId": 1}
+        self.manager.config["trading_pairs_precision"]["BTCUSDT"] = 2
+        self.manager.get_symbol_filters.return_value["LOT_SIZE"] = {
+            "stepSize": "0.001",
+            "minQty": "0.001",
+        }
+
+        response, quantity, _ = self.manager.place_order(
+            {"BTCUSDT": 0.01},
+            "BTCUSDT",
+            "BUY",
+            price=1000,
+            sl=990,
+            target=1020,
+            quantity=0.249,
+            ros=True,
+            trade_id="decision-high-priced-asset",
+        )
+
+        self.assertEqual(response, {"orderId": 1})
+        self.assertEqual(quantity, 0.249)
+
     def test_order_submission_is_persisted_before_post_submission_work(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
         self.manager.get_daily_net_pnl = MagicMock(return_value=0)
