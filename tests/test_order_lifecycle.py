@@ -86,6 +86,21 @@ class TestOrderManager(unittest.TestCase):
 
         self.assertEqual(result, [{"symbol": "BTCUSDT", "positionAmt": "-0.2"}])
 
+    def test_validation_fill_cleanup_is_testnet_reduce_only(self):
+        self.manager.future_client.new_order.return_value = {"orderId": 456}
+
+        result = self.manager.close_validation_fill("BTCUSDT", 0.02)
+
+        self.assertEqual(result, {"orderId": 456})
+        self.manager.future_client.new_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side="SELL",
+            type="MARKET",
+            quantity="0.02",
+            reduceOnly="true",
+            recvWindow=60000,
+        )
+
     def test_filter_refresh_preserves_cached_value_when_fetch_fails(self):
         cached = {"MIN_NOTIONAL": {"notional": "5"}}
         self.manager._exchange_filters_cache["BTCUSDT"] = cached

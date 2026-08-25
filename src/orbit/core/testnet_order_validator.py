@@ -125,20 +125,81 @@ class TestnetOrderValidator:
             "timeInForce": "GTX",
             "quantity": str(quantity),
             "price": str(price),
+            "newClientOrderId": self._client_order_id(symbol),
             "recvWindow": 60000,
         }
-        response = self.order_manager.submit_validation_order(symbol, **params)
+        try:
+            response = self.order_manager.submit_validation_order(symbol, **params)
+        except Exception as submission_error:
+            response = self._recover_ambiguous_submission(
+                symbol, params["newClientOrderId"], submission_error
+            )
         order_id = response.get("orderId")
         if order_id is None:
             raise RuntimeError(f"Validation order for {symbol} returned no orderId")
 
-        cancellation = self._cancel_validation_order(symbol, int(order_id))
+        try:
+            cancellation = self._cancel_validation_order(symbol, int(order_id))
+        except RuntimeError:
+            final_state = self.order_manager.get_order(symbol, int(order_id))
+            self._close_any_execution(
+                symbol, int(order_id), response, final_state
+            )
+            raise
+        final_state = self.order_manager.get_order(symbol, int(order_id))
+        self._close_any_execution(
+            symbol, int(order_id), response, cancellation, final_state
+        )
         logger.info(
             "Daily testnet order validation passed and order %s was canceled for %s",
             order_id,
             symbol,
         )
         return {"order": response, "cancellation": cancellation}
+
+    def _client_order_id(self, symbol: str) -> str:
+        run_date = self._now().astimezone(timezone.utc).strftime("%Y%m%d")
+        return f"orbitdv-{run_date}-{symbol.lower()}"[:36]
+
+    def _recover_ambiguous_submission(
+        self, symbol: str, client_order_id: str, submission_error: Exception
+    ) -> dict[str, Any]:
+        """Recover an accepted order when its submission response was lost."""
+        for attempt in range(3):
+            try:
+                recovered = self.order_manager.get_order_by_client_id(
+                    symbol, client_order_id
+                )
+                if recovered.get("orderId") is not None:
+                    return recovered
+            except Exception:
+                logger.warning(
+                    "Could not recover ambiguous validation order %s for %s",
+                    client_order_id,
+                    symbol,
+                    exc_info=True,
+                )
+            if attempt < 2:
+                self._sleep(1.0)
+        raise RuntimeError(
+            f"Could not recover ambiguous validation submission for {symbol}"
+        ) from submission_error
+
+    def _close_any_execution(
+        self, symbol: str, order_id: int, *states: dict[str, Any]
+    ) -> None:
+        """Flatten unexpected executed quantity and fail the validation."""
+        executed_quantity = max(
+            (float(state.get("executedQty", 0) or 0) for state in states),
+            default=0.0,
+        )
+        if executed_quantity <= 0:
+            return
+        self.order_manager.close_validation_fill(symbol, executed_quantity)
+        raise RuntimeError(
+            f"Validation order {order_id} for {symbol} executed "
+            f"{executed_quantity} and was flattened"
+        )
 
     def _cancel_validation_order(
         self, symbol: str, order_id: int

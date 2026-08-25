@@ -25,8 +25,17 @@ class TestTestnetOrderValidator(unittest.TestCase):
             "orderId": 123,
             "status": "CANCELED",
         }
+        self.manager.get_order.return_value = {
+            "orderId": 123,
+            "status": "CANCELED",
+            "executedQty": "0",
+        }
         self.sleep = MagicMock()
-        self.validator = TestnetOrderValidator(self.manager, sleep=self.sleep)
+        self.validator = TestnetOrderValidator(
+            self.manager,
+            now=lambda: datetime(2026, 8, 25, 2, 7, tzinfo=timezone.utc),
+            sleep=self.sleep,
+        )
 
     def test_places_off_market_order_and_cancels_it(self):
         result = self.validator.validate_symbol("BTCUSDT")
@@ -44,6 +53,7 @@ class TestTestnetOrderValidator(unittest.TestCase):
             timeInForce="GTX",
             quantity="0.056",
             price="98.0",
+            newClientOrderId="orbitdv-20260825-btcusdt",
             recvWindow=60000,
         )
         self.manager.cancel_order.assert_called_once_with("BTCUSDT", 123)
@@ -85,6 +95,7 @@ class TestTestnetOrderValidator(unittest.TestCase):
             timeInForce="GTX",
             quantity="0.056",
             price="98.0",
+            newClientOrderId="orbitdv-20260825-bnbusdt",
             recvWindow=60000,
         )
 
@@ -144,6 +155,39 @@ class TestTestnetOrderValidator(unittest.TestCase):
             self.validator.validate_symbol("BTCUSDT")
 
         self.manager.submit_validation_order.assert_not_called()
+
+    def test_ambiguous_submission_is_recovered_by_client_id_and_canceled(self):
+        self.manager.submit_validation_order.side_effect = TimeoutError("timeout")
+        self.manager.get_order_by_client_id.return_value = {
+            "orderId": 321,
+            "status": "NEW",
+            "executedQty": "0",
+        }
+        self.manager.cancel_order.return_value = {
+            "orderId": 321,
+            "status": "CANCELED",
+            "executedQty": "0",
+        }
+
+        result = self.validator.validate_symbol("BTCUSDT")
+
+        self.assertEqual(result["cancellation"]["status"], "CANCELED")
+        self.manager.get_order_by_client_id.assert_called_once_with(
+            "BTCUSDT", "orbitdv-20260825-btcusdt"
+        )
+        self.manager.cancel_order.assert_called_once_with("BTCUSDT", 321)
+
+    def test_partial_fill_is_flattened_and_validation_fails(self):
+        self.manager.get_order.return_value = {
+            "orderId": 123,
+            "status": "CANCELED",
+            "executedQty": "0.01",
+        }
+
+        result = self.validator.run_once()
+
+        self.assertEqual(result, {"BTCUSDT": False})
+        self.manager.close_validation_fill.assert_called_once_with("BTCUSDT", 0.01)
 
     def test_next_run_is_strictly_future(self):
         now = datetime(2026, 8, 25, 2, 7, tzinfo=timezone.utc)

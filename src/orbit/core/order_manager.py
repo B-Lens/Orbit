@@ -166,6 +166,29 @@ class OrderManager(AuthenticationManager, RedisManager):
             )
         return self.future_client_for(symbol).new_order(symbol=symbol, **params)
 
+    def get_order_by_client_id(
+        self, symbol: str, client_order_id: str
+    ) -> Dict[str, Any]:
+        """Query any order state using its deterministic client identifier."""
+        return self.future_client_for(symbol).query_order(
+            symbol=symbol,
+            origClientOrderId=client_order_id,
+            recvWindow=60000,
+        )
+
+    def close_validation_fill(self, symbol: str, quantity: float) -> Dict[str, Any]:
+        """Flatten an unexpected validation BUY fill on Futures Testnet only."""
+        if self.execution_settings.mode_for(symbol) is not ExecutionMode.TESTNET:
+            raise ValueError(f"Refusing validation cleanup for live asset {symbol}")
+        return self.future_client_for(symbol).new_order(
+            symbol=symbol,
+            side="SELL",
+            type="MARKET",
+            quantity=str(quantity),
+            reduceOnly="true",
+            recvWindow=60000,
+        )
+
     def adjust_price_tick(self, symbol: str, price: float) -> float:
         """Round *price* down to the nearest valid tick for *symbol*."""
         filters = self.get_symbol_filters(symbol)
