@@ -14,6 +14,7 @@ class TestTestnetOrderValidator(unittest.TestCase):
         )
         self.manager.config = {"trading_pairs_precision": {"BTCUSDT": 3}}
         self.manager.get_current_open_orders.return_value = []
+        self.manager.get_open_positions.return_value = []
         self.manager.get_symbol_price.return_value = 100.07
         self.manager.adjust_price_tick.return_value = 98.0
         self.manager.fixed_asset_allocated.return_value = 0.0567
@@ -109,6 +110,23 @@ class TestTestnetOrderValidator(unittest.TestCase):
         )
         self.manager.submit_validation_order.assert_not_called()
         self.manager.cancel_order.assert_not_called()
+
+    def test_run_once_reports_skipped_asset_distinctly(self):
+        self.manager.get_current_open_orders.return_value = [{"orderId": 77}]
+
+        result = self.validator.run_once()
+
+        self.assertEqual(result, {"BTCUSDT": None})
+
+    def test_skips_asset_when_a_position_exists(self):
+        self.manager.get_open_positions.return_value = [{"positionAmt": "0.1"}]
+
+        result = self.validator.validate_symbol("BTCUSDT")
+
+        self.assertEqual(
+            result, {"status": "SKIPPED", "reason": "open_position_present"}
+        )
+        self.manager.submit_validation_order.assert_not_called()
 
     def test_cancellation_failure_marks_daily_validation_failed(self):
         self.manager.cancel_order.return_value = None

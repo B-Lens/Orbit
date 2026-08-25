@@ -143,9 +143,20 @@ class OrderManager(AuthenticationManager, RedisManager):
 
     def get_current_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
         """Return currently open orders, refusing to hide exchange failures."""
-        return self.future_client_for(symbol).get_orders(
-            symbol=symbol, recvWindow=60000
+        return self.future_client_for(symbol).sign_request(
+            "GET",
+            "/fapi/v1/openOrders",
+            {"symbol": symbol, "recvWindow": 60000},
         )
+
+    def get_open_positions(self, symbol: str) -> List[Dict[str, Any]]:
+        """Return non-flat positions for a symbol without suppressing API errors."""
+        positions = self.future_client_for(symbol).get_position_risk(symbol=symbol)
+        return [
+            position
+            for position in positions
+            if float(position.get("positionAmt", 0)) != 0.0
+        ]
 
     def submit_validation_order(self, symbol: str, **params: Any) -> Dict[str, Any]:
         """Place a real validation order, restricted to Futures Testnet."""

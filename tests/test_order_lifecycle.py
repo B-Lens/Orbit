@@ -65,14 +65,26 @@ class TestOrderManager(unittest.TestCase):
         self.manager.future_client.new_order.assert_not_called()
 
     def test_current_open_orders_uses_open_orders_endpoint(self):
-        self.manager.future_client.get_orders.return_value = [{"orderId": 1}]
+        self.manager.future_client.sign_request.return_value = [{"orderId": 1}]
 
         result = self.manager.get_current_open_orders("BTCUSDT")
 
         self.assertEqual(result, [{"orderId": 1}])
-        self.manager.future_client.get_orders.assert_called_once_with(
-            symbol="BTCUSDT", recvWindow=60000
+        self.manager.future_client.sign_request.assert_called_once_with(
+            "GET",
+            "/fapi/v1/openOrders",
+            {"symbol": "BTCUSDT", "recvWindow": 60000},
         )
+
+    def test_open_positions_filters_flat_position_rows(self):
+        self.manager.future_client.get_position_risk.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "0"},
+            {"symbol": "BTCUSDT", "positionAmt": "-0.2"},
+        ]
+
+        result = self.manager.get_open_positions("BTCUSDT")
+
+        self.assertEqual(result, [{"symbol": "BTCUSDT", "positionAmt": "-0.2"}])
 
     def test_filter_refresh_preserves_cached_value_when_fetch_fails(self):
         cached = {"MIN_NOTIONAL": {"notional": "5"}}

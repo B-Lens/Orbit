@@ -83,6 +83,11 @@ class TestnetOrderValidator:
                 len(open_orders),
             )
             return {"status": "SKIPPED", "reason": "open_order_present"}
+        if self.order_manager.get_open_positions(symbol):
+            logger.info(
+                "Skipping daily validation for %s because a position is open", symbol
+            )
+            return {"status": "SKIPPED", "reason": "open_position_present"}
 
         # A daily validation deliberately retrieves today's exchange filters.
         self.order_manager.refresh_symbol_filters(symbol)
@@ -159,17 +164,19 @@ class TestnetOrderValidator:
             f"Validation order {order_id} for {symbol} was not canceled after 3 attempts"
         )
 
-    def run_once(self) -> dict[str, bool]:
+    def run_once(self) -> dict[str, Optional[bool]]:
         """Validate all and only assets configured for testnet execution."""
-        results: dict[str, bool] = {}
+        results: dict[str, Optional[bool]] = {}
         for symbol, mode in sorted(
             self.order_manager.execution_settings.asset_modes.items()
         ):
             if mode is not ExecutionMode.TESTNET:
                 continue
             try:
-                self.validate_symbol(symbol)
-                results[symbol] = True
+                response = self.validate_symbol(symbol)
+                results[symbol] = (
+                    None if response.get("status") == "SKIPPED" else True
+                )
             except Exception as exc:  # Keep checking the remaining assets.
                 results[symbol] = False
                 logger.exception("Daily testnet order validation failed for %s", symbol)
