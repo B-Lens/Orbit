@@ -274,3 +274,27 @@ class TestTradeChecker(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_testnet_order_probe():
+    from scripts import check_testnet_orders as SCRIPT
+    from unittest.mock import MagicMock
+    manager = MagicMock()
+    manager.config = {}
+    manager.config["risk_management"] = {"BTCUSDT": 0.01}
+    manager.config["FUTURE_LEVERAGE"] = 2
+    
+    # 1. Existing order skips submission
+    manager.get_open_orders.return_value = [{"orderId": 7, "status": "NEW"}]
+    manager.get_conditional_open_orders.return_value = []
+    assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "SKIPPED"
+    manager.place_order.assert_not_called()
+    
+    # 2. No open orders, places and cancels order
+    manager.get_open_orders.return_value = []
+    manager.get_symbol_price.return_value = 100.0
+    manager.place_order.return_value = ({"orderId": 123}, 0.1, {})
+    manager.cancel_order.return_value = {"orderId": 123, "status": "CANCELED"}
+    
+    assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "PASSED"
+    manager.place_order.assert_called_once()
+    manager.cancel_order.assert_called_once_with("BTCUSDT", 123)
