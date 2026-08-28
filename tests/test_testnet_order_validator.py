@@ -43,7 +43,9 @@ class TestTestnetOrderValidator(unittest.TestCase):
         self.assertEqual(result["order"], {"orderId": 123})
         self.assertEqual(result["cancellation"]["status"], "CANCELED")
         self.manager.refresh_symbol_filters.assert_called_once_with("BTCUSDT")
-        self.manager.adjust_price_tick.assert_called_once_with("BTCUSDT", 100.07 * 0.98)
+        self.manager.adjust_price_tick.assert_called_once_with(
+            "BTCUSDT", 100.07 * 0.98
+        )
         self.manager.submit_validation_order.assert_called_once_with(
             "BTCUSDT",
             side="BUY",
@@ -105,14 +107,18 @@ class TestTestnetOrderValidator(unittest.TestCase):
         result = self.validator.validate_symbol("BNBUSDT")
 
         self.assertEqual(result["cancellation"]["status"], "CANCELED")
-        self.manager.adjust_quantity_step.assert_called_once_with("BNBUSDT", 0.0567)
+        self.manager.adjust_quantity_step.assert_called_once_with(
+            "BNBUSDT", 0.0567
+        )
 
     def test_skips_asset_when_an_open_order_exists(self):
         self.manager.get_current_open_orders.return_value = [{"orderId": 77}]
 
         result = self.validator.validate_symbol("BTCUSDT")
 
-        self.assertEqual(result, {"status": "SKIPPED", "reason": "open_order_present"})
+        self.assertEqual(
+            result, {"status": "SKIPPED", "reason": "open_order_present"}
+        )
         self.manager.submit_validation_order.assert_not_called()
         self.manager.cancel_order.assert_not_called()
 
@@ -135,11 +141,6 @@ class TestTestnetOrderValidator(unittest.TestCase):
 
     def test_cancellation_failure_marks_daily_validation_failed(self):
         self.manager.cancel_order.return_value = None
-        self.manager.get_order.return_value = {
-            "orderId": 123,
-            "status": "NEW",
-            "executedQty": "0",
-        }
 
         result = self.validator.run_once()
 
@@ -195,7 +196,9 @@ class TestTestnetOrderValidator(unittest.TestCase):
 
         self.assertEqual(next_run, datetime(2026, 8, 26, 2, 7, tzinfo=timezone.utc))
 
-    @patch.dict("os.environ", {"ORBIT_TESTNET_VALIDATION_ENABLED": "ture"}, clear=False)
+    @patch.dict(
+        "os.environ", {"ORBIT_TESTNET_VALIDATION_ENABLED": "ture"}, clear=False
+    )
     def test_invalid_enablement_value_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "must be true or false"):
             TestnetOrderValidator.from_env(self.manager)

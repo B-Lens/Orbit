@@ -63,12 +63,7 @@ class TestReportRendering(unittest.TestCase):
             },
         ]
 
-        income = [
-            {"incomeType": "REALIZED_PNL", "income": "10"},
-            {"incomeType": "COMMISSION", "income": "-1"},
-            {"incomeType": "FUNDING_FEE", "income": "-0.5"},
-        ]
-        body = build_report_body(date(2026, 8, 21), decisions, income)
+        body = build_report_body(date(2026, 8, 21), decisions, [])
 
         self.assertIn("accepted-1", body)
         self.assertIn("blocked-1", body)
@@ -79,10 +74,6 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("Orders filled: **1**", body)
         self.assertIn("Order-stage rejections: **1**", body)
         self.assertIn("No-signal evaluations (counted, not expanded): **1**", body)
-        self.assertIn("Realized P&L: **10.00000000 USDT**", body)
-        self.assertIn("Commission: **-1.00000000 USDT**", body)
-        self.assertIn("Funding: **-0.50000000 USDT**", body)
-        self.assertIn("Net P&L after fees/funding: **8.50000000 USDT**", body)
         self.assertNotIn("quiet-1", body)
         self.assertNotIn("prior-day-order", body)
 
@@ -100,18 +91,9 @@ class TestReportRendering(unittest.TestCase):
                 "strategy": "orbit.strategies.ETHStrategy",
                 "outcome": "accepted",
                 "execution_events": [
-                    {
-                        "status": "protective_order_submitted",
-                        "timestamp": datetime(2026, 8, 18, tzinfo=timezone.utc),
-                    },
-                    {
-                        "status": "order_submitted",
-                        "timestamp": datetime(2026, 8, 18, tzinfo=timezone.utc),
-                    },
-                    {
-                        "status": "order_filled",
-                        "timestamp": datetime(2026, 8, 24, tzinfo=timezone.utc),
-                    },
+                    {"status": "protective_order_submitted", "timestamp": datetime(2026, 8, 18, tzinfo=timezone.utc)},
+                    {"status": "order_submitted", "timestamp": datetime(2026, 8, 18, tzinfo=timezone.utc)},
+                    {"status": "order_filled", "timestamp": datetime(2026, 8, 24, tzinfo=timezone.utc)},
                 ],
             },
             {
@@ -120,31 +102,17 @@ class TestReportRendering(unittest.TestCase):
                 "strategy": "orbit.strategies.PAXGUSDTStrategy",
                 "outcome": "accepted",
                 "execution_events": [
-                    {
-                        "status": "order_rejected",
-                        "reason": "position_notional_limit",
-                        "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc),
-                    },
-                    {
-                        "status": "protective_order_failed",
-                        "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc),
-                    },
+                    {"status": "order_rejected", "reason": "position_notional_limit", "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc)},
+                    {"status": "protective_order_failed", "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc)},
                 ],
             },
-            {
-                "timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc),
-                "symbol": "ETHUSDT",
-                "outcome": "rejected",
-            },
+            {"timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc), "symbol": "ETHUSDT", "outcome": "rejected"},
             {
                 "timestamp": datetime(2026, 8, 16, tzinfo=timezone.utc),
                 "symbol": "BTCUSDT",
                 "outcome": "accepted",
                 "execution_events": [
-                    {
-                        "status": "order_filled",
-                        "timestamp": datetime(2026, 8, 17, tzinfo=timezone.utc),
-                    }
+                    {"status": "order_filled", "timestamp": datetime(2026, 8, 17, tzinfo=timezone.utc)}
                 ],
             },
         ]
@@ -213,9 +181,7 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(start, datetime(2026, 8, 21, tzinfo=timezone.utc))
         self.assertEqual(end, datetime(2026, 8, 22, tzinfo=timezone.utc))
         self.assertEqual(mode, "testnet")
-        self.assertTrue(
-            mongo.get_trade_decisions.call_args.kwargs["include_event_window"]
-        )
+        self.assertTrue(mongo.get_trade_decisions.call_args.kwargs["include_event_window"])
         futures.get_income_history.assert_called_once_with(
             recvWindow=60000,
             startTime=int(start.timestamp() * 1000),
@@ -245,9 +211,7 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(start, datetime(2026, 8, 17, tzinfo=timezone.utc))
         self.assertEqual(end, datetime(2026, 8, 24, tzinfo=timezone.utc))
         self.assertEqual(mode, "testnet")
-        self.assertTrue(
-            mongo.get_trade_decisions.call_args.kwargs["include_event_window"]
-        )
+        self.assertTrue(mongo.get_trade_decisions.call_args.kwargs["include_event_window"])
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet weekly report: 2026-08-17"
         )

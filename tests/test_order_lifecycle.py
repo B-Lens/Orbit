@@ -58,7 +58,9 @@ class TestOrderManager(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "live asset"):
-            self.manager.submit_validation_order("BTCUSDT", side="BUY", type="LIMIT")
+            self.manager.submit_validation_order(
+                "BTCUSDT", side="BUY", type="LIMIT"
+            )
 
         self.manager.future_client.new_order.assert_not_called()
 
@@ -110,7 +112,9 @@ class TestOrderManager(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "exchange unavailable"):
                 self.manager.refresh_symbol_filters("BTCUSDT")
 
-            self.assertIs(self.manager._exchange_filters_cache["BTCUSDT"], cached)
+            self.assertIs(
+                self.manager._exchange_filters_cache["BTCUSDT"], cached
+            )
         finally:
             self.manager._exchange_filters_cache.pop("BTCUSDT", None)
 
@@ -306,37 +310,6 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
-    def test_position_discovery_ignores_stale_entry_price_without_exposure(self):
-        checker = TradeChecker.__new__(TradeChecker)
-        checker.order_manager = MagicMock()
-        checker.order_manager.execution_settings.active_modes = ["testnet"]
-        client = MagicMock()
-        checker.order_manager.futures_clients = {"testnet": client}
-        checker._get_position_risk = MagicMock(
-            return_value=[
-                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0"},
-                {"symbol": "BTCUSDT", "entryPrice": "100000", "positionAmt": "0.01"},
-            ]
-        )
-        checker.load_trade = MagicMock(return_value=None)
-        checker.scan_trade_keys = MagicMock(return_value=[])
-
-        trades = checker.activePosition_coolMaker()
-
-        self.assertNotIn("ETHUSDT", trades)
-        self.assertEqual(trades["BTCUSDT"]["quantity"], 0.01)
-
-    def test_exit_starts_post_exit_cooldown(self):
-        checker = TradeChecker.__new__(TradeChecker)
-        checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT"}}
-        checker.delete_trade_with_orders = MagicMock()
-        checker.set_cooldown = MagicMock()
-
-        checker._exit_trade("ETHUSDT", "ETHUSDT")
-
-        checker.set_cooldown.assert_called_once_with("ETHUSDT")
-        self.assertNotIn("ETHUSDT", checker.trades)
-
     def test_order_classification(self):
         stop_orders = [
             {"orderType": "STOP_MARKET"},

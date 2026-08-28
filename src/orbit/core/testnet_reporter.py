@@ -90,7 +90,9 @@ def build_report_body(
     start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     window_decisions = [
-        row for row in all_decisions if _in_window(row.get("timestamp"), start, end)
+        row
+        for row in all_decisions
+        if _in_window(row.get("timestamp"), start, end)
     ]
     trade_attempts = [
         row
@@ -105,8 +107,9 @@ def build_report_body(
     )
     for row in all_decisions:
         for event in row.get("execution_events", []):
-            if event.get("status") == "order_rejected" and _in_window(
-                event.get("timestamp"), start, end
+            if (
+                event.get("status") == "order_rejected"
+                and _in_window(event.get("timestamp"), start, end)
             ):
                 reasons[str(event.get("reason", "unknown"))] += 1
 
@@ -128,10 +131,6 @@ def build_report_body(
         f"- Strategy/risk rejections: **{counts['rejected']}**",
         f"- Errors: **{counts['error']}**",
         f"- No-signal evaluations (counted, not expanded): **{counts['no_signal']}**",
-        f"- Realized P&L: **{performance.realized_pnl:.8f} USDT**",
-        f"- Commission: **{performance.commission:.8f} USDT**",
-        f"- Funding: **{performance.funding:.8f} USDT**",
-        f"- Other income: **{performance.other_income:.8f} USDT**",
         f"- Net P&L after fees/funding: **{performance.net_pnl:.8f} USDT**",
         "",
         "## Rejection and error reasons",
@@ -146,8 +145,8 @@ def build_report_body(
             "",
             "## Every testnet trade attempt",
             "",
-            "| Time (UTC) | Decision | Symbol | Side | Entry | Stop | Target | Sentiment | Strategy | Outcome | Initial reason | Position state | Position quantity | Cooldown until | Execution events |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Time (UTC) | Decision | Symbol | Side | Entry | Stop | Target | Sentiment | Strategy | Outcome | Initial reason | Execution events |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for row in trade_attempts:
@@ -175,9 +174,6 @@ def build_report_body(
                     row.get("strategy"),
                     row.get("outcome"),
                     row.get("reason"),
-                    row.get("position_side"),
-                    row.get("position_quantity"),
-                    row.get("cooldown_until"),
                     events,
                 )
             )
@@ -185,7 +181,7 @@ def build_report_body(
         )
     if not trade_attempts:
         lines.append(
-            "| — | — | — | — | — | — | — | — | — | — | — | — | — | — | No trade attempts recorded |"
+            "| — | — | — | — | — | — | — | — | — | — | — | No trade attempts recorded |"
         )
     lines.extend(
         [
