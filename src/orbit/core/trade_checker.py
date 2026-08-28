@@ -493,6 +493,18 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Trade exit helper (mapping cleanup)
     # ------------------------------------------------------------------
 
+    def _mark_exit_pending(self, symbol: str, trade_id: str) -> None:
+        """Keep a triggered trade protected until reconciliation confirms it is flat."""
+        trade = self.trades.get(symbol)
+        if trade is not None:
+            trade["exit_pending"] = True
+        self.update_trade_fields(trade_id, {"exit_pending": True})
+        logger.info(
+            "[EXIT] Trade %s for %s is pending broker confirmation.",
+            trade_id,
+            symbol,
+        )
+
     def _cancel_protective_orders(self, symbol: str, trade_id: str) -> None:
         """Best-effort cancel every SL/TP order associated with a trade."""
         persisted = self.load_trade(trade_id) or {}
@@ -519,7 +531,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
 
     def _exit_trade(self, symbol: str, trade_id: str) -> None:
-        """Cancel protective orders, remove a trade, and begin its cooldown."""
+        """Clean up a trade after broker reconciliation confirms it is flat."""
         self._cancel_protective_orders(symbol, trade_id)
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
@@ -567,13 +579,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
             resp = self.order_manager.place_market_order(symbol, "SELL", quantity)
             if resp:
                 trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return True
         if side == "SELL" and current_price < current_sma:
             resp = self.order_manager.place_market_order(symbol, "BUY", quantity)
             if resp:
                 trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return True
 
         return False
@@ -650,7 +662,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} SL Hit at BUY side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if current_price <= stop_loss and stop_loss > self.trades[symbol]["price"]:
@@ -660,7 +672,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} SL Hit at BUY side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if (
@@ -673,7 +685,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} Target Hit at BUY side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if COIN_TRADE_TYPE[symbol] == TradeType.ADAPTIVE_TRADE:
@@ -749,7 +761,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} SL Hit at SELL Side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if current_price >= stop_loss and stop_loss < self.trades[symbol]["price"]:
@@ -759,7 +771,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} SL Hit at SELL Side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if (
@@ -772,7 +784,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} Target Hit at SELL Side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if COIN_TRADE_TYPE[symbol] == TradeType.ADAPTIVE_TRADE:
@@ -846,6 +858,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
             logger.warning(
                 f"[WARN] Current price for {symbol} is invalid, skipping trade check."
             )
+            return
+
+        if self.trades.get(symbol, {}).get("exit_pending"):
             return
 
         try:
@@ -1025,6 +1040,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         self.trades[symbol]["stop_loss_order"],
                         self.trades[symbol]["quantity"],
                     )
+                    if self.trades.get(symbol, {}).get("exit_pending"):
+                        flag = True
+                        break
 
                 if flag or (
                     get_indian_time().minute % 5 == 0

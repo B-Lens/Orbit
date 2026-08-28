@@ -311,6 +311,42 @@ class TestTradeChecker(unittest.TestCase):
         checker.set_cooldown.assert_called_once_with("ETHUSDT")
         self.assertNotIn("ETHUSDT", checker.trades)
 
+    def test_pending_exit_keeps_trade_state_until_broker_confirms_flat(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT"}}
+        checker.update_trade_fields = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        checker.order_manager = MagicMock()
+
+        checker._mark_exit_pending("ETHUSDT", "ETHUSDT")
+
+        self.assertTrue(checker.trades["ETHUSDT"]["exit_pending"])
+        checker.update_trade_fields.assert_called_once_with(
+            "ETHUSDT", {"exit_pending": True}
+        )
+        checker.delete_trade_with_orders.assert_not_called()
+        checker.order_manager.cancel_algo_conditional_order.assert_not_called()
+
+    def test_stop_threshold_waits_for_flat_position_before_cleanup(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT", "price": 100.0}}
+        checker.send_false_alarm = MagicMock()
+        checker._mark_exit_pending = MagicMock()
+        checker._exit_trade = MagicMock()
+
+        checker.long_check_trade(
+            risk_management={},
+            symbol="ETHUSDT",
+            stop_loss=99.0,
+            target=105.0,
+            current_price=98.0,
+            stop_loss_order={"algoId": "101"},
+            quantity=1.0,
+        )
+
+        checker._mark_exit_pending.assert_called_once_with("ETHUSDT", "ETHUSDT")
+        checker._exit_trade.assert_not_called()
+
     def test_exit_attempts_sibling_cancellation_when_filled_order_is_terminal(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.trades = {
