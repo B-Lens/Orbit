@@ -945,10 +945,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
         # Clean up stale Redis entries for symbols no longer active on broker
         for key in self.scan_trade_keys():
             trade_id = key[len(TRADE_KEY_PREFIX) :]
-            if trade_id not in active_symbols:
+            persisted = self.load_trade(trade_id) or {}
+            symbol = str(persisted.get("symbol") or trade_id)
+            if symbol not in active_symbols:
                 logger.info(
-                    f"[CLEANUP] Removing stale Redis trade mapping for trade_id={trade_id}"
+                    "[CLEANUP] Broker exposure is flat for "
+                    f"symbol={symbol}, trade_id={trade_id}; starting cooldown"
                 )
+                self.set_cooldown(symbol)
                 self.delete_trade_with_orders(trade_id)
 
         return trades

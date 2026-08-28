@@ -252,6 +252,30 @@ class TestTradeChecker(unittest.TestCase):
         self.assertNotIn("ETHUSDT", trades)
         self.assertEqual(trades["BTCUSDT"]["quantity"], 0.01)
 
+    def test_position_reconciliation_starts_cooldown_after_offline_exit(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        client = MagicMock()
+        checker.order_manager.futures_clients = {"testnet": client}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(return_value=["trade:decision-1"])
+        checker.load_trade = MagicMock(
+            return_value={"trade_id": "decision-1", "symbol": "ETHUSDT"}
+        )
+        checker.set_cooldown = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades, {})
+        checker.set_cooldown.assert_called_once_with("ETHUSDT")
+        checker.delete_trade_with_orders.assert_called_once_with("decision-1")
+
     def test_exit_starts_post_exit_cooldown(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT"}}

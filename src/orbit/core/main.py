@@ -458,7 +458,11 @@ class BinanceAutomation(ExceptionManager):
     def report_performance(self, interval_seconds: int = 86400) -> None:
         """Sync Binance income and emit a fee-aware report once per day."""
         reporters = [
-            PerformanceReporter(client, self.order_manager.mongo_handler, mode.value)
+            PerformanceReporter(
+                client,
+                self.order_manager.mongo_handler,
+                ExecutionMode(mode).value,
+            )
             for mode, client in self.order_manager.futures_clients.items()
         ]
         while True:
