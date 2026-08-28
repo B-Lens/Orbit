@@ -493,14 +493,94 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Trade exit helper (mapping cleanup)
     # ------------------------------------------------------------------
 
-    def _exit_trade(self, symbol: str, trade_id: str) -> None:
-        """Remove a trade and begin its configured post-exit cooldown."""
+    def _mark_exit_pending(self, symbol: str, trade_id: str) -> None:
+        """Keep a triggered trade protected until reconciliation confirms it is flat."""
+        trade = self.trades.get(symbol)
+        if trade is not None:
+            trade["exit_pending"] = True
+        self.update_trade_fields(trade_id, {"exit_pending": True})
+        logger.info(
+            "[EXIT] Trade %s for %s is pending broker confirmation.",
+            trade_id,
+            symbol,
+        )
+
+    def _cancel_protective_orders(
+        self, symbol: str, persisted_trade: Dict[str, Any]
+    ) -> None:
+        """Best-effort cancel every SL/TP order associated with a trade."""
+        order_ids = {
+            str(order_id)
+            for field in ("sl_order_id", "tp_order_id")
+            if (order_id := persisted_trade.get(field))
+        }
+
+        for order_id in order_ids:
+            try:
+                self.order_manager.cancel_algo_conditional_order(symbol, order_id)
+            except Exception as error:
+                # One order may already be terminal because it closed the position.
+                # Continue so its still-open sibling always gets a cancellation attempt.
+                logger.warning(
+                    "[EXIT] Could not cancel protective order %s for %s: %s",
+                    order_id,
+                    symbol,
+                    error,
+                )
+
+    def _position_is_flat(self, symbol: str) -> bool:
+        """Return whether a fresh broker snapshot has no exposure for *symbol*."""
+        clients = {
+            id(
+                self.order_manager.futures_clients[mode]
+            ): self.order_manager.futures_clients[mode]
+            for mode in self.order_manager.execution_settings.active_modes
+        }
+        return all(
+            float(position.get("positionAmt", 0) or 0) == 0
+            for client in clients.values()
+            for position in self._get_position_risk(client)
+            if position.get("symbol") == symbol
+        )
+
+    def _exit_trade(self, symbol: str, trade_id: str) -> bool:
+        """Clean up a trade after broker reconciliation confirms it is flat."""
+        persisted_trade = self.load_trade(trade_id) or {}
+        if not self._position_is_flat(symbol):
+            logger.info(
+                "[EXIT] Trade %s for %s still has broker exposure; retaining protection.",
+                trade_id,
+                symbol,
+            )
+            return False
+
+        self._cancel_protective_orders(symbol, persisted_trade)
+        current_trade = self.load_trade(trade_id) or {}
+        persisted_order_ids = {
+            str(persisted_trade.get(field) or "")
+            for field in ("sl_order_id", "tp_order_id")
+        }
+        current_order_ids = {
+            str(current_trade.get(field) or "")
+            for field in ("sl_order_id", "tp_order_id")
+        }
+        if current_order_ids != persisted_order_ids or not self._position_is_flat(
+            symbol
+        ):
+            logger.warning(
+                "[EXIT] Trade state or broker exposure changed during cleanup for %s; "
+                "preserving current state.",
+                symbol,
+            )
+            return False
+
         self.delete_trade_with_orders(trade_id)
-        self.trades.pop(symbol, None)
+        getattr(self, "trades", {}).pop(symbol, None)
         self.set_cooldown(symbol)
         logger.info(
             f"[EXIT] Trade {trade_id} for {symbol} removed from state and Redis mappings."
         )
+        return True
 
     # ------------------------------------------------------------------
     # Adaptive / trailing logic
@@ -541,12 +621,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
             resp = self.order_manager.place_market_order(symbol, "SELL", quantity)
             if resp:
                 trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
+                self._mark_exit_pending(symbol, trade_id)
                 self._exit_trade(symbol, trade_id)
                 return True
         if side == "SELL" and current_price < current_sma:
             resp = self.order_manager.place_market_order(symbol, "BUY", quantity)
             if resp:
                 trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
+                self._mark_exit_pending(symbol, trade_id)
                 self._exit_trade(symbol, trade_id)
                 return True
 
@@ -624,7 +706,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} SL Hit at BUY side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if current_price <= stop_loss and stop_loss > self.trades[symbol]["price"]:
@@ -634,7 +716,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} SL Hit at BUY side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if (
@@ -647,7 +729,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} Target Hit at BUY side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if COIN_TRADE_TYPE[symbol] == TradeType.ADAPTIVE_TRADE:
@@ -723,7 +805,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} SL Hit at SELL Side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if current_price >= stop_loss and stop_loss < self.trades[symbol]["price"]:
@@ -733,7 +815,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} SL Hit at SELL Side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if (
@@ -746,7 +828,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     description=f"{symbol} Target Hit at SELL Side",
                     fields=self.trades[symbol],
                 )
-                self._exit_trade(symbol, trade_id)
+                self._mark_exit_pending(symbol, trade_id)
                 return
 
             if COIN_TRADE_TYPE[symbol] == TradeType.ADAPTIVE_TRADE:
@@ -820,6 +902,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
             logger.warning(
                 f"[WARN] Current price for {symbol} is invalid, skipping trade check."
             )
+            return
+
+        if self.trades.get(symbol, {}).get("exit_pending"):
             return
 
         try:
@@ -952,8 +1037,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "[CLEANUP] Broker exposure is flat for "
                     f"symbol={symbol}, trade_id={trade_id}; starting cooldown"
                 )
-                self.set_cooldown(symbol)
-                self.delete_trade_with_orders(trade_id)
+                self._exit_trade(symbol, trade_id)
 
         return trades
 
@@ -1000,6 +1084,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         self.trades[symbol]["stop_loss_order"],
                         self.trades[symbol]["quantity"],
                     )
+                    if self.trades.get(symbol, {}).get("exit_pending"):
+                        flag = True
 
                 if flag or (
                     get_indian_time().minute % 5 == 0
