@@ -82,8 +82,16 @@ class LLM(ExceptionManager):
         # 2. Google Antigravity (CODEX BACKUP)
         # ------------------------------------------------------------------
         if self.antigravity_llm is None and default_token_file().is_file():
-            self.antigravity_llm = AntigravityClient()
-            logger.info("Google Antigravity configured as the Codex fallback")
+            try:
+                antigravity = AntigravityClient()
+                antigravity.validate_configuration()
+                self.antigravity_llm = antigravity
+                logger.info("Google Antigravity configured as the Codex fallback")
+            except Exception as error:
+                logger.warning(
+                    "Google Antigravity fallback configuration is unusable: %s",
+                    error,
+                )
 
         # ------------------------------------------------------------------
         # 3. OpenRouter (FALLBACK)

@@ -382,6 +382,65 @@ def test_antigravity_client_refreshes_expired_token(tmp_path) -> None:
     assert requests[1].get_header("Authorization") == "Bearer fresh"
 
 
+def test_antigravity_client_uses_refreshed_token_when_secret_is_read_only(
+    tmp_path,
+) -> None:
+    token_file = tmp_path / "token.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "token": {
+                    "access_token": "expired",
+                    "refresh_token": "refresh-token",
+                    "expiry": "2000-01-01T00:00:00Z",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    responses = iter(
+        [
+            {"access_token": "fresh", "expires_in": 3600},
+            {
+                "response": {
+                    "candidates": [{"content": {"parts": [{"text": "NEUTRAL"}]}}]
+                }
+            },
+        ]
+    )
+
+    class JsonResponse:
+        def __init__(self, data):
+            self.data = data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.data).encode("utf-8")
+
+    requests = []
+
+    def urlopen(request, timeout):
+        requests.append(request)
+        return JsonResponse(next(responses))
+
+    client = AntigravityClient(
+        token_file=token_file,
+        project="orbit-project",
+        oauth_client_id="client-id",
+        oauth_client_secret="client-secret",
+        urlopen=urlopen,
+    )
+    client._save_credential = MagicMock(side_effect=PermissionError("read-only"))
+
+    assert client.invoke("Assess markets") == "NEUTRAL"
+    assert requests[1].get_header("Authorization") == "Bearer fresh"
+
+
 @pytest.mark.parametrize(
     "expiry",
     [
@@ -539,10 +598,40 @@ def test_llm_loads_antigravity_from_standard_cli_path(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_AUTH_FILE", str(tmp_path / "missing-auth.json"))
     monkeypatch.delenv("ANTIGRAVITY_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("ANTIGRAVITY_PROJECT", "orbit-project")
 
     llm = LLM(redis_client=_redis_mock())
 
     assert isinstance(llm.antigravity_llm, AntigravityClient)
+
+
+def test_llm_rejects_incomplete_antigravity_only_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_file = tmp_path / "token.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "token": {
+                    "access_token": "access-token",
+                    "expiry": "2999-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTIGRAVITY_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv(
+        "ANTIGRAVITY_PROJECT_FILE", str(tmp_path / "missing-project.txt")
+    )
+    monkeypatch.delenv("ANTIGRAVITY_PROJECT", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_AUTH_FILE", str(tmp_path / "missing-auth.json"))
+
+    with pytest.raises(RuntimeError, match="No market-intelligence LLM configured"):
+        LLM(redis_client=_redis_mock())
 
 
 def test_llm_tries_each_configured_groq_model(

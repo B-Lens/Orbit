@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -18,6 +19,8 @@ DEFAULT_BACKEND_URL = "https://cloudcode-pa.googleapis.com/v1internal:generateCo
 DEFAULT_TOKEN_URL = "https://oauth2.googleapis.com/token"
 DEFAULT_MODEL = "gemini-3.7-flash-tiered"
 DEFAULT_USER_AGENT = "antigravity/1.1.22 (orbit; direct-backend)"
+
+logger = logging.getLogger("Orbit")
 
 
 def default_token_file() -> Path:
@@ -84,6 +87,24 @@ class AntigravityClient:
     def invoke_web_search(self, prompt: str) -> str:
         """Generate a response grounded with Google Search."""
         return self._invoke(prompt, web_search=True)
+
+    def validate_configuration(self) -> None:
+        """Fail early when the provisioned fallback cannot serve requests."""
+        credential = self._load_credential()
+        self._load_project()
+        token = credential["token"]
+        expires = self._parse_expiry(token.get("expiry"))
+        if expires > datetime.now(timezone.utc) + timedelta(minutes=5):
+            return
+        if not token.get("refresh_token"):
+            raise RuntimeError(
+                "Expired Antigravity OAuth credential has no refresh token"
+            )
+        if not self.oauth_client_id or not self.oauth_client_secret:
+            raise RuntimeError(
+                "Expired Antigravity credential requires "
+                "ANTIGRAVITY_OAUTH_CLIENT_ID and ANTIGRAVITY_OAUTH_CLIENT_SECRET"
+            )
 
     def _invoke(self, prompt: str, web_search: bool) -> str:
         if not prompt or not prompt.strip():
@@ -211,7 +232,16 @@ class AntigravityClient:
             datetime.now(timezone.utc)
             + timedelta(seconds=int(refreshed.get("expires_in", 3600)))
         ).isoformat()
-        self._save_credential(credential)
+        try:
+            self._save_credential(credential)
+        except OSError as error:
+            # Mounted secret paths are commonly read-only. The fresh token is
+            # still valid for this process even when it cannot be persisted.
+            logger.warning(
+                "Could not persist refreshed Antigravity credential at %s: %s",
+                self.token_file,
+                type(error).__name__,
+            )
         return str(token["access_token"])
 
     def _save_credential(self, credential: dict[str, Any]) -> None:
