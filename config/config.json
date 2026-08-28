@@ -1,4 +1,14 @@
 {
+    "cooldown_hours": {
+      "BCHUSDT" : 0,
+      "BNBUSDT" : 0,
+      "MKRUSDT" : 0,
+      "LTCUSDT" : 0,
+      "SOLUSDT" : 0,
+      "ETHUSDT" : 0,
+      "BTCUSDT" : 0,
+      "PAXGUSDT" : 0
+    },
     "risk_management": {
       "BTCUSDT": 0.01,
       "ETHUSDT": 0.03,
