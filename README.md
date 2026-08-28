@@ -13,7 +13,7 @@ intelligence.
 | --- | --- |
 | Signal analyzer | Runs configured strategies on 15-minute boundaries and submits accepted signals to `OrderManager`. |
 | Trade checker | Reconciles positions and maintains stop-loss/take-profit orders. |
-| Sentiment cron | Runs global, web-grounded crypto sentiment analysis every 30 minutes through OpenAI. |
+| Sentiment cron | Runs global, web-grounded crypto sentiment analysis every 30 minutes through Codex, with an optional Antigravity fallback. |
 | Performance reporter | Synchronizes exchange income and reports net performance when order submission is enabled. |
 | Health monitor | Alerts when a background worker stops. |
 
@@ -53,8 +53,11 @@ Symbols monitored for pre-existing positions are assigned an environment under
 `monitored_assets` in the same file.
 
 Market intelligence uses `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
-CLI `auth.json`. Credentials must stay outside the repository. Each run fails
-closed and preserves the cached sentiment if web-grounded analysis fails.
+CLI `auth.json`. To enable the backup, provision the Antigravity CLI token and
+project files, set their paths with `ANTIGRAVITY_TOKEN_FILE` and
+`ANTIGRAVITY_PROJECT_FILE`, and provide the OAuth client values used to refresh
+the token. Credentials must stay outside the repository. Codex is always tried
+first; if both grounded providers fail, the run preserves cached sentiment.
 
 ## Configuration
 
