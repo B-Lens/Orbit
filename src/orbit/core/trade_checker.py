@@ -49,7 +49,10 @@ _POSITION_RISK_RETRY_DELAY = 1.0
 def _order_types(order: Optional[Dict[str, Any]]) -> Tuple[str, str]:
     if not order:
         return "", ""
-    return str(order.get("algoType", "")).upper(), str(order.get("orderType", "")).upper()
+    return (
+        str(order.get("algoType", "")).upper(),
+        str(order.get("orderType", "")).upper(),
+    )
 
 
 def is_stop_order(order: Optional[Dict[str, Any]]) -> bool:
@@ -150,7 +153,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
             self._ws_manager.start()
             logger.info("[TradeChecker] BinanceWSManager started.")
         elif set(self._ws_manager.trading_pairs) != set(trading_pairs):
-            logger.info("[TradeChecker] Trading pairs changed — updating WebSocket subscriptions.")
+            logger.info(
+                "[TradeChecker] Trading pairs changed — updating WebSocket subscriptions."
+            )
             self._ws_manager.update_pairs(trading_pairs)
 
     def _stop_ws(self) -> None:
@@ -187,7 +192,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
         if cooldown_hours == 0:
             minutes = 5
         ind_time = get_indian_time()
-        cooldown_end = (ind_time.now() + timedelta(hours=cooldown_hours, minutes=minutes)).isoformat()
+        cooldown_end = (
+            ind_time.now() + timedelta(hours=cooldown_hours, minutes=minutes)
+        ).isoformat()
         # Use RedisManager helper
         self.redis_set(symbol, cooldown_end)
 
@@ -247,30 +254,56 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             if stop_loss_order:
                 self.register_order(str(stop_loss_order.get("algoId", "")), trade_id)
-                self.update_trade_fields(trade_id, {"sl_order_id": str(stop_loss_order.get("algoId", ""))})
+                self.update_trade_fields(
+                    trade_id, {"sl_order_id": str(stop_loss_order.get("algoId", ""))}
+                )
                 self.update_trade_fields(trade_id, {"stop_loss_order": stop_loss_order})
-                self.update_trade_fields(trade_id, {"stop_loss_price": stop_loss_order.get("stopPrice") or stop_loss_order.get("triggerPrice") or stop_loss_order.get("stop_price")})
+                self.update_trade_fields(
+                    trade_id,
+                    {
+                        "stop_loss_price": stop_loss_order.get("stopPrice")
+                        or stop_loss_order.get("triggerPrice")
+                        or stop_loss_order.get("stop_price")
+                    },
+                )
 
             if take_profit_order:
                 self.register_order(str(take_profit_order.get("algoId", "")), trade_id)
-                self.update_trade_fields(trade_id, {"tp_order_id": str(take_profit_order.get("algoId", ""))})
-                self.update_trade_fields(trade_id, {"take_profit_order": take_profit_order})
-                self.update_trade_fields(trade_id, {"target": take_profit_order.get("stopPrice") or take_profit_order.get("triggerPrice") or take_profit_order.get("stop_price")})
+                self.update_trade_fields(
+                    trade_id, {"tp_order_id": str(take_profit_order.get("algoId", ""))}
+                )
+                self.update_trade_fields(
+                    trade_id, {"take_profit_order": take_profit_order}
+                )
+                self.update_trade_fields(
+                    trade_id,
+                    {
+                        "target": take_profit_order.get("stopPrice")
+                        or take_profit_order.get("triggerPrice")
+                        or take_profit_order.get("stop_price")
+                    },
+                )
 
             persisted = self.load_trade(trade_id) or {}
 
             persisted_sl_id = str(persisted.get("sl_order_id", ""))
             if persisted_sl_id and persisted_sl_id not in open_order_ids:
-                logger.warning(f"[SELF-HEAL] SL order {persisted_sl_id} for {symbol} not found on broker – will recreate")
+                logger.warning(
+                    f"[SELF-HEAL] SL order {persisted_sl_id} for {symbol} not found on broker – will recreate"
+                )
                 stop_loss_order = None
 
             persisted_tp_id = str(persisted.get("tp_order_id", ""))
             if persisted_tp_id and persisted_tp_id not in open_order_ids:
-                logger.warning(f"[SELF-HEAL] TP order {persisted_tp_id} for {symbol} not found on broker – will recreate")
+                logger.warning(
+                    f"[SELF-HEAL] TP order {persisted_tp_id} for {symbol} not found on broker – will recreate"
+                )
                 take_profit_order = None
 
             if stop_loss_order is None:
-                sl_price = persisted.get("stop_loss_price") or self.calculate_sl_price(trade, risk_management)
+                sl_price = persisted.get("stop_loss_price") or self.calculate_sl_price(
+                    trade, risk_management
+                )
                 stop_loss_order = self.order_manager.place_sl_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
@@ -284,10 +317,17 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     self.update_trade_fields(trade_id, {"sl_order_id": new_sl_id})
                     if persisted_sl_id and persisted_sl_id != new_sl_id:
                         self.deregister_order(persisted_sl_id)
-                    logger.info(f"[SELF-HEAL] Placed missing SL for {symbol} at {sl_price} (order {new_sl_id})")
+                    logger.info(
+                        f"[SELF-HEAL] Placed missing SL for {symbol} at {sl_price} (order {new_sl_id})"
+                    )
 
-            if take_profit_order is None and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE:
-                target_price = persisted.get("target") or self.calculate_target_price(trade, risk_management)
+            if (
+                take_profit_order is None
+                and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+            ):
+                target_price = persisted.get("target") or self.calculate_target_price(
+                    trade, risk_management
+                )
                 take_profit_order = self.order_manager.place_target_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
@@ -301,7 +341,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     self.update_trade_fields(trade_id, {"tp_order_id": new_tp_id})
                     if persisted_tp_id and persisted_tp_id != new_tp_id:
                         self.deregister_order(persisted_tp_id)
-                    logger.info(f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})")
+                    logger.info(
+                        f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})"
+                    )
 
             return stop_loss_order, take_profit_order
 
@@ -313,7 +355,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Price / calculation helpers
     # ------------------------------------------------------------------
 
-    def calculate_sl_price(self, trade: Dict[str, Any], risk_management: Dict[str, Any]) -> float:
+    def calculate_sl_price(
+        self, trade: Dict[str, Any], risk_management: Dict[str, Any]
+    ) -> float:
         """Compute the initial stop-loss price from the entry and risk config."""
         price = float(trade["price"])
         percent = float(risk_management["stop_loss_percent"])
@@ -324,7 +368,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
         else:
             return price + (price * (percent / 100.0))
 
-    def calculate_target_price(self, trade: Dict[str, Any], risk_management: Dict[str, Any]) -> float:
+    def calculate_target_price(
+        self, trade: Dict[str, Any], risk_management: Dict[str, Any]
+    ) -> float:
         """Compute the take-profit price from the entry and risk config."""
         price = float(trade["price"])
         percent = float(risk_management.get("target_percent", 2))
@@ -396,18 +442,28 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     low = min(current_price, lowest_price)
                 self.trades[symbol]["low"] = low
 
-            sl_order_id = str(stop_loss_order.get("algoId", "")) if stop_loss_order else existing_trade.get("sl_order_id", "")
-            tp_order_id = str(take_profit_order.get("algoId", "")) if take_profit_order else existing_trade.get("tp_order_id", "")
+            sl_order_id = (
+                str(stop_loss_order.get("algoId", ""))
+                if stop_loss_order
+                else existing_trade.get("sl_order_id", "")
+            )
+            tp_order_id = (
+                str(take_profit_order.get("algoId", ""))
+                if take_profit_order
+                else existing_trade.get("tp_order_id", "")
+            )
 
-            self.trades[symbol].update({
-                "stop_loss_price": stop_loss,
-                "target": target,
-                "quantity": trade["quantity"],
-                "stop_loss_order": stop_loss_order,
-                "take_profit_order": take_profit_order,
-                "sl_order_id": sl_order_id,
-                "tp_order_id": tp_order_id,
-            })
+            self.trades[symbol].update(
+                {
+                    "stop_loss_price": stop_loss,
+                    "target": target,
+                    "quantity": trade["quantity"],
+                    "stop_loss_order": stop_loss_order,
+                    "take_profit_order": take_profit_order,
+                    "sl_order_id": sl_order_id,
+                    "tp_order_id": tp_order_id,
+                }
+            )
 
             trade_id = trade.get("trade_id") or symbol
             self.save_trade(trade_id, self.trades[symbol])
@@ -438,10 +494,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # ------------------------------------------------------------------
 
     def _exit_trade(self, symbol: str, trade_id: str) -> None:
-        """Remove a trade from in-memory state and clean up Redis mappings."""
+        """Remove a trade and begin its configured post-exit cooldown."""
         self.delete_trade_with_orders(trade_id)
         self.trades.pop(symbol, None)
-        logger.info(f"[EXIT] Trade {trade_id} for {symbol} removed from state and Redis mappings.")
+        self.set_cooldown(symbol)
+        logger.info(
+            f"[EXIT] Trade {trade_id} for {symbol} removed from state and Redis mappings."
+        )
 
     # ------------------------------------------------------------------
     # Adaptive / trailing logic
@@ -456,32 +515,36 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self, symbol: str, current_price: float, side: str, quantity: float
     ) -> bool:
         """Exit the position when price crosses the SMA (adaptive mode)."""
-        historical_df = self.order_manager.mongo_handler.get_mongo_historical_data(symbol, interval="15m")
+        historical_df = self.order_manager.mongo_handler.get_mongo_historical_data(
+            symbol, interval="15m"
+        )
         if historical_df is None or historical_df.empty:
             return False
 
-        historical_df["timestamp"] = pd.to_datetime(historical_df["timestamp"], unit='ns')
+        historical_df["timestamp"] = pd.to_datetime(
+            historical_df["timestamp"], unit="ns"
+        )
         historical_df = historical_df.set_index("timestamp")
 
-        close = historical_df['close'].copy()
+        close = historical_df["close"].copy()
         close.loc[len(close)] = current_price
         sma_series = self.compute_sma(close)
         current_sma = sma_series.iloc[-1]
 
         self.send_active_trade_prices(
             data=None,
-            description=f'{symbol} Adaptive running stats on {side} side',
-            fields={"sma": current_sma, "current_price": current_price}
+            description=f"{symbol} Adaptive running stats on {side} side",
+            fields={"sma": current_sma, "current_price": current_price},
         )
 
         if side == "BUY" and current_price > current_sma:
-            resp = self.order_manager.place_market_order(symbol, 'SELL', quantity)
+            resp = self.order_manager.place_market_order(symbol, "SELL", quantity)
             if resp:
                 trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
                 self._exit_trade(symbol, trade_id)
                 return True
         if side == "SELL" and current_price < current_sma:
-            resp = self.order_manager.place_market_order(symbol, 'BUY', quantity)
+            resp = self.order_manager.place_market_order(symbol, "BUY", quantity)
             if resp:
                 trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
                 self._exit_trade(symbol, trade_id)
@@ -510,13 +573,20 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 if current_stop_order and current_stop_order.get("algoId"):
                     old_sl_id = str(current_stop_order["algoId"])
                     try:
-                        self.order_manager.cancel_algo_conditional_order(symbol=symbol, algo_id=old_sl_id)
+                        self.order_manager.cancel_algo_conditional_order(
+                            symbol=symbol, algo_id=old_sl_id
+                        )
                     except Exception as e:
-                        self.handle_exception(e, f"Failed to cancel old SL order for {symbol} after placing new SL")
+                        self.handle_exception(
+                            e,
+                            f"Failed to cancel old SL order for {symbol} after placing new SL",
+                        )
                     self.deregister_order(old_sl_id)
 
                 self.register_order(new_sl_id, trade_id)
-                self.update_trade_fields(trade_id, {"sl_order_id": new_sl_id, "stop_loss_price": new_sl})
+                self.update_trade_fields(
+                    trade_id, {"sl_order_id": new_sl_id, "stop_loss_price": new_sl}
+                )
 
             orders = self.order_manager.get_conditional_open_orders(symbol=symbol)
             for o in orders:
@@ -545,24 +615,38 @@ class TradeChecker(AuthenticationManager, RedisManager):
     ) -> None:
         """Run all trade-management checks for a **long** position."""
         try:
-            self.set_cooldown(symbol)
             trade_id = self.trades[symbol].get("trade_id") or symbol
 
             if current_price <= stop_loss and stop_loss <= self.trades[symbol]["price"]:
                 logger.info(f"Stop-loss hit for {symbol}, Exiting trade.")
-                self.send_false_alarm(data=None, description=f"{symbol} SL Hit at BUY side", fields=self.trades[symbol])
+                self.send_false_alarm(
+                    data=None,
+                    description=f"{symbol} SL Hit at BUY side",
+                    fields=self.trades[symbol],
+                )
                 self._exit_trade(symbol, trade_id)
                 return
 
             if current_price <= stop_loss and stop_loss > self.trades[symbol]["price"]:
                 logger.info(f"Average hit for {symbol}. Exiting trade.")
-                self.send_average_alarm(data=None, description=f"{symbol} SL Hit at BUY side", fields=self.trades[symbol])
+                self.send_average_alarm(
+                    data=None,
+                    description=f"{symbol} SL Hit at BUY side",
+                    fields=self.trades[symbol],
+                )
                 self._exit_trade(symbol, trade_id)
                 return
 
-            if COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE and current_price >= target:
+            if (
+                COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+                and current_price >= target
+            ):
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
-                self.send_true_alarm(data=None, description=f"{symbol} Target Hit at BUY side", fields=self.trades[symbol])
+                self.send_true_alarm(
+                    data=None,
+                    description=f"{symbol} Target Hit at BUY side",
+                    fields=self.trades[symbol],
+                )
                 self._exit_trade(symbol, trade_id)
                 return
 
@@ -573,12 +657,22 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 cost_price = self.trades[symbol]["price"]
                 sl_price = self.trades[symbol].get("stop_loss_price")
 
-                if current_price >= cost_price * 1.03 and sl_price is not None and sl_price < cost_price:
+                if (
+                    current_price >= cost_price * 1.03
+                    and sl_price is not None
+                    and sl_price < cost_price
+                ):
                     new_stop = cost_price
-                    new_stop_order = self._place_and_replace_sl(symbol, new_stop, stop_loss_order, quantity, "SELL")
+                    new_stop_order = self._place_and_replace_sl(
+                        symbol, new_stop, stop_loss_order, quantity, "SELL"
+                    )
                     if new_stop_order:
                         self.trades[symbol]["stop_loss_price"] = new_stop
-                        self.send_sl_update_notifier(data=None, description=f"{symbol}: SL moved to Entry Price", fields={"new_sl": new_stop})
+                        self.send_sl_update_notifier(
+                            data=None,
+                            description=f"{symbol}: SL moved to Entry Price",
+                            fields={"new_sl": new_stop},
+                        )
                     return
 
             if not TRAILING_STOPLOSS.get(symbol, True):
@@ -592,14 +686,18 @@ class TradeChecker(AuthenticationManager, RedisManager):
             historical_data = self.mongo_handler.handle_mongo_data(symbol)
             strategy = strategy_class(historical_data)
             signal = strategy.generate_signals(symbol=symbol, position_side="LONG")
-            new_stop_loss = signal['stop_loss']
+            new_stop_loss = signal["stop_loss"]
 
             if new_stop_loss > stop_loss:
-                new_stop_order = self._place_and_replace_sl(symbol, new_stop_loss, stop_loss_order, quantity, "SELL")
+                new_stop_order = self._place_and_replace_sl(
+                    symbol, new_stop_loss, stop_loss_order, quantity, "SELL"
+                )
                 if new_stop_order:
                     self.trades[symbol]["stop_loss_price"] = new_stop_loss
                     stop_loss_order = new_stop_order
-                    logger.info(f"Updated SL for {symbol} to {new_stop_loss} at price {current_price}")
+                    logger.info(
+                        f"Updated SL for {symbol} to {new_stop_loss} at price {current_price}"
+                    )
 
         except Exception as e:
             self.handle_exception(e, context_description="long_check_trade")
@@ -616,24 +714,38 @@ class TradeChecker(AuthenticationManager, RedisManager):
     ) -> None:
         """Run all trade-management checks for a **short** position."""
         try:
-            self.set_cooldown(symbol)
             trade_id = self.trades[symbol].get("trade_id") or symbol
 
             if current_price >= stop_loss and stop_loss >= self.trades[symbol]["price"]:
                 logger.info(f"Stop-loss hit for {symbol}. Exiting trade.")
-                self.send_false_alarm(data=None, description=f"{symbol} SL Hit at SELL Side", fields=self.trades[symbol])
+                self.send_false_alarm(
+                    data=None,
+                    description=f"{symbol} SL Hit at SELL Side",
+                    fields=self.trades[symbol],
+                )
                 self._exit_trade(symbol, trade_id)
                 return
 
             if current_price >= stop_loss and stop_loss < self.trades[symbol]["price"]:
                 logger.info(f"Average hit for {symbol}, Exiting trade.")
-                self.send_average_alarm(data=None, description=f"{symbol} SL Hit at SELL Side", fields=self.trades[symbol])
+                self.send_average_alarm(
+                    data=None,
+                    description=f"{symbol} SL Hit at SELL Side",
+                    fields=self.trades[symbol],
+                )
                 self._exit_trade(symbol, trade_id)
                 return
 
-            if COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE and current_price <= target:
+            if (
+                COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+                and current_price <= target
+            ):
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
-                self.send_true_alarm(data=None, description=f"{symbol} Target Hit at SELL Side", fields=self.trades[symbol])
+                self.send_true_alarm(
+                    data=None,
+                    description=f"{symbol} Target Hit at SELL Side",
+                    fields=self.trades[symbol],
+                )
                 self._exit_trade(symbol, trade_id)
                 return
 
@@ -644,12 +756,22 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 cost_price = self.trades[symbol]["price"]
                 sl_price = self.trades[symbol].get("stop_loss_price")
 
-                if current_price <= cost_price * 0.97 and sl_price is not None and sl_price > cost_price:
+                if (
+                    current_price <= cost_price * 0.97
+                    and sl_price is not None
+                    and sl_price > cost_price
+                ):
                     new_stop = cost_price
-                    new_stop_order = self._place_and_replace_sl(symbol, new_stop, stop_loss_order, quantity, "BUY")
+                    new_stop_order = self._place_and_replace_sl(
+                        symbol, new_stop, stop_loss_order, quantity, "BUY"
+                    )
                     if new_stop_order:
                         self.trades[symbol]["stop_loss_price"] = new_stop
-                        self.send_sl_update_notifier(data=None, description=f"{symbol}: SL moved to Entry Price", fields={"new_sl": new_stop})
+                        self.send_sl_update_notifier(
+                            data=None,
+                            description=f"{symbol}: SL moved to Entry Price",
+                            fields={"new_sl": new_stop},
+                        )
                     return
 
             if not TRAILING_STOPLOSS.get(symbol, True):
@@ -663,14 +785,18 @@ class TradeChecker(AuthenticationManager, RedisManager):
             historical_data = self.mongo_handler.handle_mongo_data(symbol)
             strategy = strategy_class(historical_data)
             signal = strategy.generate_signals(symbol=symbol, position_side="SHORT")
-            new_stop_loss = signal['stop_loss']
+            new_stop_loss = signal["stop_loss"]
 
             if new_stop_loss < stop_loss:
-                new_stop_order = self._place_and_replace_sl(symbol, new_stop_loss, stop_loss_order, quantity, "SELL")
+                new_stop_order = self._place_and_replace_sl(
+                    symbol, new_stop_loss, stop_loss_order, quantity, "SELL"
+                )
                 if new_stop_order:
                     self.trades[symbol]["stop_loss_price"] = new_stop_loss
                     stop_loss_order = new_stop_order
-                    logger.info(f"Updated SL for {symbol} to {new_stop_loss} at price {current_price}")
+                    logger.info(
+                        f"Updated SL for {symbol} to {new_stop_loss} at price {current_price}"
+                    )
 
         except Exception as e:
             self.handle_exception(e, context_description="short_check_trade")
@@ -691,22 +817,44 @@ class TradeChecker(AuthenticationManager, RedisManager):
     ) -> None:
         """Dispatch to :meth:`long_check_trade` or :meth:`short_check_trade`."""
         if current_price is None or current_price == 0:
-            logger.warning(f"[WARN] Current price for {symbol} is invalid, skipping trade check.")
+            logger.warning(
+                f"[WARN] Current price for {symbol} is invalid, skipping trade check."
+            )
             return
 
         try:
-            self.send_active_trade_prices(data=None, description=f'Price Updates for {symbol}', fields={
-                'Entry price': f'{self.trades[symbol].get("price")}',
-                'current_price': f'{current_price}',
-                'stop_loss': f'{stop_loss}',
-                'target': f'{target}',
-                'side': f'{self.trades[symbol].get("positionSide")}'
-            })
+            self.send_active_trade_prices(
+                data=None,
+                description=f"Price Updates for {symbol}",
+                fields={
+                    "Entry price": f'{self.trades[symbol].get("price")}',
+                    "current_price": f"{current_price}",
+                    "stop_loss": f"{stop_loss}",
+                    "target": f"{target}",
+                    "side": f'{self.trades[symbol].get("positionSide")}',
+                },
+            )
 
             if self.trades[symbol]["positionSide"] == "BUY":
-                self.long_check_trade(risk_management, symbol, stop_loss, target, current_price, stop_loss_order, quantity)
+                self.long_check_trade(
+                    risk_management,
+                    symbol,
+                    stop_loss,
+                    target,
+                    current_price,
+                    stop_loss_order,
+                    quantity,
+                )
             else:
-                self.short_check_trade(risk_management, symbol, stop_loss, target, current_price, stop_loss_order, quantity)
+                self.short_check_trade(
+                    risk_management,
+                    symbol,
+                    stop_loss,
+                    target,
+                    current_price,
+                    stop_loss_order,
+                    quantity,
+                )
 
         except Exception as e:
             self.handle_exception(e, context_description="check_trade")
@@ -746,9 +894,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
         raise RuntimeError("position-risk retry loop exited unexpectedly")
 
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
-        """Discover all active Futures positions and set cooldowns."""
+        """Discover Futures positions with non-zero broker exposure."""
         clients = {
-            id(self.order_manager.futures_clients[mode]): self.order_manager.futures_clients[mode]
+            id(
+                self.order_manager.futures_clients[mode]
+            ): self.order_manager.futures_clients[mode]
             for mode in self.order_manager.execution_settings.active_modes
         }
         positions = [
@@ -761,11 +911,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
         active_symbols = set()
         for position in positions:
             entry_price = float(position.get("entryPrice", 0) or 0)
-            if entry_price == 0:
+            positionAmount = float(position.get("positionAmt", 0) or 0)
+            if entry_price == 0 or positionAmount == 0:
                 continue
 
-            self.set_cooldown(position["symbol"])
-            positionAmount = float(position.get("positionAmt", 0) or 0)
             symbol = position["symbol"]
             active_symbols.add(symbol)
 
@@ -780,7 +929,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             persisted = self.load_trade(trade_id)
             if persisted:
-                for key in ("sl_order_id", "tp_order_id", "high", "low", "stop_loss_price", "target"):
+                for key in (
+                    "sl_order_id",
+                    "tp_order_id",
+                    "high",
+                    "low",
+                    "stop_loss_price",
+                    "target",
+                ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])
 
@@ -788,9 +944,15 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
         # Clean up stale Redis entries for symbols no longer active on broker
         for key in self.scan_trade_keys():
-            trade_id = key[len(TRADE_KEY_PREFIX):]
-            if trade_id not in active_symbols:
-                logger.info(f"[CLEANUP] Removing stale Redis trade mapping for trade_id={trade_id}")
+            trade_id = key[len(TRADE_KEY_PREFIX) :]
+            persisted = self.load_trade(trade_id) or {}
+            symbol = str(persisted.get("symbol") or trade_id)
+            if symbol not in active_symbols:
+                logger.info(
+                    "[CLEANUP] Broker exposure is flat for "
+                    f"symbol={symbol}, trade_id={trade_id}; starting cooldown"
+                )
+                self.set_cooldown(symbol)
                 self.delete_trade_with_orders(trade_id)
 
         return trades
@@ -799,7 +961,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Main monitor loop
     # ------------------------------------------------------------------
 
-    def monitor_trades(self, trading_pairs: List[str], risk_management: Dict[str, Any]) -> None:
+    def monitor_trades(
+        self, trading_pairs: List[str], risk_management: Dict[str, Any]
+    ) -> None:
         """Infinite loop that monitors all active positions."""
         last_minute_used = -1
 
@@ -820,9 +984,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         continue
 
                     if (
-                        'stop_loss_price' not in self.trades[symbol]
-                        or 'target' not in self.trades[symbol]
-                        or 'stop_loss_order' not in self.trades[symbol]
+                        "stop_loss_price" not in self.trades[symbol]
+                        or "target" not in self.trades[symbol]
+                        or "stop_loss_order" not in self.trades[symbol]
                     ):
                         flag = True
                         break
@@ -834,10 +998,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         self.trades[symbol]["target"],
                         current_price,
                         self.trades[symbol]["stop_loss_order"],
-                        self.trades[symbol]["quantity"]
+                        self.trades[symbol]["quantity"],
                     )
 
-                if flag or (get_indian_time().minute % 5 == 0 and last_minute_used != get_indian_time().minute):
+                if flag or (
+                    get_indian_time().minute % 5 == 0
+                    and last_minute_used != get_indian_time().minute
+                ):
                     tradesFound = self.activePosition_coolMaker()
                     any_trade_active = False
 
@@ -854,21 +1021,41 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         if current_price is None:
                             continue
 
-                        stop_loss_order, take_profit_order = self.ensure_orders(symbol, tradesFound[symbol], risk_management)
-                        field_params = self.update_trade_data(symbol, tradesFound[symbol], current_price, stop_loss_order, take_profit_order)
+                        stop_loss_order, take_profit_order = self.ensure_orders(
+                            symbol, tradesFound[symbol], risk_management
+                        )
+                        field_params = self.update_trade_data(
+                            symbol,
+                            tradesFound[symbol],
+                            current_price,
+                            stop_loss_order,
+                            take_profit_order,
+                        )
 
-                        self.send_active_trades_info(data=None, description=f"{symbol} trade is Active", fields=field_params)
+                        self.send_active_trades_info(
+                            data=None,
+                            description=f"{symbol} trade is Active",
+                            fields=field_params,
+                        )
                         time.sleep(2)
 
                     last_minute_used = get_indian_time().minute
 
                     if not any_trade_active:
-                        self.send_active_trades_info(data=None, description="No trade is Active", fields=None)
+                        self.send_active_trades_info(
+                            data=None, description="No trade is Active", fields=None
+                        )
                         self._stop_ws()
 
             except ClientError as error:
-                self.clientExceptionHandler(symbol=locals().get('symbol', None), error=error, Location="TradeChecker")
+                self.clientExceptionHandler(
+                    symbol=locals().get("symbol", None),
+                    error=error,
+                    Location="TradeChecker",
+                )
             except Exception as e:
-                self.handle_exception(e, context_description="Exception in Monitor trade")
+                self.handle_exception(
+                    e, context_description="Exception in Monitor trade"
+                )
 
             time.sleep(10)

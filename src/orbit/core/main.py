@@ -49,6 +49,7 @@ SIGNAL_ANALYSIS_SLEEP: int = 900  # 15 minutes in seconds
 
 logger = logging.getLogger("Orbit")
 
+
 def install_global_exception_handler(manager):
     def handle_exception(exc_type, exc_value, exc_traceback):
         if issubclass(exc_type, KeyboardInterrupt):
@@ -111,7 +112,9 @@ class BinanceAutomation(ExceptionManager):
         # Core components — injected or created with defaults
         self.signal_analyzer: SignalAnalyzer = signal_analyzer or SignalAnalyzer()
         self.order_manager: OrderManager = order_manager or OrderManager()
-        self.trade_checker: TradeChecker = trade_checker or TradeChecker(order_manager=self.order_manager)
+        self.trade_checker: TradeChecker = trade_checker or TradeChecker(
+            order_manager=self.order_manager
+        )
         self._croner: Optional[Croner] = croner
         self._testnet_reporter = testnet_reporter
 
@@ -168,10 +171,7 @@ class BinanceAutomation(ExceptionManager):
                         break
 
                     if status in ("CANCELED", "REJECTED", "EXPIRED"):
-                        if (
-                            decision_id
-                            and self.order_manager.mongo_handler is not None
-                        ):
+                        if decision_id and self.order_manager.mongo_handler is not None:
                             self.order_manager.mongo_handler.append_decision_event(
                                 decision_id,
                                 {
@@ -188,21 +188,19 @@ class BinanceAutomation(ExceptionManager):
                         return
 
                     if status == "FILLED":
-                        if (
-                            decision_id
-                            and self.order_manager.mongo_handler is not None
-                        ):
+                        if decision_id and self.order_manager.mongo_handler is not None:
                             self.order_manager.mongo_handler.append_decision_event(
                                 decision_id,
                                 {
                                     "event_id": f"order_filled:{symbol}:{order_id}",
                                     "status": "order_filled",
                                     "order_id": order_id,
-                                    "executed_quantity": order.get("executedQty", quantity),
+                                    "executed_quantity": order.get(
+                                        "executedQty", quantity
+                                    ),
                                     "average_price": order.get("avgPrice"),
                                 },
                             )
-                        self.trade_checker.set_cooldown(symbol)
                         self.trades[symbol] = {
                             "symbol": symbol,
                             "positionSide": action,
@@ -220,13 +218,18 @@ class BinanceAutomation(ExceptionManager):
                 time.sleep(30)
 
             except Exception as e:
-                self.handle_exception(e, context_description=f"Exception monitoring order {order_id} for {symbol}")
+                self.handle_exception(
+                    e,
+                    context_description=f"Exception monitoring order {order_id} for {symbol}",
+                )
                 time.sleep(30)
 
         # TIMEOUT → Cancel order
         try:
             cancel_result = self.order_manager.cancel_order(symbol, order_id)
-            assert cancel_result and cancel_result.get("status") == "CANCELED", "Cancellation failed"
+            assert (
+                cancel_result and cancel_result.get("status") == "CANCELED"
+            ), "Cancellation failed"
             if decision_id and self.order_manager.mongo_handler is not None:
                 self.order_manager.mongo_handler.append_decision_event(
                     decision_id,
@@ -242,7 +245,10 @@ class BinanceAutomation(ExceptionManager):
                 fields=cancel_result,
             )
         except Exception as e:
-            self.handle_exception(e, context_description=f"Exception cancelling timed-out order {order_id} for {symbol}")
+            self.handle_exception(
+                e,
+                context_description=f"Exception cancelling timed-out order {order_id} for {symbol}",
+            )
 
     # ------------------------------------------------------------------
     # Signal processor
@@ -266,7 +272,11 @@ class BinanceAutomation(ExceptionManager):
         decision_id = signal.get("decision_id")
 
         if meta_info:
-            self.send_logs(data=f"{symbol} - {action}", description=f"Signal Info: {meta_info}", fields=None)
+            self.send_logs(
+                data=f"{symbol} - {action}",
+                description=f"Signal Info: {meta_info}",
+                fields=None,
+            )
 
         price_to_use = entry_price or self.order_manager.get_symbol_price(symbol)
         leverage = 5 if symbol == "BTCUSDT" else self.future_leverage
@@ -337,21 +347,33 @@ class BinanceAutomation(ExceptionManager):
         sleep_sec = (next_block - minutes) * 60 - seconds
 
         if sleep_sec > 0:
-            logger.info(f"Aligning to {interval_minutes}-minute candle. Sleeping {sleep_sec}s")
+            logger.info(
+                f"Aligning to {interval_minutes}-minute candle. Sleeping {sleep_sec}s"
+            )
             time.sleep(sleep_sec + 3)
 
     # ------------------------------------------------------------------
     # Thread workers
     # ------------------------------------------------------------------
 
-    def refresh_active_positions(self) -> List[str]:
-        """Refresh broker positions and return symbols unavailable for entry."""
+    def refresh_active_positions(self) -> Dict[str, Dict[str, Any]]:
+        """Return entry blocks with distinct active-position/cooldown states."""
         self.trades = self.trade_checker.activePosition_coolMaker()
-        return [
-            symbol
-            for symbol in self.trading_pairs
-            if symbol in self.trades or self.trade_checker.is_in_cooldown(symbol)
-        ]
+        unavailable: Dict[str, Dict[str, Any]] = {}
+        for symbol in self.trading_pairs:
+            if symbol in self.trades:
+                unavailable[symbol] = {
+                    "reason": "active_position",
+                    "position_side": self.trades[symbol].get("positionSide"),
+                    "position_quantity": self.trades[symbol].get("quantity"),
+                }
+                continue
+            if self.trade_checker.is_in_cooldown(symbol):
+                unavailable[symbol] = {
+                    "reason": "post_exit_cooldown",
+                    "cooldown_until": self.trade_checker.get_cooldown(symbol),
+                }
+        return unavailable
 
     def start_signal_analysis(self) -> None:
         """Infinite loop: align to candle, generate signals, process them.
@@ -372,10 +394,14 @@ class BinanceAutomation(ExceptionManager):
                 for signal in self.signal_analyzer.analyze_market(cooldown_list):
                     self.process_signal(signal)
 
-                time.sleep(SIGNAL_ANALYSIS_SLEEP - (time.time() % SIGNAL_ANALYSIS_SLEEP))
+                time.sleep(
+                    SIGNAL_ANALYSIS_SLEEP - (time.time() % SIGNAL_ANALYSIS_SLEEP)
+                )
 
             except Exception as e:
-                self.handle_exception(e, context_description="Exception in signal analysis thread")
+                self.handle_exception(
+                    e, context_description="Exception in signal analysis thread"
+                )
                 time.sleep(120)
 
     def start_trade_checker(self) -> None:
@@ -389,7 +415,9 @@ class BinanceAutomation(ExceptionManager):
                 self.risk_management,
             )
         except Exception as e:
-            self.handle_exception(e, context_description="Exception in trade checker thread")
+            self.handle_exception(
+                e, context_description="Exception in trade checker thread"
+            )
 
     def handle_crons(self) -> None:
         """Start the sentiment cron in a background daemon thread."""
@@ -401,7 +429,9 @@ class BinanceAutomation(ExceptionManager):
             except Exception as e:
                 self.handle_exception(e, context_description="Exception in cron thread")
 
-        cron_thread = threading.Thread(target=cron_runner, daemon=True, name="CronThread")
+        cron_thread = threading.Thread(
+            target=cron_runner, daemon=True, name="CronThread"
+        )
         cron_thread.start()
         self.workers_to_monitor.append(cron_thread)
 
@@ -418,7 +448,9 @@ class BinanceAutomation(ExceptionManager):
         while True:
             for worker in self.workers_to_monitor:
                 if not worker.is_alive():
-                    self.send_alerts(data=None, description=f"Worker {worker.name} has stopped!")
+                    self.send_alerts(
+                        data=None, description=f"Worker {worker.name} has stopped!"
+                    )
                     logger.error(f"Worker {worker.name} has stopped.")
                 logger.info(f"Worker {worker.name} is alive.")
             time.sleep(check_interval)
@@ -427,7 +459,9 @@ class BinanceAutomation(ExceptionManager):
         """Sync Binance income and emit a fee-aware report once per day."""
         reporters = [
             PerformanceReporter(
-                client, self.order_manager.mongo_handler, mode.value
+                client,
+                self.order_manager.mongo_handler,
+                ExecutionMode(mode).value,
             )
             for mode, client in self.order_manager.futures_clients.items()
         ]
@@ -447,7 +481,9 @@ class BinanceAutomation(ExceptionManager):
         """Start all trading threads and enter the signal-analysis loop."""
         logger.info("Starting Binance automation (thread-based)")
 
-        monitor_thread = threading.Thread(target=self.monitor_workers, daemon=True, name="MonitorThread")
+        monitor_thread = threading.Thread(
+            target=self.monitor_workers, daemon=True, name="MonitorThread"
+        )
         monitor_thread.start()
 
         self.handle_crons()
@@ -471,7 +507,9 @@ class BinanceAutomation(ExceptionManager):
             report_thread.start()
             self.workers_to_monitor.append(report_thread)
 
-        trade_thread = threading.Thread(target=self.start_trade_checker, daemon=True, name="TradeCheckerThread")
+        trade_thread = threading.Thread(
+            target=self.start_trade_checker, daemon=True, name="TradeCheckerThread"
+        )
         trade_thread.start()
         self.workers_to_monitor.append(trade_thread)
 
@@ -492,10 +530,11 @@ class BinanceAutomation(ExceptionManager):
 # Entry point
 # =============================================================================
 
+
 def main() -> None:
     """Create a :class:`BinanceAutomation` instance and run it."""
     automation = BinanceAutomation()
-    
+
     # install global crash handler
     install_global_exception_handler(automation)
 
