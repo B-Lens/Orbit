@@ -493,10 +493,36 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Trade exit helper (mapping cleanup)
     # ------------------------------------------------------------------
 
+    def _cancel_protective_orders(self, symbol: str, trade_id: str) -> None:
+        """Best-effort cancel every SL/TP order associated with a trade."""
+        persisted = self.load_trade(trade_id) or {}
+        trades = getattr(self, "trades", {})
+        active_trade = trades.get(symbol, {})
+        order_ids = {
+            str(order_id)
+            for trade in (persisted, active_trade)
+            for field in ("sl_order_id", "tp_order_id")
+            if (order_id := trade.get(field))
+        }
+
+        for order_id in order_ids:
+            try:
+                self.order_manager.cancel_algo_conditional_order(symbol, order_id)
+            except Exception as error:
+                # One order may already be terminal because it closed the position.
+                # Continue so its still-open sibling always gets a cancellation attempt.
+                logger.warning(
+                    "[EXIT] Could not cancel protective order %s for %s: %s",
+                    order_id,
+                    symbol,
+                    error,
+                )
+
     def _exit_trade(self, symbol: str, trade_id: str) -> None:
-        """Remove a trade and begin its configured post-exit cooldown."""
+        """Cancel protective orders, remove a trade, and begin its cooldown."""
+        self._cancel_protective_orders(symbol, trade_id)
         self.delete_trade_with_orders(trade_id)
-        self.trades.pop(symbol, None)
+        getattr(self, "trades", {}).pop(symbol, None)
         self.set_cooldown(symbol)
         logger.info(
             f"[EXIT] Trade {trade_id} for {symbol} removed from state and Redis mappings."
@@ -952,8 +978,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "[CLEANUP] Broker exposure is flat for "
                     f"symbol={symbol}, trade_id={trade_id}; starting cooldown"
                 )
-                self.set_cooldown(symbol)
-                self.delete_trade_with_orders(trade_id)
+                self._exit_trade(symbol, trade_id)
 
         return trades
 
