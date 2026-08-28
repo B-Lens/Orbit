@@ -1,5 +1,7 @@
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
+import urllib.error
 import urllib.parse
 from unittest.mock import MagicMock
 
@@ -311,6 +313,9 @@ def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> Non
     request, timeout = requests[0]
     payload = json.loads(request.data)
     assert timeout == 120.0
+    assert request.full_url == (
+        "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
+    )
     assert request.get_header("Authorization") == "Bearer access-token"
     assert payload["project"] == "orbit-project"
     assert payload["request"]["tools"] == [{"googleSearch": {}}]
@@ -377,6 +382,53 @@ def test_antigravity_client_refreshes_expired_token(tmp_path) -> None:
     assert requests[1].get_header("Authorization") == "Bearer fresh"
 
 
+@pytest.mark.parametrize(
+    "expiry",
+    [
+        "2026-08-28T15:51:25.123456789Z",
+        "2026-08-28T15:51:25.123456789+05:30",
+    ],
+)
+def test_antigravity_client_parses_nanoseconds_without_corrupting_offset(
+    expiry,
+) -> None:
+    parsed = AntigravityClient._parse_expiry(expiry)
+    expected = datetime.fromisoformat(expiry.replace("Z", "+00:00")).astimezone(
+        timezone.utc
+    )
+
+    assert parsed == expected
+    assert parsed.microsecond == 123456
+
+
+def test_antigravity_client_does_not_expose_http_error_body(tmp_path) -> None:
+    token_file = tmp_path / "token.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "token": {
+                    "access_token": "access-token",
+                    "expiry": "2999-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    error = urllib.error.HTTPError("https://example.invalid", 500, "error", {}, None)
+    error.read = MagicMock(return_value=b"sensitive prompt content")
+    client = AntigravityClient(
+        token_file=token_file,
+        project="orbit-project",
+        urlopen=MagicMock(side_effect=error),
+    )
+
+    with pytest.raises(RuntimeError, match=r"^Antigravity HTTP 500$") as raised:
+        client.invoke("sensitive prompt")
+
+    assert "sensitive" not in str(raised.value)
+    error.read.assert_not_called()
+
+
 def test_llm_prefers_openai_without_startup_request() -> None:
     openai_client = MagicMock()
     openai_client.invoke.return_value = "primary"
@@ -434,6 +486,9 @@ def test_llm_falls_back_when_openai_fails() -> None:
 
     llm = LLM(
         openai_client=openai_client,
+        antigravity_client=MagicMock(
+            invoke=MagicMock(side_effect=RuntimeError("Antigravity unavailable"))
+        ),
         openrouter_client=openrouter_client,
         groq_client=MagicMock(),
         redis_client=_redis_mock(),
@@ -461,6 +516,35 @@ def test_llm_uses_antigravity_before_other_fallbacks() -> None:
     openrouter_client.invoke.assert_not_called()
 
 
+def test_llm_loads_antigravity_from_standard_cli_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_file = tmp_path / ".gemini/antigravity-cli/antigravity-oauth-token"
+    token_file.parent.mkdir(parents=True)
+    token_file.write_text(
+        json.dumps(
+            {
+                "token": {
+                    "access_token": "access-token",
+                    "expiry": "2999-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "orbit.market_intelligence.llm.llm_endpoint.default_token_file",
+        lambda: token_file,
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_AUTH_FILE", str(tmp_path / "missing-auth.json"))
+    monkeypatch.delenv("ANTIGRAVITY_TOKEN_FILE", raising=False)
+
+    llm = LLM(redis_client=_redis_mock())
+
+    assert isinstance(llm.antigravity_llm, AntigravityClient)
+
+
 def test_llm_tries_each_configured_groq_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -482,6 +566,9 @@ def test_llm_tries_each_configured_groq_model(
     openrouter_client.invoke.side_effect = RuntimeError("OpenRouter unavailable")
     llm = LLM(
         openai_client=openai_client,
+        antigravity_client=MagicMock(
+            invoke=MagicMock(side_effect=RuntimeError("Antigravity unavailable"))
+        ),
         openrouter_client=openrouter_client,
         redis_client=_redis_mock(),
     )

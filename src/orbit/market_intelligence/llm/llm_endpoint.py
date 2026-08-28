@@ -81,11 +81,7 @@ class LLM(ExceptionManager):
         # ------------------------------------------------------------------
         # 2. Google Antigravity (CODEX BACKUP)
         # ------------------------------------------------------------------
-        if (
-            self.antigravity_llm is None
-            and os.getenv("ANTIGRAVITY_TOKEN_FILE")
-            and default_token_file().is_file()
-        ):
+        if self.antigravity_llm is None and default_token_file().is_file():
             self.antigravity_llm = AntigravityClient()
             logger.info("Google Antigravity configured as the Codex fallback")
 

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from typing import Any, Callable, Optional, cast
 import urllib.error
@@ -13,9 +14,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-DEFAULT_BACKEND_URL = (
-    "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
-)
+DEFAULT_BACKEND_URL = "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
 DEFAULT_TOKEN_URL = "https://oauth2.googleapis.com/token"
 DEFAULT_MODEL = "gemini-3.7-flash-tiered"
 DEFAULT_USER_AGENT = "antigravity/1.1.22 (orbit; direct-backend)"
@@ -116,8 +115,7 @@ class AntigravityClient:
             with self._urlopen(request, timeout=self.timeout) as response:
                 result = cast(dict[str, Any], json.load(response))
         except urllib.error.HTTPError as error:
-            details = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Antigravity HTTP {error.code}: {details}") from error
+            raise RuntimeError(f"Antigravity HTTP {error.code}") from error
         except urllib.error.URLError as error:
             raise RuntimeError(f"Antigravity request failed: {error.reason}") from error
         return self._extract_text(result)
@@ -162,11 +160,10 @@ class AntigravityClient:
     def _parse_expiry(value: object) -> datetime:
         if not isinstance(value, str) or not value:
             return datetime.min.replace(tzinfo=timezone.utc)
-        if "." in value:
-            head, tail = value.split(".", 1)
-            digits = "".join(character for character in tail if character.isdigit())
-            suffix = tail[len(digits) :]
-            value = f"{head}.{digits[:6]}{suffix}"
+        # Go may emit nanoseconds, while Python supports microseconds. Only
+        # truncate the fractional component; timezone-offset digits are not
+        # part of the fraction.
+        value = re.sub(r"(\.\d{6})\d+(?=Z|[+-]\d{2}:\d{2}$)", r"\1", value)
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(
                 timezone.utc
