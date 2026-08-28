@@ -294,6 +294,7 @@ class TestTradeChecker(unittest.TestCase):
             }
         }
         checker.order_manager = MagicMock()
+        checker._position_is_flat = MagicMock(return_value=True)
         checker.load_trade = MagicMock(
             return_value={"sl_order_id": "101", "tp_order_id": "202"}
         )
@@ -357,11 +358,14 @@ class TestTradeChecker(unittest.TestCase):
             }
         }
         checker.order_manager = MagicMock()
+        checker._position_is_flat = MagicMock(return_value=True)
         checker.order_manager.cancel_algo_conditional_order.side_effect = [
             RuntimeError("order already terminal"),
             {"algoId": "202", "status": "CANCELED"},
         ]
-        checker.load_trade = MagicMock(return_value={})
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "101", "tp_order_id": "202"}
+        )
         checker.delete_trade_with_orders = MagicMock()
         checker.set_cooldown = MagicMock()
 
@@ -371,6 +375,25 @@ class TestTradeChecker(unittest.TestCase):
             checker.order_manager.cancel_algo_conditional_order.call_count, 2
         )
         checker.delete_trade_with_orders.assert_called_once_with("ETHUSDT")
+
+    def test_exit_retains_orders_and_state_when_position_is_not_flat(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT"}}
+        checker.order_manager = MagicMock()
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "101", "tp_order_id": "202"}
+        )
+        checker._position_is_flat = MagicMock(return_value=False)
+        checker.delete_trade_with_orders = MagicMock()
+        checker.set_cooldown = MagicMock()
+
+        exited = checker._exit_trade("ETHUSDT", "ETHUSDT")
+
+        self.assertFalse(exited)
+        checker.order_manager.cancel_algo_conditional_order.assert_not_called()
+        checker.delete_trade_with_orders.assert_not_called()
+        checker.set_cooldown.assert_not_called()
+        self.assertIn("ETHUSDT", checker.trades)
 
     def test_order_classification(self):
         stop_orders = [
