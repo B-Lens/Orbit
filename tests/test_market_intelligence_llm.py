@@ -314,7 +314,7 @@ def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> Non
     payload = json.loads(request.data)
     assert timeout == 120.0
     assert request.full_url == (
-        "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
     )
     assert request.get_header("Authorization") == "Bearer access-token"
     assert payload["project"] == "orbit-project"

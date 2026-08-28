@@ -15,7 +15,9 @@ import urllib.parse
 import urllib.request
 import uuid
 
-DEFAULT_BACKEND_URL = "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
+DEFAULT_BACKEND_URL = (
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
+)
 DEFAULT_TOKEN_URL = "https://oauth2.googleapis.com/token"
 DEFAULT_MODEL = "gemini-3.7-flash-tiered"
 DEFAULT_USER_AGENT = "antigravity/1.1.22 (orbit; direct-backend)"
