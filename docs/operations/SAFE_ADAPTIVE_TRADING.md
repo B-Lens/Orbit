@@ -102,11 +102,27 @@ Binance represents commissions and paid funding as negative income, so they are
 added rather than subtracted a second time. `PerformanceReporterThread` syncs and
 reports the last 24 hours when Orbit starts and every 24 hours thereafter.
 
-The operational MongoDB footprint is deliberately limited to `OHLCVData`,
-`trade_decisions`, and `futures_income`. The market-intelligence workflow also
+The operational MongoDB footprint includes `OHLCVData`, `trade_decisions`,
+`futures_income`, and the immutable `trade_reviews` post-trade ledger. The
+market-intelligence workflow also
 retains `sentiment_history` because its rolling 24-hour score is an input to the
 current signal filter. Removing any of these collections would change trading,
 risk, or reporting behavior rather than merely removing archival data.
+
+## Post-trade reviews
+
+After broker reconciliation confirms that a position is flat, Orbit writes a
+single idempotent `trade_reviews` document keyed by the original `decision_id`
+before removing active Redis state. The document records entry and observed exit
+prices, estimated fee-free P&L, exit classification, strategy identity, and the
+signal's market context. `pnl_source=estimated` is explicit: exchange income
+continues to be the authoritative source for fee-aware account reporting.
+
+Set `ORBIT_POST_TRADE_LLM_ENABLED=true` to add an LLM explanation for losing
+trades. LLM suggestions are stored with `status=observation`; they are never read
+by order execution and cannot activate filters, change sizing, weaken risk limits,
+or enable live trading. Promotion of a repeated observation into strategy logic
+requires backtesting, testnet validation, and a reviewed code change.
 
 On Monday UTC, the Testnet reporter also publishes an idempotent report for the
 completed Monday-through-Sunday week. It distinguishes accepted signals,

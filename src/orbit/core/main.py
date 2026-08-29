@@ -27,6 +27,7 @@ import time
 import logging
 import threading
 import traceback
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -144,6 +145,7 @@ class BinanceAutomation(ExceptionManager):
         quantity: float,
         price: float,
         decision_id: Optional[str] = None,
+        trade_context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
 
@@ -208,6 +210,14 @@ class BinanceAutomation(ExceptionManager):
                             "orderId": order_id,
                             "price": price,
                         }
+                        if decision_id:
+                            persisted_trade = {
+                                **self.trades[symbol],
+                                **(trade_context or {}),
+                                "trade_id": decision_id,
+                                "opened_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                            self.trade_checker.save_trade(decision_id, persisted_trade)
                         self.send_signal_updates(
                             data=None,
                             description=f"Order {order_id} filled for {symbol}",
@@ -310,6 +320,14 @@ class BinanceAutomation(ExceptionManager):
                 quantity,
                 order_request["price"],
                 decision_id,
+                {
+                    "strategy": signal.get("strategy"),
+                    "strategy_version": signal.get("strategy_version"),
+                    "pattern": signal.get("pattern"),
+                    "sentiment": signal.get("sentiment"),
+                    "stop_loss_price": stop_loss,
+                    "target": target,
+                },
             ),
             daemon=True,
             name=f"OrderMonitor-{symbol}-{order_id}",

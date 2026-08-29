@@ -24,6 +24,7 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 
 import time
 import logging
+import os
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,6 +39,7 @@ from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.binance_ws_manager import BinanceWSManager
 from orbit.core.redis_manager import RedisManager, TRADE_KEY_PREFIX
+from orbit.core.post_trade_reviewer import PostTradeReviewer
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
@@ -124,6 +126,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.live_prices: Dict[str, Tuple[float, float]] = {}
         self._ws_stale_threshold = ws_stale_threshold
         self._ws_manager: Optional[BinanceWSManager] = None
+        review_llm = None
+        if os.getenv("ORBIT_POST_TRADE_LLM_ENABLED", "false").lower() == "true":
+            from orbit.market_intelligence.llm.llm_endpoint import LLM
+
+            review_llm = LLM()
+        self.post_trade_reviewer = PostTradeReviewer(self.mongo_handler, review_llm)
 
     # ------------------------------------------------------------------
     # WebSocket price-update callback
@@ -574,6 +582,29 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             return False
 
+        if hasattr(self, "post_trade_reviewer"):
+            exit_price = self.check_price_freshness(symbol)
+            if exit_price is None:
+                logger.warning(
+                    "[EXIT] Cannot review trade %s because exit price is unavailable; "
+                    "preserving state for retry.",
+                    trade_id,
+                )
+                return False
+            review = self.post_trade_reviewer.review(
+                trade_id, persisted_trade, float(exit_price)
+            )
+            self.mongo_handler.append_decision_event(
+                trade_id,
+                {
+                    "event_id": f"position_closed:{trade_id}",
+                    "status": "position_closed",
+                    "exit_price": float(exit_price),
+                    "exit_reason": review["exit_reason"],
+                    "net_pnl": review["net_pnl"],
+                    "pnl_source": review["pnl_source"],
+                },
+            )
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
         self.set_cooldown(symbol)
@@ -1003,7 +1034,16 @@ class TradeChecker(AuthenticationManager, RedisManager):
             symbol = position["symbol"]
             active_symbols.add(symbol)
 
-            trade_id = symbol
+            matching_trade_id = None
+            matching_persisted: Dict[str, Any] = {}
+            for key in self.scan_trade_keys():
+                candidate_id = key[len(TRADE_KEY_PREFIX) :]
+                candidate = self.load_trade(candidate_id) or {}
+                if candidate.get("symbol") == symbol:
+                    matching_trade_id = candidate_id
+                    matching_persisted = candidate
+                    break
+            trade_id = matching_trade_id or symbol
             _dict = {
                 "trade_id": trade_id,
                 "symbol": symbol,
@@ -1012,7 +1052,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 "price": entry_price,
             }
 
-            persisted = self.load_trade(trade_id)
+            persisted = matching_persisted or self.load_trade(trade_id)
             if persisted:
                 for key in (
                     "sl_order_id",
@@ -1021,6 +1061,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "low",
                     "stop_loss_price",
                     "target",
+                    "opened_at",
+                    "strategy",
+                    "strategy_version",
+                    "pattern",
+                    "sentiment",
                 ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])

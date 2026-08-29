@@ -284,6 +284,30 @@ class TestTradeChecker(unittest.TestCase):
         checker.set_cooldown.assert_called_once_with("ETHUSDT")
         checker.delete_trade_with_orders.assert_called_once_with("decision-1")
 
+    def test_position_discovery_preserves_decision_id(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "BTCUSDT", "entryPrice": "100000", "positionAmt": "0.01"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(return_value=["trade:decision-1"])
+        checker.load_trade = MagicMock(
+            return_value={
+                "trade_id": "decision-1",
+                "symbol": "BTCUSDT",
+                "strategy": "example.Strategy",
+            }
+        )
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades["BTCUSDT"]["trade_id"], "decision-1")
+        self.assertEqual(trades["BTCUSDT"]["strategy"], "example.Strategy")
+
     def test_exit_starts_post_exit_cooldown(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.trades = {

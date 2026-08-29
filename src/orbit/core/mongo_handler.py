@@ -109,6 +109,11 @@ class MongoHandler(ExceptionManager):
             self.income_collection.create_index(
                 [("execution_mode", ASCENDING), ("time", ASCENDING)]
             )
+            self.trade_review_collection = self.db["trade_reviews"]
+            self.trade_review_collection.create_index("decision_id", unique=True)
+            self.trade_review_collection.create_index(
+                [("symbol", ASCENDING), ("closed_at", ASCENDING)]
+            )
         except Exception as exc:
             logger.exception(f"Error initializing MongoDB: {exc}")
             self.collection = None
@@ -427,6 +432,21 @@ class MongoHandler(ExceptionManager):
             collection.update_one(query, {"$push": {"execution_events": event}})
         except Exception as exc:
             self.handle_exception(exc, "Error appending trade decision event")
+
+    def store_trade_review(self, review: Dict[str, Any]) -> None:
+        """Persist one immutable, idempotent completed-trade review."""
+        collection = getattr(self, "trade_review_collection", None)
+        if collection is None:
+            logger.warning("Mongo trade_reviews collection not available.")
+            return
+        try:
+            collection.update_one(
+                {"decision_id": review["decision_id"]},
+                {"$setOnInsert": review},
+                upsert=True,
+            )
+        except Exception as exc:
+            self.handle_exception(exc, "Error storing trade review")
 
     def get_trade_decisions(
         self,
