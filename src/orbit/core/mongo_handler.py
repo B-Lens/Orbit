@@ -2,8 +2,8 @@
 mongo_handler
 =============
 
-Provides :class:`MongoHandler`, responsible for all MongoDB interactions
-related to OHLCV candle data and contradict-trade records.
+Provides :class:`MongoHandler`, responsible for MongoDB persistence of OHLCV
+candles and the operational trade/accounting ledger.
 
 The handler gracefully degrades when ``pymongo`` is not installed or the
 MongoDB server is unreachable.
@@ -44,9 +44,9 @@ def _epoch_to_seconds(ts: int) -> int:
     ts = int(ts)
     if ts > 1_000_000_000_000_000_000:  # ns
         return ts // 1_000_000_000
-    if ts > 1_000_000_000_000_000:      # µs
+    if ts > 1_000_000_000_000_000:  # µs
         return ts // 1_000_000
-    if ts > 1_000_000_000_000:          # ms
+    if ts > 1_000_000_000_000:  # ms
         return ts // 1_000
     return ts
 
@@ -76,19 +76,18 @@ class MongoHandler(ExceptionManager):
 
         try:
             uri = uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-            self._mongo_client = mongo_client or MongoClient(uri, serverSelectionTimeoutMS=1000)
+            self._mongo_client = mongo_client or MongoClient(
+                uri, serverSelectionTimeoutMS=1000
+            )
             self.db = self._mongo_client[db_name]
             self.collection = self.db[OHLCV_COLLECTION_NAME]
             self.collection.create_index(
-                [("symbol", ASCENDING), ("interval", ASCENDING), ("timestamp", ASCENDING)],
+                [
+                    ("symbol", ASCENDING),
+                    ("interval", ASCENDING),
+                    ("timestamp", ASCENDING),
+                ],
                 unique=True,
-            )
-            self.contradict_collection = self.db["contradict_trades"]
-            self.contradict_collection.create_index("symbol")
-
-            self.simulated_trades_collection = self.db["simulated_trades"]
-            self.simulated_trades_collection.create_index(
-                [("symbol", ASCENDING), ("trade_timestamp", ASCENDING)]
             )
             self.decision_collection = self.db["trade_decisions"]
             self.decision_collection.create_index("decision_id", unique=True)
@@ -125,7 +124,9 @@ class MongoHandler(ExceptionManager):
             return
         try:
             result = self.collection.delete_many({})
-            logger.info(f"Deleted {result.deleted_count} documents from OHLCV collection.")
+            logger.info(
+                f"Deleted {result.deleted_count} documents from OHLCV collection."
+            )
         except Exception as exc:
             self.handle_exception(exc, "Error clearing OHLCV collection")
 
@@ -135,8 +136,12 @@ class MongoHandler(ExceptionManager):
             logger.warning("Mongo collection not available.")
             return
         try:
-            result = self.collection.delete_many({"symbol": symbol, "interval": interval})
-            logger.info(f"Deleted {result.deleted_count} records for {symbol} ({interval}).")
+            result = self.collection.delete_many(
+                {"symbol": symbol, "interval": interval}
+            )
+            logger.info(
+                f"Deleted {result.deleted_count} records for {symbol} ({interval})."
+            )
         except Exception as exc:
             self.handle_exception(exc, f"Error clearing data for {symbol}")
 
@@ -156,7 +161,9 @@ class MongoHandler(ExceptionManager):
     # Data retrieval
     # ------------------------------------------------------------------
 
-    def get_mongo_historical_data(self, symbol: str, interval: str = "15m") -> pd.DataFrame:
+    def get_mongo_historical_data(
+        self, symbol: str, interval: str = "15m"
+    ) -> pd.DataFrame:
         """Retrieve the last 15 days of OHLCV data from MongoDB.
 
         Args:
@@ -177,10 +184,14 @@ class MongoHandler(ExceptionManager):
                 "interval": interval,
                 "timestamp": {"$gte": start_ts},
             }
-            cursor = self.collection.find(query, {"_id": 0}).sort("timestamp", ASCENDING)
+            cursor = self.collection.find(query, {"_id": 0}).sort(
+                "timestamp", ASCENDING
+            )
             items = list(cursor)
             if not items:
-                logger.info(f"No historical data found in MongoDB for {symbol} ({interval}).")
+                logger.info(
+                    f"No historical data found in MongoDB for {symbol} ({interval})."
+                )
                 return pd.DataFrame()
             return pd.DataFrame(items)
         except Exception as exc:
@@ -209,8 +220,18 @@ class MongoHandler(ExceptionManager):
             A list of raw kline arrays, or an empty list on failure.
         """
         lang, _ = locale.getdefaultlocale()
-        url = "https://api.binance.us/api/v3/klines" if lang == "en_US" else "https://api.binance.com/api/v3/klines"
-        params = {"symbol": symbol, "interval": interval, "limit": 1000, "startTime": start_time, "endTime": end_time}
+        url = (
+            "https://api.binance.us/api/v3/klines"
+            if lang == "en_US"
+            else "https://api.binance.com/api/v3/klines"
+        )
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "limit": 1000,
+            "startTime": start_time,
+            "endTime": end_time,
+        }
 
         retries, max_retries = 0, 5
         while retries < max_retries:
@@ -219,18 +240,33 @@ class MongoHandler(ExceptionManager):
                 response.raise_for_status()
                 return response.json()
             except requests.exceptions.HTTPError as e:
-                if e.response.status_code >= 400 and e.response.status_code < 500 and e.response.status_code != 429:
-                    self.handle_exception(Exception(f"Client error {e.response.status_code} for {symbol}: {e.response.text}"), f"Fetching {symbol}")
+                if (
+                    e.response.status_code >= 400
+                    and e.response.status_code < 500
+                    and e.response.status_code != 429
+                ):
+                    self.handle_exception(
+                        Exception(
+                            f"Client error {e.response.status_code} for {symbol}: {e.response.text}"
+                        ),
+                        f"Fetching {symbol}",
+                    )
                     return []
                 retries += 1
-                logger.warning(f"Retrying Binance API call for {symbol}. Attempt {retries}")
+                logger.warning(
+                    f"Retrying Binance API call for {symbol}. Attempt {retries}"
+                )
                 time.sleep(1)
             except requests.RequestException:
                 retries += 1
-                logger.warning(f"Retrying Binance API call for {symbol}. Attempt {retries}")
+                logger.warning(
+                    f"Retrying Binance API call for {symbol}. Attempt {retries}"
+                )
                 time.sleep(1)
 
-        self.handle_exception(Exception("Max retries reached for Binance API"), f"Fetching {symbol}")
+        self.handle_exception(
+            Exception("Max retries reached for Binance API"), f"Fetching {symbol}"
+        )
         return []
 
     def data_collector(
@@ -249,15 +285,21 @@ class MongoHandler(ExceptionManager):
         end_time = int(datetime.now().timestamp() * 1000)
         start_time = start_time or (end_time - (90 * 24 * 60 * 60 * 1000))
 
-        logger.info(f"Starting data collection for {symbol} from {datetime.utcfromtimestamp(start_time / 1000)}")
+        logger.info(
+            f"Starting data collection for {symbol} from {datetime.utcfromtimestamp(start_time / 1000)}"
+        )
 
         all_data = []
         current_time = start_time
 
         while current_time < end_time:
-            data = self.get_binance_klines(symbol, interval, start_time=current_time, end_time=end_time)
+            data = self.get_binance_klines(
+                symbol, interval, start_time=current_time, end_time=end_time
+            )
             if not data:
-                logger.warning(f"No data found for {symbol} at {datetime.utcfromtimestamp(current_time / 1000)}")
+                logger.warning(
+                    f"No data found for {symbol} at {datetime.utcfromtimestamp(current_time / 1000)}"
+                )
                 break
             all_data.extend(data)
             current_time = data[-1][0] + 1
@@ -266,16 +308,38 @@ class MongoHandler(ExceptionManager):
         if not all_data:
             return pd.DataFrame()
 
-        df = pd.DataFrame(all_data, columns=[
-            "timestamp", "open", "high", "low", "close", "volume",
-            "close_time", "quote_asset_volume", "num_trades",
-            "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
-        ])
+        df = pd.DataFrame(
+            all_data,
+            columns=[
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_asset_volume",
+                "num_trades",
+                "taker_buy_base_asset_volume",
+                "taker_buy_quote_asset_volume",
+                "ignore",
+            ],
+        )
 
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df = df[["timestamp", "open", "high", "low", "close", "volume"]].astype({
-            "open": "float", "high": "float", "low": "float", "close": "float", "volume": "float"
-        }).set_index("timestamp")
+        df = (
+            df[["timestamp", "open", "high", "low", "close", "volume"]]
+            .astype(
+                {
+                    "open": "float",
+                    "high": "float",
+                    "low": "float",
+                    "close": "float",
+                    "volume": "float",
+                }
+            )
+            .set_index("timestamp")
+        )
 
         return df
 
@@ -295,26 +359,35 @@ class MongoHandler(ExceptionManager):
 
         required_start_time = None
         if not existing_data.empty:
-            existing_data["timestamp"] = pd.to_datetime(existing_data["timestamp"], unit='s')
+            existing_data["timestamp"] = pd.to_datetime(
+                existing_data["timestamp"], unit="s"
+            )
             existing_data = existing_data.set_index("timestamp")
             required_start_time = existing_data.index.max() + timedelta(minutes=15)
-            logger.info(f"{symbol}: Existing data loaded, last timestamp (Opening candle time): {existing_data.index.max()}")
+            logger.info(
+                f"{symbol}: Existing data loaded, last timestamp (Opening candle time): {existing_data.index.max()}"
+            )
         else:
             logger.info(f"{symbol}: No existing data found in MongoDB.")
 
-        timestamp_ms = int(required_start_time.timestamp() * 1000) if required_start_time else None
+        timestamp_ms = (
+            int(required_start_time.timestamp() * 1000) if required_start_time else None
+        )
         new_data = self.data_collector(symbol, interval="15m", start_time=timestamp_ms)
         new_data = new_data.iloc[:-1]
 
-        historical_data = pd.concat([existing_data, new_data]).drop_duplicates() if not existing_data.empty else new_data
+        historical_data = (
+            pd.concat([existing_data, new_data]).drop_duplicates()
+            if not existing_data.empty
+            else new_data
+        )
         if historical_data.empty:
             logger.warning(f"No historical data found for {symbol}")
             return historical_data
 
         historical_data_db = new_data.copy().reset_index()
         historical_data_db["timestamp"] = (
-            historical_data_db["timestamp"]
-            .astype("int64") // 1000
+            historical_data_db["timestamp"].astype("int64") // 1000
         )
 
         self.store_historical_data(symbol, historical_data_db)
@@ -351,9 +424,7 @@ class MongoHandler(ExceptionManager):
         if event_id:
             query["execution_events.event_id"] = {"$ne": event_id}
         try:
-            collection.update_one(
-                query, {"$push": {"execution_events": event}}
-            )
+            collection.update_one(query, {"$push": {"execution_events": event}})
         except Exception as exc:
             self.handle_exception(exc, "Error appending trade decision event")
 
@@ -398,11 +469,7 @@ class MongoHandler(ExceptionManager):
             query: Dict[str, Any] = {"time": {"$gte": start_ms, "$lt": end_ms}}
             if execution_mode:
                 query["execution_mode"] = execution_mode
-            return list(
-                collection.find(
-                    query, {"_id": 0}
-                ).sort("time", ASCENDING)
-            )
+            return list(collection.find(query, {"_id": 0}).sort("time", ASCENDING))
         except Exception as exc:
             self.handle_exception(exc, "Error reading futures income records")
             return []
@@ -435,7 +502,9 @@ class MongoHandler(ExceptionManager):
         if collection is None:
             return 0.0
         start_ms = int(
-            datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp()
             * 1000
         )
         try:
@@ -447,7 +516,9 @@ class MongoHandler(ExceptionManager):
             self.handle_exception(exc, "Error calculating daily net PnL")
             return 0.0
 
-    def store_historical_data(self, symbol: str, df: pd.DataFrame, interval: str = "15m") -> None:
+    def store_historical_data(
+        self, symbol: str, df: pd.DataFrame, interval: str = "15m"
+    ) -> None:
         """Persist OHLCV rows into MongoDB with a 60-day TTL.
 
         Duplicate timestamps (per symbol/interval) are silently ignored
@@ -467,110 +538,29 @@ class MongoHandler(ExceptionManager):
             records = []
             for _, row in df.iterrows():
                 ts_sec = _epoch_to_seconds(row["timestamp"])
-                expire_at = datetime.fromtimestamp(ts_sec, tz=timezone.utc) + timedelta(days=60)
-                records.append({
-                    "symbol": symbol,
-                    "interval": interval,
-                    "timestamp": int(row["timestamp"]),
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": float(row["volume"]),
-                    "expireAt": expire_at,
-                })
+                expire_at = datetime.fromtimestamp(ts_sec, tz=timezone.utc) + timedelta(
+                    days=60
+                )
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "timestamp": int(row["timestamp"]),
+                        "open": float(row["open"]),
+                        "high": float(row["high"]),
+                        "low": float(row["low"]),
+                        "close": float(row["close"]),
+                        "volume": float(row["volume"]),
+                        "expireAt": expire_at,
+                    }
+                )
             if records:
                 self.collection.insert_many(records, ordered=False)
-                logger.info(f"Stored {len(records)} records for {symbol} ({interval}) in MongoDB.")
+                logger.info(
+                    f"Stored {len(records)} records for {symbol} ({interval}) in MongoDB."
+                )
         except Exception as exc:
             self.handle_exception(exc, f"Error storing data for {symbol}")
-
-    def store_contradict_trade(
-        self,
-        symbol: str,
-        entry_price: float,
-        stop_loss: float,
-        target: float,
-        sentiment: str,
-    ) -> None:
-        """Record a *contradict trade* (signal vs. sentiment mismatch).
-
-        These records are stored for offline analysis of how often the
-        sentiment filter prevented a profitable trade.
-
-        Args:
-            symbol: Trading pair.
-            entry_price: Planned entry price.
-            stop_loss: Planned stop-loss price.
-            target: Planned take-profit price.
-            sentiment: The market sentiment that contradicted the signal.
-        """
-        if not hasattr(self, "contradict_collection") or self.contradict_collection is None:
-            logger.warning("Mongo contradict collection not available.")
-            return
-        try:
-            record = {
-                "symbol": symbol,
-                "entry_price": entry_price,
-                "stop_loss": stop_loss,
-                "target": target,
-                "sentiment": sentiment,
-                "timestamp": get_indian_time()
-            }
-            self.contradict_collection.insert_one(record)
-            logger.info(f"Stored contradict trade for {symbol} in MongoDB.")
-        except Exception as exc:
-            self.handle_exception(exc, f"Error storing contradict trade for {symbol}")
-
-    def store_simulated_trade_result(
-        self,
-        symbol: str,
-        signal: str,
-        entry_price: float,
-        stop_loss: float,
-        take_profit: float,
-        sentiment: str,
-        outcome: str,
-        trade_timestamp: Any,
-        duration_seconds: int,
-    ) -> None:
-        """Persist the result of a simulated contradict trade.
-
-        Args:
-            symbol: Trading pair.
-            signal: ``"BUY"`` or ``"SELL"``.
-            entry_price: Entry price at the time the signal was generated.
-            stop_loss: Stop-loss price level.
-            take_profit: Take-profit price level.
-            sentiment: The contradicting market sentiment.
-            outcome: One of ``"SL"``, ``"Target"``, or ``"Timeout"``.
-            trade_timestamp: Original trade signal timestamp.
-            duration_seconds: Seconds elapsed before the outcome was reached.
-        """
-        if not hasattr(self, "simulated_trades_collection") or self.simulated_trades_collection is None:
-            logger.warning("Mongo simulated_trades collection not available.")
-            return
-        try:
-            record = {
-                "simulated": True,
-                "symbol": symbol,
-                "signal": signal,
-                "entry_price": entry_price,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "sentiment": sentiment,
-                "outcome": outcome,
-                "trade_timestamp": trade_timestamp,
-                "result_timestamp": get_indian_time(),
-                "duration_seconds": duration_seconds,
-            }
-            self.simulated_trades_collection.insert_one(record)
-            logger.info(
-                f"Stored simulated trade result for {symbol}: outcome={outcome}, "
-                f"duration={duration_seconds}s."
-            )
-        except Exception as exc:
-            self.handle_exception(exc, f"Error storing simulated trade result for {symbol}")
 
     def close(self) -> None:
         """Close the MongoDB connection."""

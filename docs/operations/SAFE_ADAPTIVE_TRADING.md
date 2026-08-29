@@ -55,6 +55,10 @@ reason such as `minimum_notional`, `daily_loss_limit`, `paper_mode`, or
 `exchange_client_error`. This preserves the difference between a strategy being
 accepted and its exchange order being rejected.
 
+Sentiment-conflict rejections are stored only in this ledger. Orbit does not
+create separate `contradict_trades` or `simulated_trades` collections: those
+copies duplicated decision data and did not represent executed positions.
+
 ## GitHub Testnet reporting and analysis
 
 When `ORBIT_GITHUB_REPORTING_ENABLED=true`, `TestnetDailyReporterThread` publishes
@@ -97,6 +101,12 @@ return % = net P&L / opening equity * 100
 Binance represents commissions and paid funding as negative income, so they are
 added rather than subtracted a second time. `PerformanceReporterThread` syncs and
 reports the last 24 hours when Orbit starts and every 24 hours thereafter.
+
+The operational MongoDB footprint is deliberately limited to `OHLCVData`,
+`trade_decisions`, and `futures_income`. The market-intelligence workflow also
+retains `sentiment_history` because its rolling 24-hour score is an input to the
+current signal filter. Removing any of these collections would change trading,
+risk, or reporting behavior rather than merely removing archival data.
 
 On Monday UTC, the Testnet reporter also publishes an idempotent report for the
 completed Monday-through-Sunday week. It distinguishes accepted signals,

@@ -19,7 +19,6 @@ from typing import Any, Dict, Iterator, Mapping, Optional
 import redis
 
 from orbit.core.authentication_manager import AuthenticationManager
-from orbit.core.contradict_simulator import ContradictSimulator
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import RedisManager
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
@@ -62,10 +61,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                 self.mongo_handler = MongoHandler()
             except Exception as e:
                 self.handle_exception(e, "Exception while Creating MongoHandler")
-
-        self.contradict_simulator = ContradictSimulator(
-            mongo_handler=self.mongo_handler
-        )
 
     @staticmethod
     def _strategy_identity(strategy_class: type) -> Dict[str, str]:
@@ -258,8 +253,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
         """Check Redis for market sentiment and decide whether to skip.
 
         A signal is skipped when it contradicts the prevailing sentiment.
-        When skipped, a background simulation is launched to track what
-        would have happened.
 
         Returns:
             ``True`` if the signal should be discarded.
@@ -287,25 +280,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     skip = True
 
                 if skip:
-                    self.mongo_handler.store_contradict_trade(
-                        symbol,
-                        trade_info.get("entry_price"),
-                        trade_info.get("stop_loss"),
-                        trade_info.get("take_profit"),
-                        sentiment,
-                    )
-
-                    simulation_payload = {
-                        "symbol": symbol,
-                        "signal": signal,
-                        "entry_price": trade_info.get("entry_price"),
-                        "stop_loss": trade_info.get("stop_loss"),
-                        "take_profit": trade_info.get("take_profit"),
-                        "sentiment": sentiment,
-                        "timestamp": get_indian_time(),
-                    }
-                    self.contradict_simulator.simulate(simulation_payload)
-
                     return True
 
         except Exception as e:
