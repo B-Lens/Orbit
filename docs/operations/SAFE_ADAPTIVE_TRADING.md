@@ -1,83 +1,82 @@
-# Safe adaptive trading and performance operations
+# Safe adaptive trading operations
 
-## Purpose
+Orbit may analyze trading results, but strategies and AI processes must not
+autonomously change live trading behavior. All strategy or execution changes
+require backtesting, Testnet validation, and human review.
 
-Orbit's adaptation loop improves risk-adjusted execution without allowing a
-strategy or an AI process to rewrite live trading behavior autonomously.
+## Execution and credentials
+
+Configure each strategy and monitored asset in `config/strategies.yaml` with an
+explicit `execution_mode` of `testnet` or `live`. Missing or invalid modes fail
+startup. There is no environment-variable override for execution mode.
+
+Use separate Testnet and production credentials. Supply credentials through the
+deployment service or a secret manager; never commit them or write them to logs,
+MongoDB, or GitHub.
+
+## Safety policy
+
+`config/config.json` defines limits independent of strategy logic:
+
+- maximum leverage: 5
+- maximum position notional: 25% of wallet equity
+- maximum risk at stop: 0.25% of wallet equity per trade
+- daily net-loss halt: 2% of wallet equity
+- minimum expected reward/risk: 1.5
+
+Position size is capped by stop risk, position notional, and available leveraged
+margin, then buffered and rounded down to the exchange step size. Exchange
+minimums never override a safety limit. Before submission, Orbit refreshes the
+daily income ledger; failure to refresh causes the order path to fail closed.
+
+All exchange orders must pass through `OrderManager`. Market-intelligence and
+post-trade analysis code must not place orders or change risk limits.
+
+## Operational ledgers
+
+MongoDB stores:
+
+- `OHLCVData`: market candles.
+- `sentiment_history`: rolling sentiment used by signal filters.
+- `trade_decisions`: signals, rejections, strategy identity, prices, and
+  immutable execution events.
+- `futures_income`: exchange-realized P&L, commission, funding, and other income.
+- `trade_reviews`: one idempotent post-trade review per `decision_id`.
+
+The authoritative account calculation is:
 
 ```text
-OHLCV + sentiment -> versioned strategy -> decision ledger -> risk guard
--> Testnet order -> Binance income ledger -> performance report -> promotion review
+net P&L = realized P&L + commission + funding fees + other income
 ```
 
-## Repository ownership
+Binance records paid commission and funding as negative income, so these values
+are added without reversing their sign.
 
-Orbit owns the complete production runtime: data collection, the active
-strategies, sentiment filters, risk policy, execution, monitoring, accounting,
-notifications, and backtesting. `Orbit-Strategies` is a legacy research archive
-and is not installed by CI or EC2.
+## Post-trade reviews
 
-Production strategies live in `src/orbit/strategies/`. Every strategy change is
-therefore versioned by the same Orbit commit that executes it. Experimental
-research should not be imported into the runtime until it is reduced to the
-production strategy contract and reviewed in Orbit.
+After broker reconciliation confirms a flat position, Orbit writes a
+`trade_reviews` record before removing active Redis state. It retains the signal
+context, entry and observed exit prices, outcome classification, and estimated
+fee-free P&L. Estimated results use `pnl_source=estimated`; `futures_income`
+remains authoritative for fee-aware reporting.
 
-## Execution environments
+Set `ORBIT_POST_TRADE_LLM_ENABLED=true` to add an LLM explanation for losing
+trades. Suggestions are stored only as `status=observation`. Execution does not
+read them, and they cannot activate filters, alter sizing, weaken risk limits, or
+enable live trading.
 
-Execution is configured per asset in `config/strategies.yaml` with the singular
-`execution_mode` field:
+## Testnet reporting
 
-- Every configured strategy currently declares `execution_mode: testnet`.
-- The system has exactly two execution modes: `testnet` and `live`; missing or
-  invalid values fail startup validation.
-- Symbols monitored only for existing positions are listed under
-  `monitored_assets` with an explicit testnet or live environment.
-- BTC, ETH, BCH, and PAXG orders all route to Binance Futures Testnet.
+Set `ORBIT_GITHUB_REPORTING_ENABLED=true` to publish idempotent daily Testnet
+reports and weekly scorecards. Reports separate accepted signals, rejections,
+fills, execution failures, and exchange income by execution mode.
 
-There is no environment-variable execution-mode override. Testnet uses
-`BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_SECRET_KEY`, and
-`https://demo-fapi.binance.com`. Live assets require production credentials.
+Daily reports may start the approval-gated Codex workflow through the
+`ai-autonomous` label. The workflow may propose a reviewed fix for demonstrated
+defects, but cannot weaken safety controls or enable live trading. Weekly reports
+do not trigger autonomous changes.
 
-Testnet and production credentials must be different and should be loaded from
-AWS Systems Manager Parameter Store or Secrets Manager by the EC2 service. Never
-write credentials or webhook URLs into Git.
-
-## Decision ledger
-
-MongoDB collection `trade_decisions` stores accepted, rejected, no-signal, and
-error decisions. Each entry includes a UUID, symbol, fully qualified strategy
-class, strategy package version, execution mode, sentiment, pattern, prices,
-outcome, and reason. This makes rejected opportunities measurable and connects
-returns to the exact signal implementation.
-
-Order-stage failures append an immutable execution event with a machine-readable
-reason such as `minimum_notional`, `daily_loss_limit`, `paper_mode`, or
-`exchange_client_error`. This preserves the difference between a strategy being
-accepted and its exchange order being rejected.
-
-Sentiment-conflict rejections are stored only in this ledger. Orbit does not
-create separate `contradict_trades` or `simulated_trades` collections: those
-copies duplicated decision data and did not represent executed positions.
-
-## GitHub Testnet reporting and analysis
-
-When `ORBIT_GITHUB_REPORTING_ENABLED=true`, `TestnetDailyReporterThread` publishes
-the previous UTC day's accepted, rejected, and errored Testnet attempts to one
-idempotent GitHub issue and adds it to the configured Project. The issue includes
-prices, sentiment, strategy identity, decision reason, all execution transitions,
-and fee-aware net P&L. No-signal evaluations are counted but are not trade attempts.
-Before publication, the reporter synchronizes Binance Testnet income from the
-start of the reporting window. Income rows are tagged by execution mode, and the
-report queries only `testnet` rows so mixed live/Testnet deployments cannot blend
-account performance.
-
-The publisher then applies `ai-autonomous`. The existing Codex workflow analyzes
-the evidence and may create a reviewed pull request only for a demonstrated code
-defect. Its task explicitly forbids weakening risk limits, bypassing sentiment, or
-enabling live trading. Keep the `Codex-Automation` environment approval required.
-
-Configure the EC2 service with a fine-grained GitHub token limited to Issues
-(write) on `ipankaj18/Orbit` and Projects (write) on the private Project:
+Required service configuration:
 
 ```text
 ORBIT_GITHUB_REPORTING_ENABLED=true
@@ -86,127 +85,19 @@ ORBIT_GITHUB_REPOSITORY=ipankaj18/Orbit
 ORBIT_GITHUB_PROJECT_ID=PVT_kwHOBPU1Qs4BhHzU
 ```
 
-Never store the token in `.env` inside the checkout, logs, MongoDB, or GitHub.
+## Validation and promotion
 
-## Performance accounting
+Before promoting an asset to live trading:
 
-MongoDB collection `futures_income` upserts exchange income rows by transaction
-and income type. The daily report calculates:
+1. Keep the asset on Testnet and verify decision, order, review, and income
+   records against Binance.
+2. Define minimum trade count, maximum drawdown, minimum profit factor, maximum
+   daily loss, slippage allowance, and a comparison benchmark.
+3. Run `orbit.backtesting.WalkForwardBacktester` with fees, slippage, and
+   conservative same-candle exits.
+4. Validate across multiple market regimes.
+5. Change `execution_mode` to `live` only in a reviewed change.
 
-```text
-net P&L = realized P&L + commission + funding fees + other income
-return % = net P&L / opening equity * 100
-```
-
-Binance represents commissions and paid funding as negative income, so they are
-added rather than subtracted a second time. `PerformanceReporterThread` syncs and
-reports the last 24 hours when Orbit starts and every 24 hours thereafter.
-
-The operational MongoDB footprint includes `OHLCVData`, `trade_decisions`,
-`futures_income`, and the immutable `trade_reviews` post-trade ledger. The
-market-intelligence workflow also
-retains `sentiment_history` because its rolling 24-hour score is an input to the
-current signal filter. Removing any of these collections would change trading,
-risk, or reporting behavior rather than merely removing archival data.
-
-## Post-trade reviews
-
-After broker reconciliation confirms that a position is flat, Orbit writes a
-single idempotent `trade_reviews` document keyed by the original `decision_id`
-before removing active Redis state. The document records entry and observed exit
-prices, estimated fee-free P&L, exit classification, strategy identity, and the
-signal's market context. `pnl_source=estimated` is explicit: exchange income
-continues to be the authoritative source for fee-aware account reporting.
-
-Set `ORBIT_POST_TRADE_LLM_ENABLED=true` to add an LLM explanation for losing
-trades. LLM suggestions are stored with `status=observation`; they are never read
-by order execution and cannot activate filters, change sizing, weaken risk limits,
-or enable live trading. Promotion of a repeated observation into strategy logic
-requires backtesting, testnet validation, and a reviewed code change.
-
-On Monday UTC, the Testnet reporter also publishes an idempotent report for the
-completed Monday-through-Sunday week. It distinguishes accepted signals,
-submitted orders, filled orders, order-stage rejections, and realized-PnL
-events. The weekly scorecard includes fee-aware net P&L, realized-PnL profit
-factor, ledger drawdown, protective-order failures, and symbol/strategy
-breakdowns. It does not label realized-PnL rows as closed trades or estimate
-slippage and uptime from data that the runtime does not persist.
-
-Weekly scorecards do not receive `ai-autonomous` and therefore cannot start the
-issue-implementation workflow. On every run, the reporter idempotently publishes
-the latest completed UTC week, so a restart after Monday still repairs that
-week's report.
-
-## Risk policy
-
-`config/config.json` contains policy independent of strategy logic:
-
-- maximum leverage: 5
-- maximum position notional: 25% of wallet equity
-- maximum risk at stop: 1% of wallet equity per trade
-- daily net-loss halt: 2% of wallet equity
-- minimum expected reward/risk: 1.5
-
-Position size is the smallest quantity allowed by stop-loss risk, maximum
-position notional, and leveraged available margin. A 2% sizing buffer reserves
-room for price movement, fees, and exchange rounding. The quantity is rounded
-down to the exchange step size and validated again immediately before submission.
-Exchange minimums do not override policy: if a minimum-sized order exceeds a
-limit, it is rejected.
-
-For example, with 1,000 USDT wallet equity, 200 USDT of unreserved available
-margin, 2x leverage, a 100 USDT entry, a 99 USDT stop, 1% risk, and the default
-25% notional limit, the independent limits are 10 units from stop risk, 2.5 units
-from position notional, and 4 units from available margin. Orbit selects 2.5,
-applies the 2% buffer, and submits at most 2.45 units after rounding down. The
-position notional is 245 USDT and its required margin at 2x is 122.50 USDT. If
-only 100 USDT were available, the margin limit would be 2 units and the buffered
-quantity would instead be 1.96. Leverage changes margin usage; it does not expand
-the configured position-notional or stop-risk limits.
-Immediately before an order, the daily loss gate refreshes today's income from
-Binance and persists it locally. If this authenticated synchronization fails, the
-order path fails closed instead of trading with a stale daily-loss value.
-
-## EC2 rollout checklist
-
-1. Back up `.env`, MongoDB, and the current deployed commit IDs.
-2. Install Orbit from its lockfile; no second repository is required.
-3. Select `testnet` or `live` for every strategy and monitored asset in
-   `config/strategies.yaml`. For the initial rollout, keep every mapping on
-   `testnet` and load Testnet credentials.
-4. Start Redis and MongoDB, then start Orbit from the repository root.
-5. Confirm logs show Testnet mode and the expected Orbit commit.
-6. Confirm `trade_decisions` receives no-signal and rejected decisions.
-7. Place only deliberately triggered Testnet scenarios and reconcile orders in
-   the Binance Testnet UI.
-8. Confirm `futures_income` includes realized P&L, commissions, and funding.
-9. Observe at least the agreed number of independent trades and market regimes.
-10. Promote an asset only through a reviewed change from `execution_mode:
-    testnet` to `execution_mode: live`, with production credentials provisioned
-    outside the repository.
-11. Review drawdown and net performance before approving another asset.
-
-## Deployment health and rollback
-
-The EC2 webhook should perform a staged deployment: fetch explicit commits,
-install into a new virtual environment, run offline tests, stop Orbit, switch the
-release symlink, restart, and verify process health. If startup or health checks
-fail, restore the prior symlink and restart the previous release. A webhook must
-not run `git pull` directly inside the active environment.
-
-Minimum deployment output should include deployment ID, the Orbit commit hash,
-execution mode, test result, service restart result, and rollback result. Keep
-these events in journald/CloudWatch and send failures to `ORBIT_WEBHOOK_ALERTS`.
-
-## Promotion criteria
-
-Define these before collecting results: minimum trade count, maximum drawdown,
-minimum profit factor, maximum daily loss, slippage allowance, and comparison
-benchmark. Promotion remains a human-approved configuration/version change.
-Automated rollback is allowed when a hard risk or health threshold is breached.
-
-Use `orbit.backtesting.WalkForwardBacktester` for the first validation
-stage. It exercises the production signal method using historical prefixes and
-includes fees, slippage, conservative same-candle exits, equity sizing, profit
-factor, and maximum drawdown. Strategy-specific research notebooks remain
-exploratory evidence and are not deployment gates by themselves.
+Automated rollback is allowed for hard risk or health breaches. Deployments must
+use explicit commits, run offline tests, verify service health, and restore the
+previous release if startup or health checks fail.
