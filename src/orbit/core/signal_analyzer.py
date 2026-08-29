@@ -14,7 +14,7 @@ import time
 import logging
 import uuid
 from importlib import metadata
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, Mapping, Optional
 
 import redis
 
@@ -63,7 +63,9 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
             except Exception as e:
                 self.handle_exception(e, "Exception while Creating MongoHandler")
 
-        self.contradict_simulator = ContradictSimulator(mongo_handler=self.mongo_handler)
+        self.contradict_simulator = ContradictSimulator(
+            mongo_handler=self.mongo_handler
+        )
 
     @staticmethod
     def _strategy_identity(strategy_class: type) -> Dict[str, str]:
@@ -88,14 +90,18 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
         if getattr(self, "mongo_handler", None) is not None:
             self.mongo_handler.store_trade_decision(record)
         else:
-            logger.warning("Trade decision %s was not persisted: MongoDB unavailable", decision_id)
+            logger.warning(
+                "Trade decision %s was not persisted: MongoDB unavailable", decision_id
+            )
         return decision_id
 
-    def analyze_market(self, cooldown_symbols: List[str]) -> Iterator[Dict[str, Any]]:
+    def analyze_market(
+        self, unavailable_symbols: Mapping[str, Mapping[str, Any]]
+    ) -> Iterator[Dict[str, Any]]:
         """Iterate over trading pairs and yield actionable signal dicts.
 
         Args:
-            cooldown_symbols: Symbols currently in cooldown (will be skipped).
+            unavailable_symbols: Entry-blocked symbols and their current state.
 
         Yields:
             Signal dictionaries ready for order processing.
@@ -103,23 +109,47 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
         try:
             for symbol in self.trading_pairs:
 
-                self.send_logs(data=None, description=f"Analyzing market for {symbol}", fields=None)
+                self.send_logs(
+                    data=None, description=f"Analyzing market for {symbol}", fields=None
+                )
+
+                strategy_class = STRATEGY_REGISTRY.get(symbol)
+                if not strategy_class:
+                    self.send_alerts(f"No strategy found for {symbol}", None)
+                    self._record_decision(
+                        symbol=symbol, outcome="rejected", reason="strategy_not_found"
+                    )
+                    continue
+
+                strategy_identity = self._strategy_identity(strategy_class)
+                availability = unavailable_symbols.get(symbol)
+                if availability is not None:
+                    reason = str(availability.get("reason", "post_exit_cooldown"))
+                    self.send_cooldown_update(
+                        data=None,
+                        description=f"{symbol} entry blocked: {reason}",
+                        fields=dict(availability),
+                    )
+                    self._record_decision(
+                        symbol=symbol,
+                        outcome="rejected",
+                        reason=reason,
+                        cooldown_until=availability.get("cooldown_until"),
+                        position_side=availability.get("position_side"),
+                        position_quantity=availability.get("position_quantity"),
+                        **strategy_identity,
+                    )
+                    continue
 
                 historical_data = self.mongo_handler.handle_mongo_data(symbol)
                 if historical_data.empty:
                     self.send_alerts(f"No historical data found for {symbol}", None)
                     self._record_decision(
-                        symbol=symbol, outcome="rejected", reason="historical_data_unavailable"
+                        symbol=symbol,
+                        outcome="rejected",
+                        reason="historical_data_unavailable",
                     )
                     continue
-
-                strategy_class = STRATEGY_REGISTRY.get(symbol)
-                if not strategy_class:
-                    self.send_alerts(f"No strategy found for {symbol}", None)
-                    self._record_decision(symbol=symbol, outcome="rejected", reason="strategy_not_found")
-                    continue
-
-                strategy_identity = self._strategy_identity(strategy_class)
 
                 try:
                     strategy = strategy_class(historical_data)
@@ -127,25 +157,25 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     signal_dict = strategy.generate_signals(symbol=symbol)
                     signal_es = time.perf_counter()
                 except Exception as e:
-                    self.handle_exception(e, f"Exception while generating signals for {symbol}")
-                    self._record_decision(
-                        symbol=symbol, outcome="error", reason="strategy_exception",
-                        **strategy_identity,
+                    self.handle_exception(
+                        e, f"Exception while generating signals for {symbol}"
                     )
-                    continue
-
-                if symbol in cooldown_symbols:
-                    self.send_cooldown_update(data=None, description=f"{symbol} is in cooldown", fields=None)
                     self._record_decision(
-                        symbol=symbol, outcome="rejected", reason="cooldown",
+                        symbol=symbol,
+                        outcome="error",
+                        reason="strategy_exception",
                         **strategy_identity,
                     )
                     continue
 
                 if not signal_dict:
-                    self.send_signal_updates(data=None, description=f"{symbol}: No Signal Found", fields=None)
+                    self.send_signal_updates(
+                        data=None, description=f"{symbol}: No Signal Found", fields=None
+                    )
                     self._record_decision(
-                        symbol=symbol, outcome="no_signal", reason="strategy_no_signal",
+                        symbol=symbol,
+                        outcome="no_signal",
+                        reason="strategy_no_signal",
                         **strategy_identity,
                     )
                     time.sleep(0.5)
@@ -155,16 +185,21 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                 chart_path_raw = signal_dict.get("chart_path_raw")
                 pattern = signal_dict.get("pattern") or "unknown"
 
-
-
                 sentiment = self.get_market_sentiment()
-                if self._should_skip_due_to_sentiment(signal, symbol, signal_dict, sentiment=sentiment):
+                if self._should_skip_due_to_sentiment(
+                    signal, symbol, signal_dict, sentiment=sentiment
+                ):
                     self._record_decision(
-                        symbol=symbol, signal=signal, pattern=pattern, sentiment=sentiment,
+                        symbol=symbol,
+                        signal=signal,
+                        pattern=pattern,
+                        sentiment=sentiment,
                         entry_price=signal_dict.get("entry_price"),
                         stop_loss=signal_dict.get("stop_loss"),
                         take_profit=signal_dict.get("take_profit"),
-                        outcome="rejected", reason="sentiment_conflict", **strategy_identity,
+                        outcome="rejected",
+                        reason="sentiment_conflict",
+                        **strategy_identity,
                     )
                     continue
 
@@ -172,14 +207,24 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     options = {"signal": signal, "pattern": pattern}
 
                     if chart_path_raw:
-                        self.send_chart_to_webhook(file_path=chart_path_raw, data=None, description=f"{symbol}, signal = {signal}", fields=options)
+                        self.send_chart_to_webhook(
+                            file_path=chart_path_raw,
+                            data=None,
+                            description=f"{symbol}, signal = {signal}",
+                            fields=options,
+                        )
 
                     decision_id = self._record_decision(
-                        symbol=symbol, signal=signal, pattern=pattern, sentiment=sentiment,
+                        symbol=symbol,
+                        signal=signal,
+                        pattern=pattern,
+                        sentiment=sentiment,
                         entry_price=signal_dict.get("entry_price"),
                         stop_loss=signal_dict.get("stop_loss"),
                         take_profit=signal_dict.get("take_profit"),
-                        outcome="accepted", reason="passed_filters", **strategy_identity,
+                        outcome="accepted",
+                        reason="passed_filters",
+                        **strategy_identity,
                     )
                     signal = {
                         "decision_id": decision_id,
@@ -204,7 +249,11 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
             self.handle_exception(e, "Exception in analyze_market")
 
     def _should_skip_due_to_sentiment(
-        self, signal: str, symbol: str, trade_info: Dict[str, Any], sentiment: Optional[str] = None
+        self,
+        signal: str,
+        symbol: str,
+        trade_info: Dict[str, Any],
+        sentiment: Optional[str] = None,
     ) -> bool:
         """Check Redis for market sentiment and decide whether to skip.
 
@@ -216,15 +265,25 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
             ``True`` if the signal should be discarded.
         """
         try:
-            sentiment = sentiment if sentiment is not None else self.get_market_sentiment()
+            sentiment = (
+                sentiment if sentiment is not None else self.get_market_sentiment()
+            )
             if sentiment:
                 skip = False
 
-                if sentiment == 'BULLISH' and signal == "SELL":
-                    self.send_alerts(data=f"{symbol}", description=f"Positive sentiment, but Sell signal", fields=None)
+                if sentiment == "BULLISH" and signal == "SELL":
+                    self.send_alerts(
+                        data=f"{symbol}",
+                        description=f"Positive sentiment, but Sell signal",
+                        fields=None,
+                    )
                     skip = True
-                elif sentiment == 'BEARISH' and signal == "BUY":
-                    self.send_alerts(data=f"{symbol}", description=f"Negative sentiment, but Buy signal", fields=None)
+                elif sentiment == "BEARISH" and signal == "BUY":
+                    self.send_alerts(
+                        data=f"{symbol}",
+                        description=f"Negative sentiment, but Buy signal",
+                        fields=None,
+                    )
                     skip = True
 
                 if skip:
