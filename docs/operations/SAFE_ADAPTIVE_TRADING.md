@@ -56,9 +56,9 @@ are added without reversing their sign.
 
 After broker reconciliation confirms a flat position, Orbit writes a
 `trade_reviews` record before removing active Redis state. It retains the signal
-context, entry and observed exit prices, outcome classification, and estimated
-fee-free P&L. Estimated results use `pnl_source=estimated`; `futures_income`
-remains authoritative for fee-aware reporting.
+context, weighted closing-fill price, outcome classification, realized P&L, and
+commissions from Binance account trades. Failed review writes are queued in
+Redis and retried without delaying position cleanup or cooldown.
 
 Set `ORBIT_POST_TRADE_LLM_ENABLED=true` to add an LLM explanation for losing
 trades. Suggestions are stored only as `status=observation`. Execution does not

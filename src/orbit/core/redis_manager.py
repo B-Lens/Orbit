@@ -46,6 +46,7 @@ logger = logging.getLogger("Orbit")
 
 TRADE_KEY_PREFIX: str = "trade:"
 ORDER_KEY_PREFIX: str = "order:"
+PENDING_REVIEW_KEY_PREFIX: str = "pending_trade_review:"
 
 REDIS_KEY_MARKET_SENTIMENT: str = "market_sentiments"
 REDIS_KEY_PENDING_SENTIMENT: str = "sentiment:pending_label"
@@ -182,23 +183,30 @@ class RedisManager:
     ) -> None:
         """Atomically move provisional symbol state to its decision ID."""
         try:
-            old_key = _trade_key(old_trade_id)
-            new_key = _trade_key(trade_id)
-            with self.redis_client.pipeline() as pipeline:
-                while True:
-                    try:
-                        pipeline.watch(old_key)
-                        raw = pipeline.get(old_key)
-                        provisional = json.loads(raw) if raw else {}
-                        merged = {**provisional, **trade}
-                        pipeline.multi()
-                        pipeline.set(new_key, json.dumps(merged))
-                        if old_key != new_key:
-                            pipeline.delete(old_key)
-                        pipeline.execute()
-                        break
-                    except redis.WatchError:
-                        continue
+            script = """
+                local merged = {}
+                for _, key in ipairs(KEYS) do
+                    local raw = redis.call('GET', key)
+                    if raw then
+                        for field, value in pairs(cjson.decode(raw)) do
+                            merged[field] = value
+                        end
+                    end
+                end
+                for field, value in pairs(cjson.decode(ARGV[1])) do
+                    merged[field] = value
+                end
+                redis.call('SET', KEYS[2], cjson.encode(merged))
+                if KEYS[1] ~= KEYS[2] then redis.call('DEL', KEYS[1]) end
+                return 1
+            """
+            self.redis_client.eval(
+                script,
+                2,
+                _trade_key(old_trade_id),
+                _trade_key(trade_id),
+                json.dumps(trade),
+            )
         except Exception as error:
             logger.exception(
                 "[Redis] claim_trade(%s, %s) failed: %s",
@@ -207,6 +215,24 @@ class RedisManager:
                 error,
             )
             raise
+
+    def save_pending_review(self, trade_id: str, payload: Dict[str, Any]) -> None:
+        """Store a durable review outbox item outside active trade state."""
+        self.redis_client.set(
+            f"{PENDING_REVIEW_KEY_PREFIX}{trade_id}", json.dumps(payload, default=str)
+        )
+
+    def scan_pending_reviews(self) -> Iterator[str]:
+        """Yield decision IDs awaiting durable review persistence."""
+        for key in self.redis_scan_iter(f"{PENDING_REVIEW_KEY_PREFIX}*"):
+            yield key[len(PENDING_REVIEW_KEY_PREFIX) :]
+
+    def load_pending_review(self, trade_id: str) -> Optional[Dict[str, Any]]:
+        raw = self.redis_client.get(f"{PENDING_REVIEW_KEY_PREFIX}{trade_id}")
+        return json.loads(raw) if raw else None
+
+    def delete_pending_review(self, trade_id: str) -> None:
+        self.redis_client.delete(f"{PENDING_REVIEW_KEY_PREFIX}{trade_id}")
 
     def delete_trade_with_orders(self, trade_id: str) -> None:
         """Remove ``trade:{trade_id}`` and all associated ``order:*`` keys.

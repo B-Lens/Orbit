@@ -34,20 +34,19 @@ def _order_manager():
 
 def test_trade_claim_atomically_replaces_provisional_state():
     redis_client = MagicMock()
-    pipeline = redis_client.pipeline.return_value.__enter__.return_value
-    pipeline.get.return_value = '{"symbol":"BTCUSDT","sl_order_id":"101"}'
     manager = RedisManager(redis_client=redis_client)
 
     manager.claim_trade(
         "BTCUSDT", "decision-1", {"symbol": "BTCUSDT", "strategy": "example"}
     )
 
-    redis_client.pipeline.assert_called_once_with()
-    pipeline.watch.assert_called_once_with("trade:BTCUSDT")
-    pipeline.multi.assert_called_once_with()
-    pipeline.set.assert_called_once()
-    pipeline.delete.assert_called_once_with("trade:BTCUSDT")
-    pipeline.execute.assert_called_once_with()
+    args = redis_client.eval.call_args.args
+    self_script, key_count, old_key, new_key, incoming = args
+    assert "cjson.decode" in self_script
+    assert key_count == 2
+    assert old_key == "trade:BTCUSDT"
+    assert new_key == "trade:decision-1"
+    assert '"strategy": "example"' in incoming
 
 
 class TestOrderManager(unittest.TestCase):
@@ -439,6 +438,56 @@ class TestTradeChecker(unittest.TestCase):
         checker.set_cooldown.assert_not_called()
         self.assertIn("ETHUSDT", checker.trades)
 
+    def test_closed_trade_accounting_uses_exchange_fills(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.post_trade_reviewer = PostTradeReviewer(MagicMock())
+        checker.order_manager.future_client_for.return_value.get_account_trades.return_value = [
+            {
+                "side": "BUY",
+                "price": "3500",
+                "qty": "0.1",
+                "realizedPnl": "0",
+                "commission": "-0.1",
+            },
+            {
+                "side": "SELL",
+                "price": "3430",
+                "qty": "0.1",
+                "realizedPnl": "-7",
+                "commission": "-0.1",
+            },
+        ]
+
+        accounting = checker._closed_trade_accounting(
+            "ETHUSDT",
+            {"positionSide": "BUY", "opened_at": "2026-08-29T10:00:00+00:00"},
+        )
+
+        self.assertEqual(accounting, (3430.0, -7.0, -0.2))
+
+    def test_review_failure_is_queued_without_blocking_exit_cleanup(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "decision-1"}}
+        checker.order_manager = MagicMock()
+        checker._position_is_flat = MagicMock(return_value=True)
+        trade = {"symbol": "ETHUSDT", "positionSide": "BUY", "price": 3500}
+        checker.load_trade = MagicMock(return_value=trade)
+        checker._cancel_protective_orders = MagicMock()
+        checker._closed_trade_accounting = MagicMock(return_value=None)
+        checker.post_trade_reviewer = MagicMock()
+        checker.mongo_handler = MagicMock()
+        checker.save_pending_review = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        checker.set_cooldown = MagicMock()
+
+        exited = checker._exit_trade("ETHUSDT", "decision-1")
+
+        self.assertTrue(exited)
+        checker.save_pending_review.assert_called_once()
+        checker.delete_trade_with_orders.assert_called_once_with("decision-1")
+        checker.set_cooldown.assert_called_once_with("ETHUSDT")
+
     def test_order_classification(self):
         stop_orders = [
             {"orderType": "STOP_MARKET"},
@@ -553,6 +602,12 @@ class TestPostTradeReviewer(unittest.TestCase):
         )
         self.assertEqual(reviewer.classify(long_trade, 3430, -7), "stop_loss")
         self.assertEqual(reviewer.classify(short_trade, 3570, -7), "stop_loss")
+
+        one_way_short = {**short_trade, "positionSide": "BOTH", "side": "SELL"}
+        self.assertEqual(
+            reviewer.review("one-way-short", one_way_short, 3570)["gross_pnl"],
+            -7,
+        )
 
     def test_review_failure_is_reported_to_caller(self):
         mongo = MagicMock()

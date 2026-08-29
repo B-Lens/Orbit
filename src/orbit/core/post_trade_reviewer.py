@@ -11,6 +11,16 @@ from orbit.utils.utils import extract_json
 logger = logging.getLogger("Orbit")
 
 
+class PostTradeReviewPersistenceError(RuntimeError):
+    """Carry a completed review to the retryable Redis outbox."""
+
+    def __init__(self, review: Dict[str, Any]) -> None:
+        self.review = review
+        super().__init__(
+            f"Could not persist post-trade review for {review['decision_id']}"
+        )
+
+
 class PostTradeReviewer:
     """Build and persist an immutable explanation of a completed trade.
 
@@ -24,7 +34,10 @@ class PostTradeReviewer:
 
     @staticmethod
     def _is_long(trade: Dict[str, Any]) -> bool:
-        side = str(trade.get("positionSide") or trade.get("side") or "").upper()
+        position_side = str(trade.get("positionSide") or "").upper()
+        side = str(trade.get("side") or "").upper()
+        if position_side != "BOTH":
+            side = position_side or side
         if side in {"BUY", "LONG"}:
             return True
         if side in {"SELL", "SHORT"}:
@@ -147,6 +160,13 @@ class PostTradeReviewer:
             "status": "observation",
         }
         if not self.mongo_handler.store_trade_review(review):
-            raise RuntimeError(f"Could not persist post-trade review for {trade_id}")
+            raise PostTradeReviewPersistenceError(review)
         self._schedule_analysis(review)
         return review
+
+    def persist(self, review: Dict[str, Any]) -> bool:
+        """Retry a completed review from the Redis outbox."""
+        if not self.mongo_handler.store_trade_review(review):
+            return False
+        self._schedule_analysis(review)
+        return True
