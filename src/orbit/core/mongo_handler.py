@@ -346,9 +346,13 @@ class MongoHandler(ExceptionManager):
         if collection is None or not decision_id:
             return
         event = {"timestamp": datetime.now(timezone.utc), **event}
+        query: Dict[str, Any] = {"decision_id": decision_id}
+        event_id = event.get("event_id")
+        if event_id:
+            query["execution_events.event_id"] = {"$ne": event_id}
         try:
             collection.update_one(
-                {"decision_id": decision_id}, {"$push": {"execution_events": event}}
+                query, {"$push": {"execution_events": event}}
             )
         except Exception as exc:
             self.handle_exception(exc, "Error appending trade decision event")
@@ -358,12 +362,23 @@ class MongoHandler(ExceptionManager):
         start: datetime,
         end: datetime,
         execution_mode: Optional[str] = None,
+        include_event_window: bool = False,
     ) -> List[Dict[str, Any]]:
         """Return decision-ledger rows for a half-open UTC reporting window."""
         collection = getattr(self, "decision_collection", None)
         if collection is None:
             return []
-        query: Dict[str, Any] = {"timestamp": {"$gte": start, "$lt": end}}
+        window = {"$gte": start, "$lt": end}
+        query: Dict[str, Any] = (
+            {
+                "$or": [
+                    {"timestamp": window},
+                    {"execution_events.timestamp": window},
+                ]
+            }
+            if include_event_window
+            else {"timestamp": window}
+        )
         if execution_mode:
             query["execution_mode"] = execution_mode
         try:

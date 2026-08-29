@@ -98,6 +98,19 @@ Binance represents commissions and paid funding as negative income, so they are
 added rather than subtracted a second time. `PerformanceReporterThread` syncs and
 reports the last 24 hours when Orbit starts and every 24 hours thereafter.
 
+On Monday UTC, the Testnet reporter also publishes an idempotent report for the
+completed Monday-through-Sunday week. It distinguishes accepted signals,
+submitted orders, filled orders, order-stage rejections, and realized-PnL
+events. The weekly scorecard includes fee-aware net P&L, realized-PnL profit
+factor, ledger drawdown, protective-order failures, and symbol/strategy
+breakdowns. It does not label realized-PnL rows as closed trades or estimate
+slippage and uptime from data that the runtime does not persist.
+
+Weekly scorecards do not receive `ai-autonomous` and therefore cannot start the
+issue-implementation workflow. On every run, the reporter idempotently publishes
+the latest completed UTC week, so a restart after Monday still repairs that
+week's report.
+
 ## Risk policy
 
 `config/config.json` contains policy independent of strategy logic:

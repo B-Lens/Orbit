@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   codex:
-    uses: ipankaj18/code-kit/.github/workflows/codex-automation.yml@056867a00859225c4c1c36ed05b4b7637bbf07fe
+    uses: ipankaj18/code-kit/.github/workflows/codex-automation.yml@main
     with:
       reviewer: ipankaj18
       extra_instructions: >-

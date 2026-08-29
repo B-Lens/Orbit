@@ -26,3 +26,14 @@ Tests use pytest and `unittest` classes/mocks. Name files `test_<subject>.py` an
 ## Commit & Pull Request Guidelines
 
 Recent history generally uses short, imperative Conventional Commit prefixes such as `feat:`, `fix:`, `refactor:`, `docs:`, and `chore:`. Keep each commit focused. Pull requests should explain motivation and operational risk, link relevant issues, list validation commands, and update configuration or architecture documentation when behavior changes. Include screenshots only for visual documentation changes and never include secrets, API keys, webhook URLs, or external authentication files.
+
+## Pull Request Requirements
+
+Before creating or updating any pull request:
+
+1. Read `.github/pull_request_template.md` completely.
+2. Use every applicable section from the template in the pull request description.
+3. Fetch `origin` and rebase the pull request branch onto `origin/main` before creating the pull request to avoid merge conflicts.
+4. Do not call `gh pr create` until the description has been checked against the template.
+5. Add `ipankaj18` as a reviewer when creating the pull request.
+6. After creation, inspect the published pull request body and reviewer assignment, and correct any missing sections or reviewer.

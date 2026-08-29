@@ -40,6 +40,19 @@ class TestOrderManager(unittest.TestCase):
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
 
+    def test_get_order_uses_endpoint_that_includes_terminal_state(self):
+        self.manager.future_client.query_order.return_value = {
+            "orderId": 123,
+            "status": "FILLED",
+        }
+
+        order = self.manager.get_order("BTCUSDT", 123)
+
+        self.assertEqual(order["status"], "FILLED")
+        self.manager.future_client.query_order.assert_called_once_with(
+            symbol="BTCUSDT", orderId=123, recvWindow=60000
+        )
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 
@@ -126,7 +139,9 @@ class TestOrderManager(unittest.TestCase):
 
         self.assertEqual(response, (None, None, None))
         self.manager.mongo_handler.append_decision_event.assert_called_once()
-        decision_id, event = self.manager.mongo_handler.append_decision_event.call_args.args
+        decision_id, event = (
+            self.manager.mongo_handler.append_decision_event.call_args.args
+        )
         self.assertEqual(decision_id, "decision-1")
         self.assertEqual(event["reason"], "minimum_notional")
 
@@ -153,8 +168,233 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(quantity, 0.1)
         self.manager.future_client.new_order.assert_called_once()
 
+    def test_order_rounds_configured_quantity_precision_down(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
+        self.manager.future_client.new_order.return_value = {"orderId": 1}
+        self.manager.config["trading_pairs_precision"]["BTCUSDT"] = 2
+        self.manager.get_symbol_filters.return_value["LOT_SIZE"] = {
+            "stepSize": "0.001",
+            "minQty": "0.001",
+        }
+
+        response, quantity, _ = self.manager.place_order(
+            {"BTCUSDT": 0.01},
+            "BTCUSDT",
+            "BUY",
+            price=1000,
+            sl=990,
+            target=1020,
+            quantity=0.2499,
+            ros=True,
+            trade_id="decision-high-priced-asset",
+        )
+
+        self.assertEqual(response, {"orderId": 1})
+        self.assertEqual(quantity, 0.24)
+
+    def test_order_submission_is_persisted_before_post_submission_work(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
+        self.manager.future_client.new_order.return_value = {
+            "orderId": 123,
+            "clientOrderId": "exchange-client-id",
+        }
+
+        def assert_submission_already_persisted(_seconds):
+            self.manager.mongo_handler.append_decision_event.assert_called_once_with(
+                "decision-1",
+                {
+                    "event_id": "order_submitted:BTCUSDT:123",
+                    "status": "order_submitted",
+                    "order_id": 123,
+                    "client_order_id": "exchange-client-id",
+                },
+            )
+
+        with patch(
+            "orbit.core.order_manager.time.sleep",
+            side_effect=assert_submission_already_persisted,
+        ):
+            response, _, _ = self.manager.place_order(
+                {"BTCUSDT": 0.01},
+                "BTCUSDT",
+                "BUY",
+                price=100,
+                sl=99,
+                target=102,
+                quantity=0.1,
+                ros=True,
+                trade_id="decision-1",
+            )
+
+        self.assertEqual(response["orderId"], 123)
+
 
 class TestTradeChecker(unittest.TestCase):
+    def test_position_discovery_ignores_stale_entry_price_without_exposure(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        client = MagicMock()
+        checker.order_manager.futures_clients = {"testnet": client}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0"},
+                {"symbol": "BTCUSDT", "entryPrice": "100000", "positionAmt": "0.01"},
+            ]
+        )
+        checker.load_trade = MagicMock(return_value=None)
+        checker.scan_trade_keys = MagicMock(return_value=[])
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertNotIn("ETHUSDT", trades)
+        self.assertEqual(trades["BTCUSDT"]["quantity"], 0.01)
+
+    def test_position_reconciliation_starts_cooldown_after_offline_exit(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        client = MagicMock()
+        checker.order_manager.futures_clients = {"testnet": client}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(return_value=["trade:decision-1"])
+        checker.load_trade = MagicMock(
+            return_value={
+                "trade_id": "decision-1",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "101",
+                "tp_order_id": "202",
+            }
+        )
+        checker.set_cooldown = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades, {})
+        self.assertEqual(
+            checker.order_manager.cancel_algo_conditional_order.call_count, 2
+        )
+        checker.set_cooldown.assert_called_once_with("ETHUSDT")
+        checker.delete_trade_with_orders.assert_called_once_with("decision-1")
+
+    def test_exit_starts_post_exit_cooldown(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {
+            "ETHUSDT": {
+                "trade_id": "ETHUSDT",
+                "sl_order_id": "101",
+                "tp_order_id": "202",
+            }
+        }
+        checker.order_manager = MagicMock()
+        checker._position_is_flat = MagicMock(return_value=True)
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "101", "tp_order_id": "202"}
+        )
+        checker.delete_trade_with_orders = MagicMock()
+        checker.set_cooldown = MagicMock()
+
+        checker._exit_trade("ETHUSDT", "ETHUSDT")
+
+        cancel_calls = {
+            call.args
+            for call in checker.order_manager.cancel_algo_conditional_order.call_args_list
+        }
+        self.assertEqual(cancel_calls, {("ETHUSDT", "101"), ("ETHUSDT", "202")})
+        checker.delete_trade_with_orders.assert_called_once_with("ETHUSDT")
+        checker.set_cooldown.assert_called_once_with("ETHUSDT")
+        self.assertNotIn("ETHUSDT", checker.trades)
+
+    def test_pending_exit_keeps_trade_state_until_broker_confirms_flat(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT"}}
+        checker.update_trade_fields = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        checker.order_manager = MagicMock()
+
+        checker._mark_exit_pending("ETHUSDT", "ETHUSDT")
+
+        self.assertTrue(checker.trades["ETHUSDT"]["exit_pending"])
+        checker.update_trade_fields.assert_called_once_with(
+            "ETHUSDT", {"exit_pending": True}
+        )
+        checker.delete_trade_with_orders.assert_not_called()
+        checker.order_manager.cancel_algo_conditional_order.assert_not_called()
+
+    def test_stop_threshold_waits_for_flat_position_before_cleanup(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT", "price": 100.0}}
+        checker.send_false_alarm = MagicMock()
+        checker._mark_exit_pending = MagicMock()
+        checker._exit_trade = MagicMock()
+
+        checker.long_check_trade(
+            risk_management={},
+            symbol="ETHUSDT",
+            stop_loss=99.0,
+            target=105.0,
+            current_price=98.0,
+            stop_loss_order={"algoId": "101"},
+            quantity=1.0,
+        )
+
+        checker._mark_exit_pending.assert_called_once_with("ETHUSDT", "ETHUSDT")
+        checker._exit_trade.assert_not_called()
+
+    def test_exit_attempts_sibling_cancellation_when_filled_order_is_terminal(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {
+            "ETHUSDT": {
+                "trade_id": "ETHUSDT",
+                "sl_order_id": "101",
+                "tp_order_id": "202",
+            }
+        }
+        checker.order_manager = MagicMock()
+        checker._position_is_flat = MagicMock(return_value=True)
+        checker.order_manager.cancel_algo_conditional_order.side_effect = [
+            RuntimeError("order already terminal"),
+            {"algoId": "202", "status": "CANCELED"},
+        ]
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "101", "tp_order_id": "202"}
+        )
+        checker.delete_trade_with_orders = MagicMock()
+        checker.set_cooldown = MagicMock()
+
+        checker._exit_trade("ETHUSDT", "ETHUSDT")
+
+        self.assertEqual(
+            checker.order_manager.cancel_algo_conditional_order.call_count, 2
+        )
+        checker.delete_trade_with_orders.assert_called_once_with("ETHUSDT")
+
+    def test_exit_retains_orders_and_state_when_position_is_not_flat(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT"}}
+        checker.order_manager = MagicMock()
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "101", "tp_order_id": "202"}
+        )
+        checker._position_is_flat = MagicMock(return_value=False)
+        checker.delete_trade_with_orders = MagicMock()
+        checker.set_cooldown = MagicMock()
+
+        exited = checker._exit_trade("ETHUSDT", "ETHUSDT")
+
+        self.assertFalse(exited)
+        checker.order_manager.cancel_algo_conditional_order.assert_not_called()
+        checker.delete_trade_with_orders.assert_not_called()
+        checker.set_cooldown.assert_not_called()
+        self.assertIn("ETHUSDT", checker.trades)
+
     def test_order_classification(self):
         stop_orders = [
             {"orderType": "STOP_MARKET"},
@@ -197,3 +437,27 @@ class TestTradeChecker(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_testnet_order_probe():
+    from scripts import check_testnet_orders as SCRIPT
+    from unittest.mock import MagicMock
+    manager = MagicMock()
+    manager.config = {}
+    manager.config["risk_management"] = {"BTCUSDT": 0.01}
+    manager.config["FUTURE_LEVERAGE"] = 2
+    
+    # 1. Existing order skips submission
+    manager.get_open_orders.return_value = [{"orderId": 7, "status": "NEW"}]
+    manager.get_conditional_open_orders.return_value = []
+    assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "SKIPPED"
+    manager.place_order.assert_not_called()
+    
+    # 2. No open orders, places and cancels order
+    manager.get_open_orders.return_value = []
+    manager.get_symbol_price.return_value = 100.0
+    manager.place_order.return_value = ({"orderId": 123}, 0.1, {})
+    manager.cancel_order.return_value = {"orderId": 123, "status": "CANCELED"}
+    
+    assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "PASSED"
+    manager.place_order.assert_called_once()
+    manager.cancel_order.assert_called_once_with("BTCUSDT", 123)
