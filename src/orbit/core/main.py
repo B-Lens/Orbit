@@ -211,11 +211,20 @@ class BinanceAutomation(ExceptionManager):
                             "price": price,
                         }
                         if decision_id:
+                            fill_time_ms = (
+                                order.get("updateTime")
+                                or order.get("time")
+                                or int(time.time() * 1000)
+                            )
                             persisted_trade = {
                                 **self.trades[symbol],
                                 **(trade_context or {}),
                                 "trade_id": decision_id,
-                                "opened_at": datetime.now(timezone.utc).isoformat(),
+                                "opened_at": datetime.fromtimestamp(
+                                    int(fill_time_ms) / 1000, timezone.utc
+                                ).isoformat(),
+                                "entry_order_id": order_id,
+                                "side": action,
                             }
                             self.trade_checker.claim_trade(
                                 symbol, decision_id, persisted_trade
@@ -313,6 +322,35 @@ class BinanceAutomation(ExceptionManager):
             return
 
         order_id = order_response.get("orderId")
+        if decision_id:
+            submitted_ms = (
+                order_response.get("updateTime")
+                or order_response.get("transactTime")
+                or order_response.get("time")
+                or int(time.time() * 1000)
+            )
+            self.trade_checker.claim_trade(
+                symbol,
+                decision_id,
+                {
+                    "trade_id": decision_id,
+                    "symbol": symbol,
+                    "positionSide": action,
+                    "side": action,
+                    "quantity": quantity,
+                    "price": order_request["price"],
+                    "entry_order_id": order_id,
+                    "opened_at": datetime.fromtimestamp(
+                        int(submitted_ms) / 1000, timezone.utc
+                    ).isoformat(),
+                    "strategy": signal.get("strategy"),
+                    "strategy_version": signal.get("strategy_version"),
+                    "pattern": signal.get("pattern"),
+                    "sentiment": signal.get("sentiment"),
+                    "stop_loss_price": stop_loss,
+                    "target": target,
+                },
+            )
         monitor_thread = threading.Thread(
             target=self.monitor_order_execution,
             args=(

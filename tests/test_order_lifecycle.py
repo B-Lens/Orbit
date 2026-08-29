@@ -444,27 +444,39 @@ class TestTradeChecker(unittest.TestCase):
         checker.post_trade_reviewer = PostTradeReviewer(MagicMock())
         checker.order_manager.future_client_for.return_value.get_account_trades.return_value = [
             {
+                "orderId": 10,
                 "side": "BUY",
                 "price": "3500",
                 "qty": "0.1",
                 "realizedPnl": "0",
-                "commission": "-0.1",
+                "commission": "0.1",
+                "time": 1787997600000,
             },
             {
+                "orderId": 11,
                 "side": "SELL",
                 "price": "3430",
                 "qty": "0.1",
                 "realizedPnl": "-7",
-                "commission": "-0.1",
+                "commission": "0.1",
+                "time": 1787997660000,
             },
+        ]
+        checker.order_manager.future_client_for.return_value.get_income_history.return_value = [
+            {"incomeType": "FUNDING_FEE", "income": "-0.05"}
         ]
 
         accounting = checker._closed_trade_accounting(
             "ETHUSDT",
-            {"positionSide": "BUY", "opened_at": "2026-08-29T10:00:00+00:00"},
+            {
+                "positionSide": "BUY",
+                "opened_at": "2026-08-29T10:00:00+00:00",
+                "entry_order_id": 10,
+                "quantity": 0.1,
+            },
         )
 
-        self.assertEqual(accounting, (3430.0, -7.0, -0.2))
+        self.assertEqual(accounting, (3430.0, -7.0, -0.25))
 
     def test_review_failure_is_queued_without_blocking_exit_cleanup(self):
         checker = TradeChecker.__new__(TradeChecker)

@@ -42,7 +42,10 @@ class PostTradeReviewer:
             return True
         if side in {"SELL", "SHORT"}:
             return False
-        return float(trade.get("positionAmt") or 0) >= 0
+        position_amount = trade.get("positionAmt")
+        if position_amount is not None and float(position_amount) != 0:
+            return float(position_amount) > 0
+        raise ValueError("Trade direction is unavailable")
 
     @staticmethod
     def _pnl(trade: Dict[str, Any], exit_price: float) -> float:
