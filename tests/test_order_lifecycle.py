@@ -5,6 +5,8 @@ from binance.error import ClientError
 
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.order_manager import OrderManager
+from orbit.core.post_trade_reviewer import PostTradeReviewer
+from orbit.core.redis_manager import RedisManager
 from orbit.core.trade_checker import TradeChecker, is_stop_order, is_take_profit_order
 
 
@@ -28,6 +30,24 @@ def _order_manager():
     manager.send_signal_updates = MagicMock()
     manager.get_available_usdt_balance = MagicMock(return_value=5000)
     return manager
+
+
+def test_trade_claim_atomically_replaces_provisional_state():
+    redis_client = MagicMock()
+    pipeline = redis_client.pipeline.return_value.__enter__.return_value
+    pipeline.get.return_value = '{"symbol":"BTCUSDT","sl_order_id":"101"}'
+    manager = RedisManager(redis_client=redis_client)
+
+    manager.claim_trade(
+        "BTCUSDT", "decision-1", {"symbol": "BTCUSDT", "strategy": "example"}
+    )
+
+    redis_client.pipeline.assert_called_once_with()
+    pipeline.watch.assert_called_once_with("trade:BTCUSDT")
+    pipeline.multi.assert_called_once_with()
+    pipeline.set.assert_called_once()
+    pipeline.delete.assert_called_once_with("trade:BTCUSDT")
+    pipeline.execute.assert_called_once_with()
 
 
 class TestOrderManager(unittest.TestCase):
@@ -434,6 +454,7 @@ class TestTradeChecker(unittest.TestCase):
         self.assertFalse(is_stop_order(None))
         self.assertFalse(is_take_profit_order({"orderType": "LIMIT"}))
 
+
     @staticmethod
     def _client_error(status_code=408, error_code=-1007):
         error = ClientError.__new__(ClientError)
@@ -457,6 +478,89 @@ class TestTradeChecker(unittest.TestCase):
         with self.assertRaises(ClientError):
             checker._get_position_risk(client)
         client.get_position_risk.assert_called_once_with()
+
+
+class TestPostTradeReviewer(unittest.TestCase):
+    @staticmethod
+    def losing_long():
+        return {
+            "symbol": "ETHUSDT",
+            "positionSide": "BUY",
+            "quantity": 0.1,
+            "price": 3500,
+            "stop_loss_price": 3430,
+            "target": 3605,
+            "strategy": "orbit.strategies.eth_strategy.ETHStrategy",
+            "pattern": "momentum",
+            "sentiment": "BULLISH",
+        }
+
+    def test_losing_stop_is_classified_and_stored(self):
+        mongo = MagicMock()
+        review = PostTradeReviewer(mongo).review(
+            "decision-1", self.losing_long(), 3430
+        )
+        self.assertEqual(review["exit_reason"], "stop_loss")
+        self.assertEqual(review["gross_pnl"], -7)
+        self.assertEqual(review["pnl_source"], "estimated")
+        mongo.store_trade_review.assert_called_once_with(review)
+
+    def test_exchange_pnl_and_fees_override_estimate(self):
+        review = PostTradeReviewer(MagicMock()).review(
+            "decision-1", self.losing_long(), 3430, realized_pnl=-6.5, fees=-0.5
+        )
+        self.assertEqual(review["gross_pnl"], -6.5)
+        self.assertEqual(review["net_pnl"], -7)
+        self.assertEqual(review["pnl_source"], "exchange")
+
+    def test_llm_analysis_is_scheduled_as_an_observation(self):
+        mongo = MagicMock()
+        llm = MagicMock()
+        llm.invoke.return_value = (
+            '{"explanation":"Entered against trend","hypothesis":"counter trend",'
+            '"confidence":0.8,"suggested_rule":{"type":"block_setup"}}'
+        )
+        reviewer = PostTradeReviewer(mongo, llm)
+        with patch("orbit.core.post_trade_reviewer.threading.Thread") as thread:
+            reviewer.review("decision-1", self.losing_long(), 3430)
+        thread.return_value.start.assert_called_once_with()
+        reviewer._analyze_and_store(
+            {"decision_id": "decision-1", "net_pnl": -7, "symbol": "ETHUSDT"}
+        )
+        analysis = mongo.store_trade_review_analysis.call_args.args[1]
+        self.assertEqual(analysis["status"], "observation")
+        self.assertEqual(analysis["suggested_rule"]["type"], "block_setup")
+
+    def test_profitable_trade_does_not_invoke_llm(self):
+        llm = MagicMock()
+        review = PostTradeReviewer(MagicMock(), llm).review(
+            "decision-2", self.losing_long(), 3605
+        )
+        self.assertEqual(review["exit_reason"], "profitable_exit")
+        llm.invoke.assert_not_called()
+
+    def test_binance_long_and_short_position_sides_are_supported(self):
+        reviewer = PostTradeReviewer(MagicMock())
+        long_trade = {**self.losing_long(), "positionSide": "LONG"}
+        short_trade = {
+            **self.losing_long(),
+            "positionSide": "SHORT",
+            "stop_loss_price": 3570,
+        }
+        self.assertEqual(reviewer.review("long", long_trade, 3430)["gross_pnl"], -7)
+        self.assertEqual(
+            reviewer.review("short", short_trade, 3570)["gross_pnl"], -7
+        )
+        self.assertEqual(reviewer.classify(long_trade, 3430, -7), "stop_loss")
+        self.assertEqual(reviewer.classify(short_trade, 3570, -7), "stop_loss")
+
+    def test_review_failure_is_reported_to_caller(self):
+        mongo = MagicMock()
+        mongo.store_trade_review.return_value = False
+        with self.assertRaisesRegex(RuntimeError, "decision-1"):
+            PostTradeReviewer(mongo).review(
+                "decision-1", self.losing_long(), 3430
+            )
 
 
 if __name__ == "__main__":

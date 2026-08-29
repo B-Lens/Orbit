@@ -123,7 +123,10 @@ class TestReportingLifecycle(unittest.TestCase):
         )
 
         automation.order_manager.get_order.assert_called_once_with("ETHUSDT", 123)
-        trade_id, persisted = automation.trade_checker.save_trade.call_args.args
+        old_trade_id, trade_id, persisted = (
+            automation.trade_checker.claim_trade.call_args.args
+        )
+        self.assertEqual(old_trade_id, "ETHUSDT")
         self.assertEqual(trade_id, "decision-1")
         self.assertEqual(persisted["strategy"], "example.Strategy")
         self.assertEqual(persisted["sentiment"], "BULLISH")

@@ -217,7 +217,9 @@ class BinanceAutomation(ExceptionManager):
                                 "trade_id": decision_id,
                                 "opened_at": datetime.now(timezone.utc).isoformat(),
                             }
-                            self.trade_checker.save_trade(decision_id, persisted_trade)
+                            self.trade_checker.claim_trade(
+                                symbol, decision_id, persisted_trade
+                            )
                         self.send_signal_updates(
                             data=None,
                             description=f"Order {order_id} filled for {symbol}",

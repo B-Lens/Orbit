@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -22,10 +23,19 @@ class PostTradeReviewer:
         self.llm = llm
 
     @staticmethod
+    def _is_long(trade: Dict[str, Any]) -> bool:
+        side = str(trade.get("positionSide") or trade.get("side") or "").upper()
+        if side in {"BUY", "LONG"}:
+            return True
+        if side in {"SELL", "SHORT"}:
+            return False
+        return float(trade.get("positionAmt") or 0) >= 0
+
+    @staticmethod
     def _pnl(trade: Dict[str, Any], exit_price: float) -> float:
         entry = float(trade.get("price") or trade.get("entry_price") or 0)
         quantity = abs(float(trade.get("quantity") or 0))
-        direction = 1.0 if trade.get("positionSide") == "BUY" else -1.0
+        direction = 1.0 if PostTradeReviewer._is_long(trade) else -1.0
         return (exit_price - entry) * quantity * direction
 
     @staticmethod
@@ -37,19 +47,19 @@ class PostTradeReviewer:
         if net_pnl >= 0:
             return "profitable_exit"
 
-        side = trade.get("positionSide")
+        is_long = PostTradeReviewer._is_long(trade)
         stop = trade.get("stop_loss_price")
         target = trade.get("target")
         if stop is not None:
             stop_value = float(stop)
-            if (side == "BUY" and exit_price <= stop_value) or (
-                side == "SELL" and exit_price >= stop_value
+            if (is_long and exit_price <= stop_value) or (
+                not is_long and exit_price >= stop_value
             ):
                 return "stop_loss"
         if target is not None:
             target_value = float(target)
-            if (side == "BUY" and exit_price >= target_value) or (
-                side == "SELL" and exit_price <= target_value
+            if (is_long and exit_price >= target_value) or (
+                not is_long and exit_price <= target_value
             ):
                 return "take_profit"
         return "unclassified_loss"
@@ -78,6 +88,23 @@ class PostTradeReviewer:
         except Exception as error:
             logger.warning("Post-trade LLM review failed: %s", error)
             return None
+
+    def _analyze_and_store(self, review: Dict[str, Any]) -> None:
+        analysis = self._llm_analysis(review)
+        if analysis is not None:
+            self.mongo_handler.store_trade_review_analysis(
+                review["decision_id"], analysis
+            )
+
+    def _schedule_analysis(self, review: Dict[str, Any]) -> None:
+        if self.llm is None or review["net_pnl"] >= 0:
+            return
+        threading.Thread(
+            target=self._analyze_and_store,
+            args=(review.copy(),),
+            daemon=True,
+            name=f"PostTradeReview-{review['decision_id']}",
+        ).start()
 
     def review(
         self,
@@ -119,8 +146,7 @@ class PostTradeReviewer:
             },
             "status": "observation",
         }
-        analysis = self._llm_analysis(review)
-        if analysis is not None:
-            review["analysis"] = analysis
-        self.mongo_handler.store_trade_review(review)
+        if not self.mongo_handler.store_trade_review(review):
+            raise RuntimeError(f"Could not persist post-trade review for {trade_id}")
+        self._schedule_analysis(review)
         return review

@@ -433,20 +433,39 @@ class MongoHandler(ExceptionManager):
         except Exception as exc:
             self.handle_exception(exc, "Error appending trade decision event")
 
-    def store_trade_review(self, review: Dict[str, Any]) -> None:
+    def store_trade_review(self, review: Dict[str, Any]) -> bool:
         """Persist one immutable, idempotent completed-trade review."""
         collection = getattr(self, "trade_review_collection", None)
         if collection is None:
             logger.warning("Mongo trade_reviews collection not available.")
-            return
+            return False
         try:
             collection.update_one(
                 {"decision_id": review["decision_id"]},
                 {"$setOnInsert": review},
                 upsert=True,
             )
+            return True
         except Exception as exc:
             self.handle_exception(exc, "Error storing trade review")
+            return False
+
+    def store_trade_review_analysis(
+        self, decision_id: str, analysis: Dict[str, Any]
+    ) -> bool:
+        """Attach advisory analysis to an existing review exactly once."""
+        collection = getattr(self, "trade_review_collection", None)
+        if collection is None:
+            return False
+        try:
+            result = collection.update_one(
+                {"decision_id": decision_id, "analysis": {"$exists": False}},
+                {"$set": {"analysis": analysis}},
+            )
+            return bool(result.matched_count)
+        except Exception as exc:
+            self.handle_exception(exc, "Error storing trade review analysis")
+            return False
 
     def get_trade_decisions(
         self,

@@ -586,14 +586,23 @@ class TradeChecker(AuthenticationManager, RedisManager):
             exit_price = self.check_price_freshness(symbol)
             if exit_price is None:
                 logger.warning(
-                    "[EXIT] Cannot review trade %s because exit price is unavailable; "
-                    "preserving state for retry.",
+                    "[EXIT] Exit price unavailable for %s; using the persisted entry "
+                    "price so review collection does not block cleanup.",
                     trade_id,
                 )
+                exit_price = float(
+                    persisted_trade.get("price")
+                    or persisted_trade.get("entry_price")
+                    or 0
+                )
+                persisted_trade["exit_reason"] = "exit_price_unavailable"
+            try:
+                review = self.post_trade_reviewer.review(
+                    trade_id, persisted_trade, float(exit_price)
+                )
+            except RuntimeError as error:
+                logger.warning("[EXIT] %s; preserving state for retry.", error)
                 return False
-            review = self.post_trade_reviewer.review(
-                trade_id, persisted_trade, float(exit_price)
-            )
             self.mongo_handler.append_decision_event(
                 trade_id,
                 {

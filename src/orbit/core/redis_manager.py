@@ -177,6 +177,37 @@ class RedisManager:
         trade.update(updates)
         self.save_trade(trade_id, trade)
 
+    def claim_trade(
+        self, old_trade_id: str, trade_id: str, trade: Dict[str, Any]
+    ) -> None:
+        """Atomically move provisional symbol state to its decision ID."""
+        try:
+            old_key = _trade_key(old_trade_id)
+            new_key = _trade_key(trade_id)
+            with self.redis_client.pipeline() as pipeline:
+                while True:
+                    try:
+                        pipeline.watch(old_key)
+                        raw = pipeline.get(old_key)
+                        provisional = json.loads(raw) if raw else {}
+                        merged = {**provisional, **trade}
+                        pipeline.multi()
+                        pipeline.set(new_key, json.dumps(merged))
+                        if old_key != new_key:
+                            pipeline.delete(old_key)
+                        pipeline.execute()
+                        break
+                    except redis.WatchError:
+                        continue
+        except Exception as error:
+            logger.exception(
+                "[Redis] claim_trade(%s, %s) failed: %s",
+                old_trade_id,
+                trade_id,
+                error,
+            )
+            raise
+
     def delete_trade_with_orders(self, trade_id: str) -> None:
         """Remove ``trade:{trade_id}`` and all associated ``order:*`` keys.
 
