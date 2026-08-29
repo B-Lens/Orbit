@@ -25,7 +25,8 @@ analyzer selects a strategy through the registry, then delegates risk and exchan
 work to the order manager. Redis stores active trades and order-to-trade mappings;
 MongoDB stores OHLCV, sentiment, decisions, and income history. The trade checker
 reconciles Redis with Binance and maintains protective orders. The sentiment cron
-runs one hourly web-grounded Responses analysis using provisioned Codex credentials.
+runs web-grounded Responses analysis every 30 minutes using provisioned Codex
+credentials.
 
 ## Safety invariants
 

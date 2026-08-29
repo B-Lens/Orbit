@@ -38,7 +38,7 @@ risk policy, rollout, accounting, and rollback procedures.
 Requirements: Python 3.10–3.12, Poetry, Redis, and MongoDB.
 
 ```bash
-git clone https://github.com/ipankaj/Orbit.git
+git clone https://github.com/ipankaj18/Orbit.git
 cd Orbit
 poetry install
 cp .env.example .env
@@ -77,7 +77,8 @@ interactions. Operational automation is documented in
 [Codex PR review](docs/operations/CODEX_PR_REVIEW.md).
 
 Testnet candidates retain concise promotion evidence and future success criteria
-in the [ETH dossier](docs/research/ETH_STRATEGY.md) and
+in the [BTC dossier](docs/research/BTCUSDT_STRATEGY.md),
+[ETH dossier](docs/research/ETH_STRATEGY.md), and
 [PAXG dossier](docs/research/PAXGUSDT_STRATEGY.md).
 
 ## Development
