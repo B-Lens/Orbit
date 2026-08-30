@@ -105,7 +105,26 @@ def parse_sentiment(sentiment: str) -> SentimentResult:
     """Parse sentiment string and extract sentiment, confidence, and explanation."""
     logger.debug(f"Parsing sentiment: {sentiment}")
     
-    if not isinstance(sentiment, str) or "Sentiment:" not in sentiment:
+    if not isinstance(sentiment, str) or not sentiment.strip():
+        raise ValueError("Empty or invalid sentiment string")
+    
+    import re
+    # Normalize common encoding artifacts where 'sentiment' key gets corrupted
+    # e.g., 'sentimentఖ' or 'sentiment:' etc.
+    normalized = re.sub(r'"sentiment[^\"\s]*"', '"sentiment"', sentiment)
+    
+    try:
+        data = json.loads(normalized)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse sentiment JSON: {e}")
+    
+    # Ensure 'sentiment' key exists by mapping any variant to lowercase
+    for key in list(data.keys()):
+        if 'sentiment' in key.lower() and key != 'sentiment':
+            data['sentiment'] = data.pop(key)
+            break
+    
+    return SentimentResult(**data)stance(sentiment, str) or "Sentiment:" not in sentiment:
         return SentimentResult(sentiment=SentimentType.NEUTRAL, confidence=0.0, explanation="")
     
     try:
