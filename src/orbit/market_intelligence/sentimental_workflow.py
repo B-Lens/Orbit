@@ -313,6 +313,13 @@ class SentimentWorkflow(ExceptionManager):
             raw_content = str(raw_content)
             logger.info(f"LLM raw output for news sentiment: {raw_content}")
             data = extract_json(raw_content)
+            # extract_json may return a list if the LLM output is a JSON array.
+            # In that case, take the first element if it is a dict.
+            if isinstance(data, list):
+                if len(data) > 0 and isinstance(data[0], dict):
+                    data = data[0]
+                else:
+                    raise ValueError("LLM returned a list without a valid dict element")
             result = NewsSentiment(**data)
             self.last_news_sentiment = result
             return result
@@ -736,6 +743,12 @@ class SentimentWorkflow(ExceptionManager):
             content = self.llm.invoke(prompt)
             content = str(content).strip()
             blend_sentiment: Dict[str, Any] = extract_json(content)  # validate JSON format
+            # extract_json may return a list; handle it the same way as in get_market_sentiments
+            if isinstance(blend_sentiment, list):
+                if len(blend_sentiment) > 0 and isinstance(blend_sentiment[0], dict):
+                    blend_sentiment = blend_sentiment[0]
+                else:
+                    raise ValueError("LLM returned a list without a valid dict element")
             return Sentiment(**blend_sentiment)
         except Exception as e:
             self.handle_exception(
@@ -933,6 +946,12 @@ class SentimentWorkflow(ExceptionManager):
 
         reasoning: str = self.get_reasoning(reddit_result, news_sentiment, twitter_result, indicators)
         combined_data: Dict[str, Any] = extract_json(reasoning)
+        # extract_json may return a list; handle it the same way as in get_market_sentiments
+        if isinstance(combined_data, list):
+            if len(combined_data) > 0 and isinstance(combined_data[0], dict):
+                combined_data = combined_data[0]
+            else:
+                raise ValueError("LLM returned a list without a valid dict element")
         return Sentiment(**combined_data)
 
     def _save_to_database(
