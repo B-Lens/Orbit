@@ -24,6 +24,10 @@ DEFAULT_INSTRUCTIONS = (
 DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 
 
+class _RetryableOpenAIError(RuntimeError):
+    """A transient OpenAI transport failure that may succeed on retry."""
+
+
 class OpenAIResponsesClient:
     """Small adapter exposing the ``invoke(prompt)`` interface used by Orbit."""
 
@@ -39,7 +43,7 @@ class OpenAIResponsesClient:
         if client is None and not resolved_api_key:
             raise ValueError("OPENAI_API_KEY is required for the OpenAI provider")
 
-        self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+        self.model: str = model or os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL
         self.max_output_tokens = max_output_tokens or int(
             os.getenv("OPENAI_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
         )
@@ -125,7 +129,7 @@ class CodexOAuthResponsesClient:
         urlopen: Callable[..., Any] = urllib.request.urlopen,
     ) -> None:
         self.auth_file = Path(auth_file).expanduser() if auth_file else default_auth_file()
-        self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+        self.model: str = model or os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL
         self.timeout = timeout
         self.web_search_timeout = web_search_timeout or float(
             os.getenv("OPENAI_WEB_SEARCH_TIMEOUT", "300")
@@ -137,8 +141,10 @@ class CodexOAuthResponsesClient:
         )
         if self.max_output_tokens < 1:
             raise ValueError("OPENAI_MAX_OUTPUT_TOKENS must be positive")
-        self.endpoint = endpoint or os.getenv(
-            "OPENAI_CODEX_RESPONSES_URL", DEFAULT_CODEX_RESPONSES_URL
+        self.endpoint: str = (
+            endpoint
+            or os.getenv("OPENAI_CODEX_RESPONSES_URL")
+            or DEFAULT_CODEX_RESPONSES_URL
         )
         self._urlopen = urlopen
 
@@ -172,7 +178,13 @@ class CodexOAuthResponsesClient:
             raise ValueError("prompt must not be empty")
 
         for attempt in range(MAX_PREMATURE_STREAM_RETRIES + 1):
-            output_text = self._invoke_stream(prompt, web_search)
+            try:
+                output_text = self._invoke_stream(prompt, web_search)
+            except _RetryableOpenAIError:
+                if attempt >= MAX_PREMATURE_STREAM_RETRIES:
+                    raise
+                logger.warning("OpenAI request failed transiently; retrying once")
+                continue
             if output_text is not None:
                 logger.info("OpenAI OAuth response generated with %s", self.model)
                 return output_text
@@ -256,7 +268,11 @@ class CodexOAuthResponsesClient:
             hint = " Run `codex login` to refresh auth.json." if error.code == 401 else ""
             raise RuntimeError(f"OpenAI HTTP {error.code}: {details}.{hint}") from error
         except urllib.error.URLError as error:
-            raise RuntimeError(f"OpenAI request failed: {error.reason}") from error
+            raise _RetryableOpenAIError(
+                f"OpenAI request failed: {error.reason}"
+            ) from error
+        except TimeoutError as error:
+            raise _RetryableOpenAIError("OpenAI request timed out") from error
         except json.JSONDecodeError as error:
             raise RuntimeError("OpenAI returned an invalid streaming event") from error
 

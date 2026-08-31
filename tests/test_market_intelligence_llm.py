@@ -256,6 +256,45 @@ def test_codex_oauth_client_rejects_repeated_premature_streams(tmp_path) -> None
     assert urlopen.call_count == 2
 
 
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (urllib.error.URLError("connection reset"), "connection reset"),
+        (TimeoutError(), "timed out"),
+    ],
+)
+def test_codex_oauth_client_retries_transient_urlopen_errors(
+    tmp_path, error, message
+) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    urlopen = MagicMock(side_effect=[error, error])
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    with pytest.raises(RuntimeError, match=message):
+        client.invoke_web_search("Assess markets")
+
+    assert urlopen.call_count == 2
+
+
+def test_codex_oauth_client_does_not_retry_http_errors(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    error = urllib.error.HTTPError("https://example.invalid", 403, "error", {}, None)
+    error.read = MagicMock(return_value=b"forbidden")
+    urlopen = MagicMock(side_effect=error)
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    with pytest.raises(RuntimeError, match="OpenAI HTTP 403"):
+        client.invoke_web_search("Assess markets")
+
+    urlopen.assert_called_once()
+
+
 def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> None:
     token_file = tmp_path / "token.json"
     token_file.write_text(
