@@ -32,6 +32,7 @@ class PerformanceTracker:
         self.futures_client = futures_client
         self.mongo_handler = mongo_handler
         self.execution_mode = execution_mode
+        self.last_records: list[dict[str, Any]] = []
 
     @staticmethod
     def summarize(
@@ -72,6 +73,7 @@ class PerformanceTracker:
         records = self.futures_client.get_income_history(**params)
         if self.mongo_handler is not None:
             self.mongo_handler.store_income_records(records, self.execution_mode)
+        self.last_records = records
         return self.summarize(records)
 
     def sync_window(
@@ -122,6 +124,7 @@ class PerformanceTracker:
                 )
         if self.mongo_handler is not None:
             self.mongo_handler.store_income_records(records, self.execution_mode)
+        self.last_records = records
         return self.summarize(records)
 
     @staticmethod

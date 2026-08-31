@@ -581,11 +581,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
             return False
 
         closed_at = datetime.now(timezone.utc)
-        entry_price = float(persisted_trade.get("price", 0.0) or 0.0)
-        try:
-            exit_price = float(self.order_manager.get_symbol_price(symbol))
-        except Exception:
-            exit_price = float(persisted_trade.get("current_price", entry_price))
         entered_at_raw = persisted_trade.get("entered_at")
         try:
             entered_at = datetime.fromisoformat(str(entered_at_raw))
@@ -608,6 +603,26 @@ class TradeChecker(AuthenticationManager, RedisManager):
             getattr(self, "trades", {}).pop(symbol, None)
             self.set_cooldown(symbol)
             return True
+        income_start_ms = max(0, int(entered_at.timestamp() * 1000) - 60_000)
+        closing_side = "SELL" if persisted_trade.get("positionSide") == "BUY" else "BUY"
+        fills = [
+            fill
+            for fill in self.order_manager.get_account_trades(symbol, income_start_ms)
+            if str(fill.get("side", "")).upper() == closing_side
+        ]
+        if not fills:
+            raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
+        filled_quantity = sum(float(fill.get("qty", 0) or 0) for fill in fills)
+        if filled_quantity <= 0:
+            raise RuntimeError(f"Binance exit fills had no quantity for {trade_id}")
+        exit_price = (
+            sum(
+                float(fill.get("price", 0) or 0) * float(fill.get("qty", 0) or 0)
+                for fill in fills
+            )
+            / filled_quantity
+        )
+        first_exit_fill_ms = min(int(fill.get("time", 0) or 0) for fill in fills)
         tracker = PerformanceTracker(
             self.order_manager.future_client_for(symbol),
             mongo_handler,
@@ -616,17 +631,26 @@ class TradeChecker(AuthenticationManager, RedisManager):
         accounting = None
         for attempt in range(3):
             accounting = tracker.sync_window(
-                max(0, int(entered_at.timestamp() * 1000) - 60_000),
+                income_start_ms,
                 int(datetime.now(timezone.utc).timestamp() * 1000) + 1,
                 symbol=symbol,
             )
-            if accounting.records:
+            has_realized_pnl = any(
+                str(row.get("incomeType", "")).upper() == "REALIZED_PNL"
+                for row in tracker.last_records
+            )
+            has_exit_commission = any(
+                str(row.get("incomeType", "")).upper() == "COMMISSION"
+                and int(row.get("time", 0) or 0) >= first_exit_fill_ms
+                for row in tracker.last_records
+            )
+            if has_realized_pnl and has_exit_commission:
                 break
             if attempt < 2:
                 time.sleep(0.5)
-        if accounting is None or not accounting.records:
+        if accounting is None or not (has_realized_pnl and has_exit_commission):
             raise RuntimeError(
-                f"Binance income was unavailable for completed trade {trade_id}"
+                f"Binance exit income was incomplete for completed trade {trade_id}"
             )
         pnl = accounting.net_pnl
         exit_record: Dict[str, Any] = {
@@ -656,7 +680,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 "confidence": 0.0,
                 "error": str(error),
             }
-        mongo_handler.store_trade_exit(exit_record)
+        if not mongo_handler.store_trade_exit(exit_record):
+            raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
         mongo_handler.append_decision_event(
             trade_id,
             {
@@ -1139,9 +1164,29 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     symbol,
                     persisted.get("trade_id"),
                 )
+                selected_order_ids = {
+                    str(persisted.get(field, ""))
+                    for field in ("sl_order_id", "tp_order_id")
+                    if persisted.get(field)
+                }
                 for stale in candidates:
                     stale_id = str(stale.get("trade_id", ""))
                     if stale_id and stale_id != persisted.get("trade_id"):
+                        stale_order_ids = {
+                            str(stale.get(field, ""))
+                            for field in ("sl_order_id", "tp_order_id")
+                            if stale.get(field)
+                        }
+                        for stale_order_id in stale_order_ids - selected_order_ids:
+                            try:
+                                self.order_manager.cancel_algo_conditional_order(
+                                    symbol, stale_order_id
+                                )
+                            except Exception as error:
+                                raise RuntimeError(
+                                    "Could not safely cancel stale protective order "
+                                    f"{stale_order_id} for {symbol}"
+                                ) from error
                         self.delete_trade_with_orders(stale_id)
             trade_id = str(persisted.get("trade_id") or symbol)
             _dict = {

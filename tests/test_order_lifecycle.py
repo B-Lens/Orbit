@@ -331,6 +331,9 @@ class TestTradeChecker(unittest.TestCase):
         trades = checker.activePosition_coolMaker()
 
         self.assertEqual(trades["ETHUSDT"]["trade_id"], "current")
+        checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
+            "ETHUSDT", "101"
+        )
         checker.delete_trade_with_orders.assert_called_once_with("stale")
 
     def test_exit_starts_post_exit_cooldown(self):

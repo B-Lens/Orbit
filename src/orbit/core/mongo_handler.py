@@ -458,42 +458,60 @@ class MongoHandler(ExceptionManager):
             "count": len(ordered),
         }
 
-    def store_trade_exit(self, record: Dict[str, Any]) -> None:
-        """Persist one completed trade and atomically advance aggregate metrics."""
+    def store_trade_exit(self, record: Dict[str, Any]) -> bool:
+        """Persist a completed trade and idempotently advance aggregate metrics."""
         lifecycle = getattr(self, "trade_lifecycle_collection", None)
         metrics = getattr(self, "trade_metrics_collection", None)
         if lifecycle is None or metrics is None:
             logger.warning("Mongo trade lifecycle collections not available.")
-            return
+            return False
         try:
-            result = lifecycle.update_one(
+            lifecycle.update_one(
                 {"trade_id": record["trade_id"]},
-                {"$setOnInsert": record},
+                {"$setOnInsert": {**record, "metrics_status": "pending"}},
                 upsert=True,
             )
-            if result.upserted_id is None:
-                return
+            stored = lifecycle.find_one(
+                {"trade_id": record["trade_id"]}, {"metrics_status": 1}
+            )
+            if stored and stored.get("metrics_status") == "recorded":
+                return True
             execution_mode = str(record["execution_mode"])
             pnl = float(record["pnl"])
-            pushes: Dict[str, float] = {
-                "duration_samples": float(record["duration_seconds"])
+            pushes: Dict[str, Any] = {
+                "recorded_trade_ids": record["trade_id"],
+                "duration_samples": float(record["duration_seconds"]),
             }
             if pnl > 0:
                 pushes["winning_pnl_samples"] = pnl
             elif pnl < 0:
                 pushes["losing_pnl_samples"] = pnl
-            aggregate = metrics.find_one_and_update(
+            metrics.update_one(
                 {"execution_mode": execution_mode},
                 {
                     "$setOnInsert": {
                         "execution_mode": execution_mode,
+                        "sample_version": 0,
+                        "recorded_trade_ids": [],
                     },
+                },
+                upsert=True,
+            )
+            aggregate = metrics.find_one_and_update(
+                {
+                    "execution_mode": execution_mode,
+                    "recorded_trade_ids": {"$ne": record["trade_id"]},
+                },
+                {
                     "$push": pushes,
                     "$inc": {"sample_version": 1},
                 },
-                upsert=True,
                 return_document=ReturnDocument.AFTER,
             )
+            if aggregate is None:
+                aggregate = metrics.find_one({"execution_mode": execution_mode})
+            if aggregate is None:
+                raise RuntimeError("Trade metrics document disappeared during update")
             version = int(aggregate["sample_version"])
             metrics.update_one(
                 {
@@ -519,8 +537,14 @@ class MongoHandler(ExceptionManager):
                     }
                 },
             )
+            lifecycle.update_one(
+                {"trade_id": record["trade_id"]},
+                {"$set": {"metrics_status": "recorded"}},
+            )
+            return True
         except Exception as exc:
             self.handle_exception(exc, "Error storing completed trade metrics")
+            return False
 
     def get_trade_decisions(
         self,

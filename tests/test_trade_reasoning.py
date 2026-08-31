@@ -69,17 +69,26 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     checker.trades = {"BTCUSDT": {"trade_id": "decision-1"}}
     checker.order_manager = MagicMock()
     checker.order_manager.get_symbol_price.return_value = 110.0
+    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    checker.order_manager.get_account_trades.return_value = [
+        {
+            "side": "SELL",
+            "price": "110",
+            "qty": "2",
+            "time": exit_time_ms,
+        }
+    ]
     checker.order_manager.future_client_for.return_value.get_income_history.return_value = [
         {
             "tranId": 1,
-            "time": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "time": exit_time_ms,
             "symbol": "BTCUSDT",
             "incomeType": "REALIZED_PNL",
             "income": "22",
         },
         {
             "tranId": 2,
-            "time": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "time": exit_time_ms,
             "symbol": "BTCUSDT",
             "incomeType": "COMMISSION",
             "income": "-2",
