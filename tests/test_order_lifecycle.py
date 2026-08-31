@@ -63,6 +63,23 @@ class TestOrderManager(unittest.TestCase):
             symbol="BTCUSDT", orderId=123, recvWindow=60000
         )
 
+    def test_account_trade_history_paginates_full_pages(self):
+        first_page = [{"id": trade_id} for trade_id in range(1000)]
+        self.manager.future_client.get_account_trades.side_effect = [
+            first_page,
+            [{"id": 1000}],
+        ]
+
+        records = self.manager.get_account_trades("BTCUSDT", 100, 200)
+
+        self.assertEqual(len(records), 1001)
+        self.assertEqual(
+            self.manager.future_client.get_account_trades.call_args_list[1].kwargs[
+                "fromId"
+            ],
+            1000,
+        )
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 
@@ -324,7 +341,12 @@ class TestTradeChecker(unittest.TestCase):
         }
         checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
         checker.order_manager.get_conditional_open_orders.return_value = [
-            {"algoId": "202", "quantity": "0.5"}
+            {
+                "algoId": "202",
+                "quantity": "0.5",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+            }
         ]
         checker.delete_trade_with_orders = MagicMock()
 

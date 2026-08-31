@@ -617,7 +617,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
             else None
         )
         all_fills = sorted(
-            self.order_manager.get_account_trades(symbol, query_start_ms),
+            self.order_manager.get_account_trades(
+                symbol,
+                query_start_ms,
+                int(closed_at.timestamp() * 1000),
+            ),
             key=lambda fill: int(fill.get("time", 0) or 0),
         )
         closing_fills: List[Dict[str, Any]] = []
@@ -1144,6 +1148,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         trades: Dict[str, Dict[str, Any]] = {}
 
         persisted_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
+        handled_ambiguous_symbols: set[str] = set()
         for key in self.scan_trade_keys():
             candidate_id = key[len(TRADE_KEY_PREFIX) :]
             candidate = self.load_trade(candidate_id) or {}
@@ -1173,18 +1178,15 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 open_order_ids = set(open_orders_by_id)
 
                 def has_full_coverage(candidate: Dict[str, Any]) -> bool:
-                    for field in ("sl_order_id", "tp_order_id"):
-                        order = open_orders_by_id.get(str(candidate.get(field, "")))
-                        if not order:
-                            continue
-                        if str(order.get("closePosition", "")).lower() == "true":
-                            return True
-                        order_quantity = float(
-                            order.get("quantity") or order.get("origQty") or 0
-                        )
-                        if order_quantity >= abs(positionAmount):
-                            return True
-                    return False
+                    order = open_orders_by_id.get(str(candidate.get("sl_order_id", "")))
+                    if not order or not is_stop_order(order):
+                        return False
+                    if str(order.get("closePosition", "")).lower() == "true":
+                        return True
+                    order_quantity = float(
+                        order.get("quantity") or order.get("origQty") or 0
+                    )
+                    return order_quantity >= abs(positionAmount)
 
                 def candidate_rank(candidate: Dict[str, Any]) -> Tuple[int, float, str]:
                     mapped_ids = {
@@ -1274,11 +1276,48 @@ class TradeChecker(AuthenticationManager, RedisManager):
             symbol = str(persisted.get("symbol") or trade_id)
             if symbol not in active_symbols:
                 if len(persisted_by_symbol.get(symbol, [])) > 1:
-                    logger.error(
-                        "Preserving duplicate flat-position records for %s; "
-                        "individual lifecycle attribution is ambiguous",
-                        symbol,
-                    )
+                    if symbol in handled_ambiguous_symbols:
+                        continue
+                    handled_ambiguous_symbols.add(symbol)
+                    candidates = persisted_by_symbol[symbol]
+                    self.set_cooldown(symbol)
+                    mongo_handler = getattr(self, "mongo_handler", None)
+                    persisted_all = mongo_handler is not None
+                    for candidate in candidates:
+                        candidate_id = str(candidate.get("trade_id", ""))
+                        block = {
+                            **candidate,
+                            "trade_id": candidate_id,
+                            "symbol": symbol,
+                            "status": "reconciliation_blocked",
+                            "reason": "ambiguous_duplicate_flat_records",
+                            "closed_at": datetime.now(timezone.utc),
+                        }
+                        if (
+                            mongo_handler is None
+                            or not mongo_handler.store_trade_reconciliation_block(block)
+                        ):
+                            persisted_all = False
+                            continue
+                        mongo_handler.append_decision_event(
+                            candidate_id,
+                            {
+                                "event_id": f"reconciliation_blocked:{candidate_id}",
+                                "status": "reconciliation_blocked",
+                                "reason": "ambiguous_duplicate_flat_records",
+                            },
+                        )
+                    if persisted_all:
+                        for candidate in candidates:
+                            self.delete_trade_with_orders(
+                                str(candidate.get("trade_id", ""))
+                            )
+                    else:
+                        logger.error(
+                            "Preserving duplicate flat-position records for %s until "
+                            "their blocked reconciliation audit is durable",
+                            symbol,
+                        )
                     continue
                 logger.info(
                     "[CLEANUP] Broker exposure is flat for "

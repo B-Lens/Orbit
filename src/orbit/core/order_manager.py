@@ -1056,13 +1056,44 @@ class OrderManager(AuthenticationManager, RedisManager):
         return {}
 
     def get_account_trades(
-        self, symbol: str, start_time_ms: Optional[int] = None
+        self,
+        symbol: str,
+        start_time_ms: Optional[int] = None,
+        end_time_ms: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Return Binance Futures fills for one symbol since entry."""
-        params: Dict[str, Any] = {"symbol": symbol, "limit": 1000, "recvWindow": 60000}
-        if start_time_ms is not None:
-            params["startTime"] = start_time_ms
-        return self.future_client_for(symbol).get_account_trades(**params)
+        """Return every Binance Futures fill in a bounded lifecycle window."""
+        end_time_ms = end_time_ms or int(time.time() * 1000)
+        start_time_ms = start_time_ms or end_time_ms - 90 * 24 * 60 * 60 * 1000
+        max_window_ms = 7 * 24 * 60 * 60 * 1000
+        client = self.future_client_for(symbol)
+        records: List[Dict[str, Any]] = []
+        seen_ids: set[int] = set()
+        window_start = start_time_ms
+        while window_start <= end_time_ms:
+            window_end = min(window_start + max_window_ms - 1, end_time_ms)
+            params: Dict[str, Any] = {
+                "symbol": symbol,
+                "startTime": window_start,
+                "endTime": window_end,
+                "limit": 1000,
+                "recvWindow": 60000,
+            }
+            while True:
+                page = client.get_account_trades(**params)
+                added = [row for row in page if int(row.get("id", -1)) not in seen_ids]
+                for row in added:
+                    seen_ids.add(int(row.get("id", -1)))
+                    records.append(row)
+                if len(page) < 1000:
+                    break
+                if not added:
+                    raise RuntimeError(
+                        "Binance account-trade pagination did not advance"
+                    )
+                params.pop("startTime", None)
+                params["fromId"] = max(int(row["id"]) for row in page) + 1
+            window_start = window_end + 1
+        return records
 
     def get_conditional_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
         """Return all **open** conditional (SL/TP) algo orders for *symbol*.

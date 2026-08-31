@@ -546,6 +546,22 @@ class MongoHandler(ExceptionManager):
             self.handle_exception(exc, "Error storing completed trade metrics")
             return False
 
+    def store_trade_reconciliation_block(self, record: Dict[str, Any]) -> bool:
+        """Persist a terminal audit row when an exit cannot be attributed safely."""
+        lifecycle = getattr(self, "trade_lifecycle_collection", None)
+        if lifecycle is None:
+            return False
+        try:
+            lifecycle.update_one(
+                {"trade_id": record["trade_id"]},
+                {"$setOnInsert": record},
+                upsert=True,
+            )
+            return True
+        except Exception as exc:
+            self.handle_exception(exc, "Error storing blocked trade reconciliation")
+            return False
+
     def get_trade_decisions(
         self,
         start: datetime,
