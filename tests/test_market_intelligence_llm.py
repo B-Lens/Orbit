@@ -121,6 +121,7 @@ def test_codex_oauth_client_streams_responses(tmp_path) -> None:
     assert timeout == 60.0
     assert request.get_header("Authorization") == "Bearer secret"
     assert request.get_header("Chatgpt-account-id") == "acct"
+    assert request.get_header("Openai-beta") is None
     payload = json.loads(request.data)
     assert payload == {
         "model": DEFAULT_OPENAI_MODEL,

@@ -217,7 +217,6 @@ class CodexOAuthResponsesClient:
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
-            "OpenAI-Beta": "responses=experimental",
             "originator": "orbit",
             "session-id": request_id,
             "thread-id": request_id,
