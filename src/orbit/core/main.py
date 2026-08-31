@@ -214,7 +214,7 @@ class BinanceAutomation(ExceptionManager):
                             "trade_id": decision_id or symbol,
                             "entered_at": get_indian_time().isoformat(),
                         }
-                        self.trade_checker.save_trade(
+                        self.trade_checker.merge_trade_fields(
                             decision_id or symbol, self.trades[symbol]
                         )
                         self.send_signal_updates(

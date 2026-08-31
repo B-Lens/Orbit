@@ -36,6 +36,7 @@ from orbit.utils.utils import get_indian_time
 from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
+from orbit.core.performance import PerformanceTracker
 from orbit.core.binance_ws_manager import BinanceWSManager
 from orbit.core.redis_manager import RedisManager, TRADE_KEY_PREFIX
 from orbit.core.trade_reasoner import TradeReasoner
@@ -585,9 +586,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
             exit_price = float(self.order_manager.get_symbol_price(symbol))
         except Exception:
             exit_price = float(persisted_trade.get("current_price", entry_price))
-        quantity = float(persisted_trade.get("quantity", 0.0) or 0.0)
-        direction = 1.0 if persisted_trade.get("positionSide") == "BUY" else -1.0
-        pnl = (exit_price - entry_price) * quantity * direction
         entered_at_raw = persisted_trade.get("entered_at")
         try:
             entered_at = datetime.fromisoformat(str(entered_at_raw))
@@ -604,6 +602,33 @@ class TradeChecker(AuthenticationManager, RedisManager):
             if execution_settings is not None
             else "unknown"
         )
+        mongo_handler = getattr(self, "mongo_handler", None)
+        if mongo_handler is None:
+            self.delete_trade_with_orders(trade_id)
+            getattr(self, "trades", {}).pop(symbol, None)
+            self.set_cooldown(symbol)
+            return True
+        tracker = PerformanceTracker(
+            self.order_manager.future_client_for(symbol),
+            mongo_handler,
+            execution_mode,
+        )
+        accounting = None
+        for attempt in range(3):
+            accounting = tracker.sync_window(
+                max(0, int(entered_at.timestamp() * 1000) - 60_000),
+                int(datetime.now(timezone.utc).timestamp() * 1000) + 1,
+                symbol=symbol,
+            )
+            if accounting.records:
+                break
+            if attempt < 2:
+                time.sleep(0.5)
+        if accounting is None or not accounting.records:
+            raise RuntimeError(
+                f"Binance income was unavailable for completed trade {trade_id}"
+            )
+        pnl = accounting.net_pnl
         exit_record: Dict[str, Any] = {
             **persisted_trade,
             "trade_id": trade_id,
@@ -614,6 +639,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
             "exit_price": exit_price,
             "duration_seconds": duration_seconds,
             "pnl": pnl,
+            "pnl_source": "binance_futures_income",
+            "income_summary": accounting.to_dict(),
         }
         try:
             if getattr(self, "_trade_reasoner", None) is None:
@@ -629,20 +656,18 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 "confidence": 0.0,
                 "error": str(error),
             }
-        mongo_handler = getattr(self, "mongo_handler", None)
-        if mongo_handler is not None:
-            mongo_handler.store_trade_exit(exit_record)
-            mongo_handler.append_decision_event(
-                trade_id,
-                {
-                    "event_id": f"trade_closed:{trade_id}",
-                    "status": "trade_closed",
-                    "exit_price": exit_price,
-                    "pnl": pnl,
-                    "duration_seconds": duration_seconds,
-                    "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
-                },
-            )
+        mongo_handler.store_trade_exit(exit_record)
+        mongo_handler.append_decision_event(
+            trade_id,
+            {
+                "event_id": f"trade_closed:{trade_id}",
+                "status": "trade_closed",
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "duration_seconds": duration_seconds,
+                "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
+            },
+        )
 
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
@@ -1063,13 +1088,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
         ]
         trades: Dict[str, Dict[str, Any]] = {}
 
-        persisted_by_symbol: Dict[str, Dict[str, Any]] = {}
+        persisted_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
         for key in self.scan_trade_keys():
             candidate_id = key[len(TRADE_KEY_PREFIX) :]
             candidate = self.load_trade(candidate_id) or {}
             candidate_symbol = str(candidate.get("symbol") or candidate_id)
             candidate.setdefault("trade_id", candidate_id)
-            persisted_by_symbol[candidate_symbol] = candidate
+            persisted_by_symbol.setdefault(candidate_symbol, []).append(candidate)
 
         active_symbols = set()
         for position in positions:
@@ -1081,7 +1106,43 @@ class TradeChecker(AuthenticationManager, RedisManager):
             symbol = position["symbol"]
             active_symbols.add(symbol)
 
-            persisted = persisted_by_symbol.get(symbol, {})
+            candidates = persisted_by_symbol.get(symbol, [])
+            persisted: Dict[str, Any] = {}
+            if len(candidates) == 1:
+                persisted = candidates[0]
+            elif candidates:
+                open_order_ids = {
+                    str(order.get("algoId", ""))
+                    for order in self.order_manager.get_conditional_open_orders(symbol)
+                }
+
+                def candidate_rank(candidate: Dict[str, Any]) -> Tuple[int, float, str]:
+                    mapped_ids = {
+                        str(candidate.get(field, ""))
+                        for field in ("sl_order_id", "tp_order_id")
+                        if candidate.get(field)
+                    }
+                    verified = int(bool(mapped_ids & open_order_ids))
+                    try:
+                        entered = datetime.fromisoformat(
+                            str(candidate.get("entered_at"))
+                        ).timestamp()
+                    except (TypeError, ValueError):
+                        entered = 0.0
+                    return verified, entered, str(candidate.get("trade_id", ""))
+
+                persisted = max(candidates, key=candidate_rank)
+                logger.error(
+                    "Resolved %d Redis trade records for %s to %s using protective "
+                    "order identity, entry recency, and trade ID ordering.",
+                    len(candidates),
+                    symbol,
+                    persisted.get("trade_id"),
+                )
+                for stale in candidates:
+                    stale_id = str(stale.get("trade_id", ""))
+                    if stale_id and stale_id != persisted.get("trade_id"):
+                        self.delete_trade_with_orders(stale_id)
             trade_id = str(persisted.get("trade_id") or symbol)
             _dict = {
                 "trade_id": trade_id,

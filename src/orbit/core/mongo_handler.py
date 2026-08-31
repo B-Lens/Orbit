@@ -26,10 +26,11 @@ from orbit.core.exception_manager import ExceptionManager
 from orbit.utils.utils import get_indian_time
 
 try:  # pragma: no cover - dependency may be missing in test environment
-    from pymongo import MongoClient, ASCENDING  # type: ignore
+    from pymongo import ASCENDING, MongoClient, ReturnDocument  # type: ignore
 except Exception:  # pragma: no cover - handled gracefully if pymongo not installed
     MongoClient = None  # type: ignore
     ASCENDING = None  # type: ignore
+    ReturnDocument = None  # type: ignore
 
 logger = logging.getLogger("Orbit")
 
@@ -458,34 +459,65 @@ class MongoHandler(ExceptionManager):
         }
 
     def store_trade_exit(self, record: Dict[str, Any]) -> None:
-        """Persist one completed trade and refresh its mode's aggregate metrics."""
+        """Persist one completed trade and atomically advance aggregate metrics."""
         lifecycle = getattr(self, "trade_lifecycle_collection", None)
         metrics = getattr(self, "trade_metrics_collection", None)
         if lifecycle is None or metrics is None:
             logger.warning("Mongo trade lifecycle collections not available.")
             return
         try:
-            lifecycle.update_one(
+            result = lifecycle.update_one(
                 {"trade_id": record["trade_id"]},
                 {"$setOnInsert": record},
                 upsert=True,
             )
+            if result.upserted_id is None:
+                return
             execution_mode = str(record["execution_mode"])
-            rows = list(lifecycle.find({"execution_mode": execution_mode}, {"_id": 0}))
-            durations = [float(row["duration_seconds"]) for row in rows]
-            winning = [float(row["pnl"]) for row in rows if float(row["pnl"]) >= 0]
-            losing = [float(row["pnl"]) for row in rows if float(row["pnl"]) < 0]
-            metrics.update_one(
+            pnl = float(record["pnl"])
+            pushes: Dict[str, float] = {
+                "duration_samples": float(record["duration_seconds"])
+            }
+            if pnl > 0:
+                pushes["winning_pnl_samples"] = pnl
+            elif pnl < 0:
+                pushes["losing_pnl_samples"] = pnl
+            aggregate = metrics.find_one_and_update(
                 {"execution_mode": execution_mode},
+                {
+                    "$setOnInsert": {
+                        "execution_mode": execution_mode,
+                    },
+                    "$push": pushes,
+                    "$inc": {"sample_version": 1},
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+            version = int(aggregate["sample_version"])
+            metrics.update_one(
+                {
+                    "execution_mode": execution_mode,
+                    "$or": [
+                        {"computed_version": {"$lt": version}},
+                        {"computed_version": {"$exists": False}},
+                    ],
+                },
                 {
                     "$set": {
                         "updated_at": datetime.now(timezone.utc),
-                        "active_trade_duration_seconds": self._distribution(durations),
-                        "winning_trade_pnl": self._distribution(winning),
-                        "losing_trade_pnl": self._distribution(losing),
+                        "computed_version": version,
+                        "active_trade_duration_seconds": self._distribution(
+                            aggregate.get("duration_samples", [])
+                        ),
+                        "winning_trade_pnl": self._distribution(
+                            aggregate.get("winning_pnl_samples", [])
+                        ),
+                        "losing_trade_pnl": self._distribution(
+                            aggregate.get("losing_pnl_samples", [])
+                        ),
                     }
                 },
-                upsert=True,
             )
         except Exception as exc:
             self.handle_exception(exc, "Error storing completed trade metrics")

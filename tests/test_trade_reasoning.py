@@ -69,6 +69,22 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     checker.trades = {"BTCUSDT": {"trade_id": "decision-1"}}
     checker.order_manager = MagicMock()
     checker.order_manager.get_symbol_price.return_value = 110.0
+    checker.order_manager.future_client_for.return_value.get_income_history.return_value = [
+        {
+            "tranId": 1,
+            "time": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "symbol": "BTCUSDT",
+            "incomeType": "REALIZED_PNL",
+            "income": "22",
+        },
+        {
+            "tranId": 2,
+            "time": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "symbol": "BTCUSDT",
+            "incomeType": "COMMISSION",
+            "income": "-2",
+        },
+    ]
     checker.execution_settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
     checker.mongo_handler = MagicMock()
     checker._trade_reasoner = MagicMock()
@@ -93,6 +109,7 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
 
     exit_record = checker.mongo_handler.store_trade_exit.call_args.args[0]
     assert exit_record["pnl"] == 20.0
+    assert exit_record["pnl_source"] == "binance_futures_income"
     assert exit_record["duration_seconds"] >= 599
     assert exit_record["llm_exit_reasoning"]["reasoning"] == "momentum continued"
     checker.mongo_handler.append_decision_event.assert_called_once()

@@ -5,6 +5,7 @@ from binance.error import ClientError
 
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.order_manager import OrderManager
+from orbit.core.redis_manager import RedisManager
 from orbit.core.trade_checker import TradeChecker, is_stop_order, is_take_profit_order
 
 
@@ -33,6 +34,15 @@ def _order_manager():
 class TestOrderManager(unittest.TestCase):
     def setUp(self):
         self.manager = _order_manager()
+
+    def test_trade_field_merge_uses_atomic_redis_script(self):
+        redis_client = MagicMock()
+        manager = RedisManager(redis_client=redis_client)
+
+        manager.merge_trade_fields("decision-1", {"orderId": 123})
+
+        redis_client.eval.assert_called_once()
+        self.assertEqual(redis_client.eval.call_args.args[1:3], (1, "trade:decision-1"))
 
     def test_exchange_filter_normalization(self):
         self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 12.34), 12.3)
@@ -284,6 +294,45 @@ class TestTradeChecker(unittest.TestCase):
         checker.set_cooldown.assert_called_once_with("ETHUSDT")
         checker.delete_trade_with_orders.assert_called_once_with("decision-1")
 
+    def test_position_reconciliation_resolves_duplicate_records_by_open_order(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        client = MagicMock()
+        checker.order_manager.futures_clients = {"testnet": client}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0.5"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(
+            return_value=["trade:stale", "trade:current"]
+        )
+        records = {
+            "stale": {
+                "trade_id": "stale",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "101",
+                "entered_at": "2026-08-01T00:00:00+00:00",
+            },
+            "current": {
+                "trade_id": "current",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "202",
+                "entered_at": "2026-08-02T00:00:00+00:00",
+            },
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {"algoId": "202"}
+        ]
+        checker.delete_trade_with_orders = MagicMock()
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades["ETHUSDT"]["trade_id"], "current")
+        checker.delete_trade_with_orders.assert_called_once_with("stale")
+
     def test_exit_starts_post_exit_cooldown(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.trades = {
@@ -438,26 +487,28 @@ class TestTradeChecker(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
 def test_testnet_order_probe():
     from scripts import check_testnet_orders as SCRIPT
     from unittest.mock import MagicMock
+
     manager = MagicMock()
     manager.config = {}
     manager.config["risk_management"] = {"BTCUSDT": 0.01}
     manager.config["FUTURE_LEVERAGE"] = 2
-    
+
     # 1. Existing order skips submission
     manager.get_open_orders.return_value = [{"orderId": 7, "status": "NEW"}]
     manager.get_conditional_open_orders.return_value = []
     assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "SKIPPED"
     manager.place_order.assert_not_called()
-    
+
     # 2. No open orders, places and cancels order
     manager.get_open_orders.return_value = []
     manager.get_symbol_price.return_value = 100.0
     manager.place_order.return_value = ({"orderId": 123}, 0.1, {})
     manager.cancel_order.return_value = {"orderId": 123, "status": "CANCELED"}
-    
+
     assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "PASSED"
     manager.place_order.assert_called_once()
     manager.cancel_order.assert_called_once_with("BTCUSDT", 123)

@@ -75,19 +75,26 @@ class PerformanceTracker:
         return self.summarize(records)
 
     def sync_window(
-        self, start_time_ms: int, end_time_ms: int, page_size: int = 1000
+        self,
+        start_time_ms: int,
+        end_time_ms: int,
+        page_size: int = 1000,
+        symbol: str | None = None,
     ) -> PerformanceSummary:
         """Synchronize all income pages in a half-open exchange-time window."""
         records: list[dict[str, Any]] = []
         seen: set[tuple[Any, ...]] = set()
         cursor = start_time_ms
         while cursor < end_time_ms:
-            page_records = self.futures_client.get_income_history(
-                startTime=cursor,
-                endTime=end_time_ms - 1,
-                limit=page_size,
-                recvWindow=60000,
-            )
+            params: dict[str, Any] = {
+                "startTime": cursor,
+                "endTime": end_time_ms - 1,
+                "limit": page_size,
+                "recvWindow": 60000,
+            }
+            if symbol:
+                params["symbol"] = symbol
+            page_records = self.futures_client.get_income_history(**params)
             if not page_records:
                 break
             added = 0
