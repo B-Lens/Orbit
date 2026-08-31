@@ -15,8 +15,8 @@ from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
 from orbit.utils.utils import extract_json
-from orbit.market_intelligence.llm.llm_endpoint import LLM
-from orbit.market_intelligence.llm.prompt_manager import PromptManager
+from orbit.llm.llm_endpoint import LLM
+from orbit.llm.prompt_manager import PromptManager
 
 logger = logging.getLogger("Orbit")
 

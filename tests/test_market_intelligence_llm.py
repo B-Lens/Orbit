@@ -7,9 +7,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orbit.market_intelligence.llm.llm_endpoint import LLM
-from orbit.market_intelligence.llm.antigravity_client import AntigravityClient
-from orbit.market_intelligence.llm.openai_client import (
+from orbit.llm.llm_endpoint import LLM
+from orbit.llm.antigravity_client import AntigravityClient
+from orbit.llm.openai_client import (
     DEFAULT_INSTRUCTIONS,
     DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_OPENAI_MODEL,
@@ -592,7 +592,7 @@ def test_llm_loads_antigravity_from_standard_cli_path(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "orbit.market_intelligence.llm.llm_endpoint.default_token_file",
+        "orbit.llm.llm_endpoint.default_token_file",
         lambda: token_file,
     )
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -645,7 +645,7 @@ def test_llm_tries_each_configured_groq_model(
     third = MagicMock()
     candidates = iter((first, second, third))
     monkeypatch.setattr(
-        "orbit.market_intelligence.llm.llm_endpoint.ChatGroq",
+        "orbit.llm.llm_endpoint.ChatGroq",
         lambda **_kwargs: next(candidates),
     )
 

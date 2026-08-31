@@ -94,6 +94,13 @@ class MongoHandler(ExceptionManager):
             self.decision_collection.create_index(
                 [("symbol", ASCENDING), ("timestamp", ASCENDING)]
             )
+            self.trade_lifecycle_collection = self.db["trade_lifecycle"]
+            self.trade_lifecycle_collection.create_index("trade_id", unique=True)
+            self.trade_lifecycle_collection.create_index(
+                [("execution_mode", ASCENDING), ("closed_at", ASCENDING)]
+            )
+            self.trade_metrics_collection = self.db["trade_metrics"]
+            self.trade_metrics_collection.create_index("execution_mode", unique=True)
             self.income_collection = self.db["futures_income"]
             legacy_income_index = "tranId_1_incomeType_1"
             if legacy_income_index in self.income_collection.index_information():
@@ -427,6 +434,61 @@ class MongoHandler(ExceptionManager):
             collection.update_one(query, {"$push": {"execution_events": event}})
         except Exception as exc:
             self.handle_exception(exc, "Error appending trade decision event")
+
+    @staticmethod
+    def _distribution(values: List[float]) -> Dict[str, float]:
+        """Return average and linearly interpolated P95/P99 values."""
+        ordered = sorted(float(value) for value in values)
+        if not ordered:
+            return {"average": 0.0, "p95": 0.0, "p99": 0.0, "count": 0}
+
+        def percentile(fraction: float) -> float:
+            position = (len(ordered) - 1) * fraction
+            lower = int(position)
+            upper = min(lower + 1, len(ordered) - 1)
+            return ordered[lower] + (ordered[upper] - ordered[lower]) * (
+                position - lower
+            )
+
+        return {
+            "average": sum(ordered) / len(ordered),
+            "p95": percentile(0.95),
+            "p99": percentile(0.99),
+            "count": len(ordered),
+        }
+
+    def store_trade_exit(self, record: Dict[str, Any]) -> None:
+        """Persist one completed trade and refresh its mode's aggregate metrics."""
+        lifecycle = getattr(self, "trade_lifecycle_collection", None)
+        metrics = getattr(self, "trade_metrics_collection", None)
+        if lifecycle is None or metrics is None:
+            logger.warning("Mongo trade lifecycle collections not available.")
+            return
+        try:
+            lifecycle.update_one(
+                {"trade_id": record["trade_id"]},
+                {"$setOnInsert": record},
+                upsert=True,
+            )
+            execution_mode = str(record["execution_mode"])
+            rows = list(lifecycle.find({"execution_mode": execution_mode}, {"_id": 0}))
+            durations = [float(row["duration_seconds"]) for row in rows]
+            winning = [float(row["pnl"]) for row in rows if float(row["pnl"]) >= 0]
+            losing = [float(row["pnl"]) for row in rows if float(row["pnl"]) < 0]
+            metrics.update_one(
+                {"execution_mode": execution_mode},
+                {
+                    "$set": {
+                        "updated_at": datetime.now(timezone.utc),
+                        "active_trade_duration_seconds": self._distribution(durations),
+                        "winning_trade_pnl": self._distribution(winning),
+                        "losing_trade_pnl": self._distribution(losing),
+                    }
+                },
+                upsert=True,
+            )
+        except Exception as exc:
+            self.handle_exception(exc, "Error storing completed trade metrics")
 
     def get_trade_decisions(
         self,

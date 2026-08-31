@@ -42,6 +42,8 @@ from orbit.core.sentimen_cron import Croner
 from orbit.core.performance_reporter import PerformanceReporter
 from orbit.core.testnet_reporter import TestnetDailyReporter
 from orbit.core.execution import ExecutionMode
+from orbit.core.trade_reasoner import TradeReasoner
+from orbit.llm.llm_endpoint import LLM
 from orbit.utils.utils import get_indian_time
 
 # Constants
@@ -103,6 +105,7 @@ class BinanceAutomation(ExceptionManager):
         order_manager: Optional[OrderManager] = None,
         croner: Optional[Croner] = None,
         testnet_reporter: Optional[TestnetDailyReporter] = None,
+        trade_reasoner: Optional[TradeReasoner] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__()
@@ -117,6 +120,7 @@ class BinanceAutomation(ExceptionManager):
         )
         self._croner: Optional[Croner] = croner
         self._testnet_reporter = testnet_reporter
+        self._trade_reasoner = trade_reasoner
 
         # Configuration
         self.trading_pairs: List[str] = config_json["trading_pairs"]
@@ -207,7 +211,12 @@ class BinanceAutomation(ExceptionManager):
                             "quantity": quantity,
                             "orderId": order_id,
                             "price": price,
+                            "trade_id": decision_id or symbol,
+                            "entered_at": get_indian_time().isoformat(),
                         }
+                        self.trade_checker.save_trade(
+                            decision_id or symbol, self.trades[symbol]
+                        )
                         self.send_signal_updates(
                             data=None,
                             description=f"Order {order_id} filled for {symbol}",
@@ -270,6 +279,46 @@ class BinanceAutomation(ExceptionManager):
         target = signal["take_profit"]
         meta_info = signal.get("Other Info", "")
         decision_id = signal.get("decision_id")
+
+        try:
+            if self._trade_reasoner is None:
+                self._trade_reasoner = TradeReasoner(LLM())
+            entry_reasoning = self._trade_reasoner.review_entry(signal)
+            if decision_id and self.order_manager.mongo_handler is not None:
+                self.order_manager.mongo_handler.append_decision_event(
+                    decision_id,
+                    {
+                        "status": (
+                            "llm_entry_approved"
+                            if entry_reasoning.take_trade
+                            else "llm_entry_rejected"
+                        ),
+                        "llm_reasoning": TradeReasoner.serialize(entry_reasoning),
+                    },
+                )
+            if not entry_reasoning.take_trade:
+                self.send_alerts(
+                    data=None,
+                    description=f"LLM rejected trade for {symbol}",
+                    fields=TradeReasoner.serialize(entry_reasoning),
+                )
+                return
+        except Exception as error:
+            logger.exception("Pre-trade LLM review failed for %s", symbol)
+            if decision_id and self.order_manager.mongo_handler is not None:
+                self.order_manager.mongo_handler.append_decision_event(
+                    decision_id,
+                    {
+                        "status": "llm_entry_rejected",
+                        "reason": "llm_review_failed",
+                        "error": str(error),
+                    },
+                )
+            self.send_alerts(
+                data=None,
+                description=f"Trade blocked because LLM review failed for {symbol}",
+            )
+            return
 
         if meta_info:
             self.send_logs(

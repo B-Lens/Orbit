@@ -24,7 +24,7 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 
 import time
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -38,6 +38,8 @@ from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.binance_ws_manager import BinanceWSManager
 from orbit.core.redis_manager import RedisManager, TRADE_KEY_PREFIX
+from orbit.core.trade_reasoner import TradeReasoner
+from orbit.llm.llm_endpoint import LLM
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
@@ -112,6 +114,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         mongo_handler: Optional[MongoHandler] = None,
         redis_client: Optional[redis.StrictRedis] = None,
         ws_stale_threshold: float = 5.0,
+        trade_reasoner: Optional[TradeReasoner] = None,
         **auth_kwargs: Any,
     ) -> None:
         AuthenticationManager.__init__(self, **auth_kwargs)
@@ -124,6 +127,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.live_prices: Dict[str, Tuple[float, float]] = {}
         self._ws_stale_threshold = ws_stale_threshold
         self._ws_manager: Optional[BinanceWSManager] = None
+        self._trade_reasoner = trade_reasoner
 
     # ------------------------------------------------------------------
     # WebSocket price-update callback
@@ -458,6 +462,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "stop_loss_price": stop_loss,
                     "target": target,
                     "quantity": trade["quantity"],
+                    "current_price": current_price,
                     "stop_loss_order": stop_loss_order,
                     "take_profit_order": take_profit_order,
                     "sl_order_id": sl_order_id,
@@ -573,6 +578,71 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 symbol,
             )
             return False
+
+        closed_at = datetime.now(timezone.utc)
+        entry_price = float(persisted_trade.get("price", 0.0) or 0.0)
+        try:
+            exit_price = float(self.order_manager.get_symbol_price(symbol))
+        except Exception:
+            exit_price = float(persisted_trade.get("current_price", entry_price))
+        quantity = float(persisted_trade.get("quantity", 0.0) or 0.0)
+        direction = 1.0 if persisted_trade.get("positionSide") == "BUY" else -1.0
+        pnl = (exit_price - entry_price) * quantity * direction
+        entered_at_raw = persisted_trade.get("entered_at")
+        try:
+            entered_at = datetime.fromisoformat(str(entered_at_raw))
+            if entered_at.tzinfo is None:
+                entered_at = entered_at.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            entered_at = closed_at
+        duration_seconds = max(0.0, (closed_at - entered_at).total_seconds())
+        execution_settings = getattr(self, "execution_settings", None) or getattr(
+            self.order_manager, "execution_settings", None
+        )
+        execution_mode = (
+            execution_settings.mode_for(symbol).value
+            if execution_settings is not None
+            else "unknown"
+        )
+        exit_record: Dict[str, Any] = {
+            **persisted_trade,
+            "trade_id": trade_id,
+            "symbol": symbol,
+            "execution_mode": execution_mode,
+            "entered_at": entered_at,
+            "closed_at": closed_at,
+            "exit_price": exit_price,
+            "duration_seconds": duration_seconds,
+            "pnl": pnl,
+        }
+        try:
+            if getattr(self, "_trade_reasoner", None) is None:
+                self._trade_reasoner = TradeReasoner(LLM())
+            exit_record["llm_exit_reasoning"] = TradeReasoner.serialize(
+                self._trade_reasoner.review_exit(exit_record)
+            )
+        except Exception as error:
+            logger.exception("Post-trade LLM review failed for %s", trade_id)
+            exit_record["llm_exit_reasoning"] = {
+                "outcome": "winning" if pnl >= 0 else "losing",
+                "reasoning": "LLM post-trade review failed",
+                "confidence": 0.0,
+                "error": str(error),
+            }
+        mongo_handler = getattr(self, "mongo_handler", None)
+        if mongo_handler is not None:
+            mongo_handler.store_trade_exit(exit_record)
+            mongo_handler.append_decision_event(
+                trade_id,
+                {
+                    "event_id": f"trade_closed:{trade_id}",
+                    "status": "trade_closed",
+                    "exit_price": exit_price,
+                    "pnl": pnl,
+                    "duration_seconds": duration_seconds,
+                    "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
+                },
+            )
 
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
@@ -993,6 +1063,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
         ]
         trades: Dict[str, Dict[str, Any]] = {}
 
+        persisted_by_symbol: Dict[str, Dict[str, Any]] = {}
+        for key in self.scan_trade_keys():
+            candidate_id = key[len(TRADE_KEY_PREFIX) :]
+            candidate = self.load_trade(candidate_id) or {}
+            candidate_symbol = str(candidate.get("symbol") or candidate_id)
+            candidate.setdefault("trade_id", candidate_id)
+            persisted_by_symbol[candidate_symbol] = candidate
+
         active_symbols = set()
         for position in positions:
             entry_price = float(position.get("entryPrice", 0) or 0)
@@ -1003,7 +1081,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
             symbol = position["symbol"]
             active_symbols.add(symbol)
 
-            trade_id = symbol
+            persisted = persisted_by_symbol.get(symbol, {})
+            trade_id = str(persisted.get("trade_id") or symbol)
             _dict = {
                 "trade_id": trade_id,
                 "symbol": symbol,
@@ -1012,7 +1091,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 "price": entry_price,
             }
 
-            persisted = self.load_trade(trade_id)
             if persisted:
                 for key in (
                     "sl_order_id",
@@ -1021,6 +1099,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "low",
                     "stop_loss_price",
                     "target",
+                    "entered_at",
                 ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])

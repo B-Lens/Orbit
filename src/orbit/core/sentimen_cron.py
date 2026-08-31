@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 import redis
 
 from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
-from orbit.market_intelligence.llm.llm_endpoint import LLM
+from orbit.llm.llm_endpoint import LLM
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.redis_manager import RedisManager
 from orbit.utils.utils import get_indian_time
