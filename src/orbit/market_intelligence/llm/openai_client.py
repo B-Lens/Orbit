@@ -252,9 +252,8 @@ class CodexOAuthResponsesClient:
                     elif event_type in {"error", "response.failed", "response.incomplete"}:
                         raise RuntimeError(f"OpenAI streaming error: {event}")
         except urllib.error.HTTPError as error:
-            details = error.read().decode("utf-8", errors="replace")
             hint = " Run `codex login` to refresh auth.json." if error.code == 401 else ""
-            raise RuntimeError(f"OpenAI HTTP {error.code}: {details}.{hint}") from error
+            raise RuntimeError(f"OpenAI HTTP {error.code}.{hint}") from error
         except urllib.error.URLError as error:
             raise RuntimeError(f"OpenAI request failed: {error.reason}") from error
         except json.JSONDecodeError as error:
