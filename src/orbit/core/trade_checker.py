@@ -588,7 +588,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 entered_at = entered_at.replace(tzinfo=timezone.utc)
         except (TypeError, ValueError):
             entered_at = closed_at
-        duration_seconds = max(0.0, (closed_at - entered_at).total_seconds())
         execution_settings = getattr(self, "execution_settings", None) or getattr(
             self.order_manager, "execution_settings", None
         )
@@ -603,61 +602,87 @@ class TradeChecker(AuthenticationManager, RedisManager):
             getattr(self, "trades", {}).pop(symbol, None)
             self.set_cooldown(symbol)
             return True
-        income_start_ms = max(0, int(entered_at.timestamp() * 1000) - 60_000)
         position_direction = str(
             persisted_trade.get("positionSide") or persisted_trade.get("side") or ""
         ).upper()
         if position_direction not in {"BUY", "SELL"}:
             raise RuntimeError(f"Trade direction was unavailable for {trade_id}")
         closing_side = "SELL" if position_direction == "BUY" else "BUY"
-        fills = [
-            fill
-            for fill in self.order_manager.get_account_trades(symbol, income_start_ms)
-            if str(fill.get("side", "")).upper() == closing_side
-        ]
-        if not fills:
+        expected_quantity = float(persisted_trade.get("quantity", 0) or 0)
+        if expected_quantity <= 0:
+            raise RuntimeError(f"Trade quantity was unavailable for {trade_id}")
+        query_start_ms = (
+            max(0, int(entered_at.timestamp() * 1000) - 60_000)
+            if entered_at_raw
+            else None
+        )
+        all_fills = sorted(
+            self.order_manager.get_account_trades(symbol, query_start_ms),
+            key=lambda fill: int(fill.get("time", 0) or 0),
+        )
+        closing_fills: List[Dict[str, Any]] = []
+        closing_quantity = 0.0
+        for fill in reversed(all_fills):
+            if str(fill.get("side", "")).upper() != closing_side:
+                continue
+            closing_fills.append(fill)
+            closing_quantity += float(fill.get("qty", 0) or 0)
+            if closing_quantity >= expected_quantity:
+                break
+        if closing_quantity < expected_quantity:
             raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
-        filled_quantity = sum(float(fill.get("qty", 0) or 0) for fill in fills)
-        if filled_quantity <= 0:
-            raise RuntimeError(f"Binance exit fills had no quantity for {trade_id}")
+        entry_order_id = str(persisted_trade.get("orderId", ""))
+        entry_fills = [
+            fill
+            for fill in all_fills
+            if entry_order_id and str(fill.get("orderId", "")) == entry_order_id
+        ]
+        if not entry_fills:
+            entry_quantity = 0.0
+            first_exit_ms = min(int(fill.get("time", 0) or 0) for fill in closing_fills)
+            for fill in reversed(all_fills):
+                if int(fill.get("time", 0) or 0) >= first_exit_ms:
+                    continue
+                if str(fill.get("side", "")).upper() != position_direction:
+                    continue
+                entry_fills.append(fill)
+                entry_quantity += float(fill.get("qty", 0) or 0)
+                if entry_quantity >= expected_quantity:
+                    break
+        if not entry_fills:
+            raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
+        entered_at = datetime.fromtimestamp(
+            min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,
+            tz=timezone.utc,
+        )
+        duration_seconds = max(0.0, (closed_at - entered_at).total_seconds())
         exit_price = (
             sum(
                 float(fill.get("price", 0) or 0) * float(fill.get("qty", 0) or 0)
-                for fill in fills
+                for fill in closing_fills
             )
-            / filled_quantity
+            / closing_quantity
         )
-        first_exit_fill_ms = min(int(fill.get("time", 0) or 0) for fill in fills)
+        income_start_ms = min(int(fill.get("time", 0) or 0) for fill in entry_fills)
+        exit_end_ms = max(int(fill.get("time", 0) or 0) for fill in closing_fills) + 1
         tracker = PerformanceTracker(
             self.order_manager.future_client_for(symbol),
             mongo_handler,
             execution_mode,
         )
-        accounting = None
-        for attempt in range(3):
-            accounting = tracker.sync_window(
-                income_start_ms,
-                int(datetime.now(timezone.utc).timestamp() * 1000) + 1,
-                symbol=symbol,
-            )
-            has_realized_pnl = any(
-                str(row.get("incomeType", "")).upper() == "REALIZED_PNL"
-                for row in tracker.last_records
-            )
-            has_exit_commission = any(
-                str(row.get("incomeType", "")).upper() == "COMMISSION"
-                and int(row.get("time", 0) or 0) >= first_exit_fill_ms
-                for row in tracker.last_records
-            )
-            if has_realized_pnl and has_exit_commission:
-                break
-            if attempt < 2:
-                time.sleep(0.5)
-        if accounting is None or not (has_realized_pnl and has_exit_commission):
+        accounting = tracker.sync_window(income_start_ms, exit_end_ms, symbol=symbol)
+        lifecycle_fills = entry_fills + closing_fills
+        if any("commission" not in fill for fill in lifecycle_fills):
             raise RuntimeError(
-                f"Binance exit income was incomplete for completed trade {trade_id}"
+                f"Binance fill commission was unavailable for {trade_id}"
             )
-        pnl = accounting.net_pnl
+        realized_pnl = sum(
+            float(fill.get("realizedPnl", 0) or 0) for fill in closing_fills
+        )
+        commission = -sum(
+            abs(float(fill.get("commission", 0) or 0)) for fill in lifecycle_fills
+        )
+        pnl = realized_pnl + commission + accounting.funding
         exit_record: Dict[str, Any] = {
             **persisted_trade,
             "trade_id": trade_id,
@@ -668,7 +693,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             "exit_price": exit_price,
             "duration_seconds": duration_seconds,
             "pnl": pnl,
-            "pnl_source": "binance_futures_income",
+            "pnl_source": "binance_trade_fills_and_funding",
             "income_summary": accounting.to_dict(),
         }
         try:
@@ -1141,10 +1166,25 @@ class TradeChecker(AuthenticationManager, RedisManager):
             if len(candidates) == 1:
                 persisted = candidates[0]
             elif candidates:
-                open_order_ids = {
-                    str(order.get("algoId", ""))
-                    for order in self.order_manager.get_conditional_open_orders(symbol)
+                open_orders = self.order_manager.get_conditional_open_orders(symbol)
+                open_orders_by_id = {
+                    str(order.get("algoId", "")): order for order in open_orders
                 }
+                open_order_ids = set(open_orders_by_id)
+
+                def has_full_coverage(candidate: Dict[str, Any]) -> bool:
+                    for field in ("sl_order_id", "tp_order_id"):
+                        order = open_orders_by_id.get(str(candidate.get(field, "")))
+                        if not order:
+                            continue
+                        if str(order.get("closePosition", "")).lower() == "true":
+                            return True
+                        order_quantity = float(
+                            order.get("quantity") or order.get("origQty") or 0
+                        )
+                        if order_quantity >= abs(positionAmount):
+                            return True
+                    return False
 
                 def candidate_rank(candidate: Dict[str, Any]) -> Tuple[int, float, str]:
                     mapped_ids = {
@@ -1161,7 +1201,17 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         entered = 0.0
                     return verified, entered, str(candidate.get("trade_id", ""))
 
-                persisted = max(candidates, key=candidate_rank)
+                fully_covered = [
+                    candidate
+                    for candidate in candidates
+                    if has_full_coverage(candidate)
+                ]
+                if not fully_covered:
+                    raise RuntimeError(
+                        f"Duplicate trade records for {symbol} have no verified "
+                        "full-position protective coverage; preserving all orders"
+                    )
+                persisted = max(fully_covered, key=candidate_rank)
                 logger.error(
                     "Resolved %d Redis trade records for %s to %s using protective "
                     "order identity, entry recency, and trade ID ordering.",
@@ -1223,6 +1273,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
             persisted = self.load_trade(trade_id) or {}
             symbol = str(persisted.get("symbol") or trade_id)
             if symbol not in active_symbols:
+                if len(persisted_by_symbol.get(symbol, [])) > 1:
+                    logger.error(
+                        "Preserving duplicate flat-position records for %s; "
+                        "individual lifecycle attribution is ambiguous",
+                        symbol,
+                    )
+                    continue
                 logger.info(
                     "[CLEANUP] Broker exposure is flat for "
                     f"symbol={symbol}, trade_id={trade_id}; starting cooldown"

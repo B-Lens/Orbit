@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -72,11 +72,21 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     checker.order_manager.get_account_trades.return_value = [
         {
+            "side": "BUY",
+            "price": "100",
+            "qty": "2",
+            "time": exit_time_ms - 600_000,
+            "commission": "1",
+            "realizedPnl": "0",
+        },
+        {
             "side": "SELL",
             "price": "110",
             "qty": "2",
             "time": exit_time_ms,
-        }
+            "commission": "1",
+            "realizedPnl": "22",
+        },
     ]
     checker.order_manager.future_client_for.return_value.get_income_history.return_value = [
         {
@@ -101,14 +111,12 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
         outcome="winning", reasoning="momentum continued", confidence=0.9
     )
     checker._position_is_flat = MagicMock(return_value=True)
-    entered_at = datetime.now(timezone.utc) - timedelta(minutes=10)
     persisted = {
         "trade_id": "decision-1",
         "symbol": "BTCUSDT",
         "positionSide": "BUY",
         "price": 100.0,
         "quantity": 2.0,
-        "entered_at": entered_at.isoformat(),
     }
     checker.load_trade = MagicMock(return_value=persisted)
     checker.delete_trade_with_orders = MagicMock()
@@ -118,7 +126,7 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
 
     exit_record = checker.mongo_handler.store_trade_exit.call_args.args[0]
     assert exit_record["pnl"] == 20.0
-    assert exit_record["pnl_source"] == "binance_futures_income"
+    assert exit_record["pnl_source"] == "binance_trade_fills_and_funding"
     assert exit_record["duration_seconds"] >= 599
     assert exit_record["llm_exit_reasoning"]["reasoning"] == "momentum continued"
     checker.mongo_handler.append_decision_event.assert_called_once()

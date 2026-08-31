@@ -1056,14 +1056,13 @@ class OrderManager(AuthenticationManager, RedisManager):
         return {}
 
     def get_account_trades(
-        self, symbol: str, start_time_ms: int
+        self, symbol: str, start_time_ms: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """Return Binance Futures fills for one symbol since entry."""
-        return self.future_client_for(symbol).get_account_trades(
-            symbol=symbol,
-            startTime=start_time_ms,
-            recvWindow=60000,
-        )
+        params: Dict[str, Any] = {"symbol": symbol, "limit": 1000, "recvWindow": 60000}
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+        return self.future_client_for(symbol).get_account_trades(**params)
 
     def get_conditional_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
         """Return all **open** conditional (SL/TP) algo orders for *symbol*.

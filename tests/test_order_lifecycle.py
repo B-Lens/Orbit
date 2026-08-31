@@ -324,7 +324,7 @@ class TestTradeChecker(unittest.TestCase):
         }
         checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
         checker.order_manager.get_conditional_open_orders.return_value = [
-            {"algoId": "202"}
+            {"algoId": "202", "quantity": "0.5"}
         ]
         checker.delete_trade_with_orders = MagicMock()
 
