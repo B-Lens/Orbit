@@ -604,7 +604,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
             self.set_cooldown(symbol)
             return True
         income_start_ms = max(0, int(entered_at.timestamp() * 1000) - 60_000)
-        closing_side = "SELL" if persisted_trade.get("positionSide") == "BUY" else "BUY"
+        position_direction = str(
+            persisted_trade.get("positionSide") or persisted_trade.get("side") or ""
+        ).upper()
+        if position_direction not in {"BUY", "SELL"}:
+            raise RuntimeError(f"Trade direction was unavailable for {trade_id}")
+        closing_side = "SELL" if position_direction == "BUY" else "BUY"
         fills = [
             fill
             for fill in self.order_manager.get_account_trades(symbol, income_start_ms)
