@@ -235,6 +235,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         symbol: str,
         trade: Dict[str, Any],
         risk_management: Dict[str, Any],
+        current_price: Optional[float] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """Guarantee that exactly one SL (and optionally one TP) exists."""
         try:
@@ -300,10 +301,33 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
                 take_profit_order = None
 
-            if stop_loss_order is None:
-                sl_price = persisted.get("stop_loss_price") or self.calculate_sl_price(
-                    trade, risk_management
+            stop_price = persisted.get("stop_loss_price")
+            target_price = persisted.get("target")
+            if current_price is not None:
+                is_long = trade["positionSide"] == "BUY"
+                stop_crossed = stop_price is not None and (
+                    current_price <= float(stop_price)
+                    if is_long
+                    else current_price >= float(stop_price)
                 )
+                target_crossed = target_price is not None and (
+                    current_price >= float(target_price)
+                    if is_long
+                    else current_price <= float(target_price)
+                )
+                if (stop_loss_order is None and stop_crossed) or (
+                    take_profit_order is None and target_crossed
+                ):
+                    logger.warning(
+                        "[SELF-HEAL] Missing exit order for %s has already crossed "
+                        "its trigger; waiting for broker position reconciliation",
+                        symbol,
+                    )
+                    self._mark_exit_pending(symbol, trade_id)
+                    return stop_loss_order, take_profit_order
+
+            if stop_loss_order is None:
+                sl_price = stop_price or self.calculate_sl_price(trade, risk_management)
                 stop_loss_order = self.order_manager.place_sl_order(
                     symbol=symbol,
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
@@ -325,7 +349,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 take_profit_order is None
                 and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
             ):
-                target_price = persisted.get("target") or self.calculate_target_price(
+                target_price = target_price or self.calculate_target_price(
                     trade, risk_management
                 )
                 take_profit_order = self.order_manager.place_target_order(
@@ -1108,7 +1132,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                             continue
 
                         stop_loss_order, take_profit_order = self.ensure_orders(
-                            symbol, tradesFound[symbol], risk_management
+                            symbol,
+                            tradesFound[symbol],
+                            risk_management,
+                            current_price,
                         )
                         field_params = self.update_trade_data(
                             symbol,

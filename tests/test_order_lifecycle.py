@@ -232,6 +232,45 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
+    def test_missing_crossed_target_waits_for_position_reconciliation(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "101",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+                "triggerPrice": "95",
+            }
+        ]
+        checker.load_trade = MagicMock(
+            return_value={
+                "sl_order_id": "101",
+                "tp_order_id": "202",
+                "stop_loss_price": 95,
+                "target": 105,
+            }
+        )
+        checker.register_order = MagicMock()
+        checker.update_trade_fields = MagicMock()
+        checker._mark_exit_pending = MagicMock()
+
+        _, take_profit = checker.ensure_orders(
+            "BTCUSDT",
+            {
+                "trade_id": "trade-1",
+                "positionSide": "BUY",
+                "price": 100,
+                "quantity": 0.1,
+            },
+            {},
+            current_price=106,
+        )
+
+        self.assertIsNone(take_profit)
+        checker.order_manager.place_target_order.assert_not_called()
+        checker._mark_exit_pending.assert_called_once_with("BTCUSDT", "trade-1")
+
     def test_position_discovery_ignores_stale_entry_price_without_exposure(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
