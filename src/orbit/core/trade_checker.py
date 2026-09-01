@@ -560,6 +560,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             return False
 
+        self.set_cooldown(symbol)
         self._cancel_protective_orders(symbol, persisted_trade)
         current_trade = self.load_trade(trade_id) or {}
         persisted_order_ids = {
@@ -600,7 +601,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
         if mongo_handler is None:
             self.delete_trade_with_orders(trade_id)
             getattr(self, "trades", {}).pop(symbol, None)
-            self.set_cooldown(symbol)
             return True
         position_direction = str(
             persisted_trade.get("positionSide") or persisted_trade.get("side") or ""
@@ -731,10 +731,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 "confidence": 0.0,
                 "error": str(error),
             }
-        # Keep entry availability closed while durable reconciliation is retried.
-        # Each failed scan refreshes this marker; successful persistence below then
-        # performs the normal state cleanup and final post-exit cooldown.
-        self.set_cooldown(symbol)
         if not mongo_handler.store_trade_exit(exit_record):
             raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
         mongo_handler.append_decision_event(
@@ -1326,7 +1322,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     open_order_ids = {
                         str(order.get("algoId", ""))
                         for order in self.order_manager.get_conditional_open_orders(
-                            symbol
+                            symbol, raise_on_error=True
                         )
                         if order.get("algoId")
                     }

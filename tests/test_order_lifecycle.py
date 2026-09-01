@@ -92,6 +92,12 @@ class TestOrderManager(unittest.TestCase):
             self.manager.future_client.get_account_trades.call_args_list[1].kwargs,
         )
 
+    def test_conditional_order_query_can_fail_closed(self):
+        self.manager.future_client.sign_request.side_effect = RuntimeError("timeout")
+
+        with self.assertRaisesRegex(RuntimeError, "Could not verify"):
+            self.manager.get_conditional_open_orders("BTCUSDT", raise_on_error=True)
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 

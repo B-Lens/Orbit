@@ -1106,7 +1106,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             window_start = window_end + 1
         return records
 
-    def get_conditional_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
+    def get_conditional_open_orders(
+        self, symbol: str, raise_on_error: bool = False
+    ) -> List[Dict[str, Any]]:
         """Return all **open** conditional (SL/TP) algo orders for *symbol*.
 
         Only orders with ``algoStatus == "NEW"`` are included.
@@ -1146,6 +1148,10 @@ class OrderManager(AuthenticationManager, RedisManager):
                         error=error,
                         Location="OrderManager -> get_conditional_open_orders",
                     )
+                    if raise_on_error:
+                        raise RuntimeError(
+                            f"Could not verify conditional orders for {symbol}"
+                        ) from error
                     return []
 
             except Exception as e:
@@ -1153,6 +1159,10 @@ class OrderManager(AuthenticationManager, RedisManager):
                     e,
                     context_description="Exception caught while fetching conditional open orders",
                 )
+                if raise_on_error:
+                    raise RuntimeError(
+                        f"Could not verify conditional orders for {symbol}"
+                    ) from e
                 return []
 
         return []
