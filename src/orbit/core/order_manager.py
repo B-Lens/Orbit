@@ -237,7 +237,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             balance is insufficient.
         """
         usdt_balance = self.get_usdt_balance(symbol)
-        amount_to_spend = self.config["FIXED_TRADE_AMOUNT"].get(symbol, self.FIXED_SPEND_USDT)
+        amount_to_spend = self.config["FIXED_TRADE_AMOUNT"].get(
+            symbol, self.FIXED_SPEND_USDT
+        )
 
         if usdt_balance <= 0 or usdt_balance < amount_to_spend:
             msg = (
@@ -347,6 +349,20 @@ class OrderManager(AuthenticationManager, RedisManager):
         )
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
 
+        if not isinstance(resp, dict):
+            raise RuntimeError(
+                f"Conditional order {algo_id} cancellation was not confirmed"
+            )
+        status = str(resp.get("algoStatus") or resp.get("status") or "").upper()
+        code = str(resp.get("code", ""))
+        message = str(resp.get("msg", "")).lower()
+        if status != "CANCELED" and not (
+            code == "200" and message in {"success", "successful"}
+        ):
+            raise RuntimeError(
+                f"Conditional order {algo_id} cancellation was not confirmed: {resp}"
+            )
+
         self.deregister_order(str(algo_id))
 
         return resp
@@ -372,9 +388,14 @@ class OrderManager(AuthenticationManager, RedisManager):
             The API response dict, or ``None`` on failure.
         """
         return self._place_exit_order(
-            symbol=symbol, side=side, price=stoploss_price, quantity=quantity,
-            trade_id=trade_id, order_type="STOP_MARKET",
-            price_field="stopLossPrice", label="SL",
+            symbol=symbol,
+            side=side,
+            price=stoploss_price,
+            quantity=quantity,
+            trade_id=trade_id,
+            order_type="STOP_MARKET",
+            price_field="stopLossPrice",
+            label="SL",
             notify=self.send_sl_update_notifier,
         )
 
@@ -399,27 +420,52 @@ class OrderManager(AuthenticationManager, RedisManager):
             The API response dict, or ``None`` on failure.
         """
         return self._place_exit_order(
-            symbol=symbol, side=side, price=target_price, quantity=quantity,
-            trade_id=trade_id, order_type="TAKE_PROFIT_MARKET",
-            price_field="targetPrice", label="Target",
+            symbol=symbol,
+            side=side,
+            price=target_price,
+            quantity=quantity,
+            trade_id=trade_id,
+            order_type="TAKE_PROFIT_MARKET",
+            price_field="targetPrice",
+            label="Target",
             notify=self.send_signal_updates,
         )
 
     def _place_exit_order(
-        self, *, symbol: str, side: str, price: float, quantity: float,
-        trade_id: Optional[str], order_type: str, price_field: str,
-        label: str, notify: Any,
+        self,
+        *,
+        symbol: str,
+        side: str,
+        price: float,
+        quantity: float,
+        trade_id: Optional[str],
+        order_type: str,
+        price_field: str,
+        label: str,
+        notify: Any,
     ) -> Optional[Dict[str, Any]]:
         """Place a normalized SL/TP order and emit its request and response."""
         try:
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
             quantity = self.adjust_quantity_step(symbol, quantity)
-            request = {"symbol": symbol, "side": side, price_field: price, "quantity": quantity}
-            notify(data=None, description=f"{label} Order Request for {symbol}", fields=request)
+            request = {
+                "symbol": symbol,
+                "side": side,
+                price_field: price,
+                "quantity": quantity,
+            }
+            notify(
+                data=None,
+                description=f"{label} Order Request for {symbol}",
+                fields=request,
+            )
             response = self.place_algo_conditional_order(
-                symbol=symbol, side=side, order_type=order_type,
-                stop_price=round(price, 1), quantity=quantity,
+                symbol=symbol,
+                side=side,
+                order_type=order_type,
+                stop_price=round(price, 1),
+                quantity=quantity,
                 trade_id=trade_id or symbol,
             )
             if trade_id and self.mongo_handler is not None:
@@ -452,7 +498,8 @@ class OrderManager(AuthenticationManager, RedisManager):
                     },
                 )
             self.clientExceptionHandler(
-                symbol=symbol, error=error,
+                symbol=symbol,
+                error=error,
                 Location=f"OrderManager -> place_{label.lower()}_order",
             )
         except Exception as error:
@@ -511,18 +558,16 @@ class OrderManager(AuthenticationManager, RedisManager):
         if stop_distance <= 0:
             return 0.0, 0.0
         qty_risk = risk_value / stop_distance
-        qty_notional = (
-            equity * self.risk_guard.max_position_notional_pct / entry_price
-        )
+        qty_notional = equity * self.risk_guard.max_position_notional_pct / entry_price
         qty_margin = available_margin * leverage / entry_price
 
         filters = self.get_symbol_filters(symbol)
         min_notional_filter = filters.get("MIN_NOTIONAL")
-        min_notional = float(min_notional_filter["notional"]) if min_notional_filter else 5.0
-        lot_size_filter = filters.get("LOT_SIZE")
-        lot_size_min_qty = (
-            float(lot_size_filter["minQty"]) if lot_size_filter else 0.0
+        min_notional = (
+            float(min_notional_filter["notional"]) if min_notional_filter else 5.0
         )
+        lot_size_filter = filters.get("LOT_SIZE")
+        lot_size_min_qty = float(lot_size_filter["minQty"]) if lot_size_filter else 0.0
         min_qty = max(min_notional / entry_price, lot_size_min_qty)
         qty = min(qty_risk, qty_notional, qty_margin) * self.POSITION_SIZE_BUFFER
         qty = self.adjust_quantity_step(symbol, qty)
@@ -530,7 +575,9 @@ class OrderManager(AuthenticationManager, RedisManager):
         if qty < min_qty:
             return 0.0, 0.0
         required_margin = (entry_price * qty) / leverage
-        logger.info(f"Calculated position size for {symbol}: Qty={qty}, Required Margin={required_margin}")
+        logger.info(
+            f"Calculated position size for {symbol}: Qty={qty}, Required Margin={required_margin}"
+        )
         return qty, required_margin
 
     def place_order(
@@ -585,10 +632,17 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             if sl is not None and symbol in risk_management:
                 qty_from_alloc, req_margin = self.calculate_risk_position_size(
-                    symbol=symbol, entry_price=price, stop_price=sl,
-                    risk_perc=risk_management[symbol], leverage=leverage
+                    symbol=symbol,
+                    entry_price=price,
+                    stop_price=sl,
+                    risk_perc=risk_management[symbol],
+                    leverage=leverage,
                 )
-                self.send_logs(data=None, description=f"Required margin for {symbol} is {req_margin}", fields=None)
+                self.send_logs(
+                    data=None,
+                    description=f"Required margin for {symbol} is {req_margin}",
+                    fields=None,
+                )
             else:
                 qty_from_alloc = self.fixed_asset_allocated(symbol=symbol, price=price)
 
@@ -621,7 +675,12 @@ class OrderManager(AuthenticationManager, RedisManager):
                 self.send_alerts(
                     data=None,
                     description=f"Computed quantity <= 0 for {symbol}",
-                    fields={"symbol": symbol, "raw_quantity": quantity, "leverage": leverage, "balance_available": balance_available},
+                    fields={
+                        "symbol": symbol,
+                        "raw_quantity": quantity,
+                        "leverage": leverage,
+                        "balance_available": balance_available,
+                    },
                 )
                 self._record_order_rejection(
                     trade_id, "quantity_non_positive", quantity=quantity
@@ -630,12 +689,16 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             adjusted_price = self.adjust_price_tick(symbol, price)
             if adjusted_price != price:
-                logger.warning(f"[{symbol}] Price adjusted for tickSize: {price} -> {adjusted_price}")
+                logger.warning(
+                    f"[{symbol}] Price adjusted for tickSize: {price} -> {adjusted_price}"
+                )
             price = adjusted_price
 
             qty_valid = self.adjust_quantity_step(symbol, quantity)
             if qty_valid != quantity:
-                logger.warning(f"[{symbol}] Quantity adjusted for stepSize: {quantity} -> {qty_valid}")
+                logger.warning(
+                    f"[{symbol}] Quantity adjusted for stepSize: {quantity} -> {qty_valid}"
+                )
             quantity = qty_valid
 
             if sl is None:
@@ -708,7 +771,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             )
 
             futures_client = self._order_client_for(symbol)
-            futures_client.change_leverage(symbol=symbol, leverage=leverage, recvWindow=60000)
+            futures_client.change_leverage(
+                symbol=symbol, leverage=leverage, recvWindow=60000
+            )
 
             params = {
                 "symbol": symbol,
@@ -732,7 +797,9 @@ class OrderManager(AuthenticationManager, RedisManager):
                 return None, None, None
 
             order_id = order_response.get("orderId")
-            client_order_id = order_response.get("clientOrderId") or params.get("newClientOrderId")
+            client_order_id = order_response.get("clientOrderId") or params.get(
+                "newClientOrderId"
+            )
             if trade_id and self.mongo_handler is not None:
                 identity = order_id or client_order_id
                 self.mongo_handler.append_decision_event(
@@ -768,11 +835,23 @@ class OrderManager(AuthenticationManager, RedisManager):
                     stoploss_price = round(price * ((100.0 + sl_percent) / 100.0), 1)
 
             sl_target_side = self._get_opposite_side(side)
-            self.place_sl_order(symbol, sl_target_side, stoploss_price, quantity, trade_id=effective_trade_id)
+            self.place_sl_order(
+                symbol,
+                sl_target_side,
+                stoploss_price,
+                quantity,
+                trade_id=effective_trade_id,
+            )
             time.sleep(1)
 
             if target is not None:
-                self.place_target_order(symbol, sl_target_side, target, quantity, trade_id=effective_trade_id)
+                self.place_target_order(
+                    symbol,
+                    sl_target_side,
+                    target,
+                    quantity,
+                    trade_id=effective_trade_id,
+                )
 
             logger.info(f"Order placed: {order_response}")
             return order_response, quantity, field_params
@@ -783,10 +862,14 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "exchange_client_error",
                 error_code=getattr(error, "error_code", None),
             )
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="Order Manager -> place_order")
+            self.clientExceptionHandler(
+                symbol=symbol, error=error, Location="Order Manager -> place_order"
+            )
         except Exception as e:
             self._record_order_rejection(trade_id, "order_exception")
-            self.handle_exception(e, context_description="Exception caught while Placing order")
+            self.handle_exception(
+                e, context_description="Exception caught while Placing order"
+            )
 
         return None, None, None
 
@@ -816,13 +899,19 @@ class OrderManager(AuthenticationManager, RedisManager):
             current_price = self.get_symbol_price(symbol)
 
             if quantity is None:
-                qty_alloc = self.fixed_asset_allocated(symbol=symbol, price=current_price)
+                qty_alloc = self.fixed_asset_allocated(
+                    symbol=symbol, price=current_price
+                )
                 balance = self.get_usdt_balance(symbol)
                 if balance < self.FIXED_SPEND_USDT or qty_alloc <= 0:
                     self.send_alerts(
                         data=None,
                         description=f"Not Enough funds for {symbol} market order",
-                        fields={"symbol": symbol, "balance": balance, "price": current_price},
+                        fields={
+                            "symbol": symbol,
+                            "balance": balance,
+                            "price": current_price,
+                        },
                     )
                     return None
                 quantity = qty_alloc
@@ -832,17 +921,29 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             qty_valid = self.adjust_quantity_step(symbol, quantity)
             if qty_valid != quantity:
-                logger.warning(f"[{symbol}] MARKET qty adjusted for stepSize: {quantity} -> {qty_valid}")
+                logger.warning(
+                    f"[{symbol}] MARKET qty adjusted for stepSize: {quantity} -> {qty_valid}"
+                )
             quantity = qty_valid
 
             if quantity <= 0:
-                self.send_alerts(data=None, description=f"Computed MARKET quantity <= 0 for {symbol}", fields={"symbol": symbol})
+                self.send_alerts(
+                    data=None,
+                    description=f"Computed MARKET quantity <= 0 for {symbol}",
+                    fields={"symbol": symbol},
+                )
                 return None
 
             if not self.validate_notional(symbol, current_price, quantity):
                 filters = self.get_symbol_filters(symbol)
-                min_notional = filters["MIN_NOTIONAL"]["notional"] if filters.get("MIN_NOTIONAL") else "N/A"
-                logger.error(f"[NOTIONAL ERROR] {symbol} MARKET order rejected. Required: {min_notional}, Got: {current_price * quantity}")
+                min_notional = (
+                    filters["MIN_NOTIONAL"]["notional"]
+                    if filters.get("MIN_NOTIONAL")
+                    else "N/A"
+                )
+                logger.error(
+                    f"[NOTIONAL ERROR] {symbol} MARKET order rejected. Required: {min_notional}, Got: {current_price * quantity}"
+                )
                 self.send_alerts(
                     data=None,
                     description="Market order rejected – Notional too small",
@@ -858,19 +959,35 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "recvWindow": 60000,
             }
 
-            self.send_signal_updates(data=None, description=f"Market Order request for {symbol}", fields=market_order_params)
+            self.send_signal_updates(
+                data=None,
+                description=f"Market Order request for {symbol}",
+                fields=market_order_params,
+            )
 
-            order_response = self._order_client_for(symbol).new_order(**market_order_params)
+            order_response = self._order_client_for(symbol).new_order(
+                **market_order_params
+            )
 
             if order_response:
-                self.send_signal_updates(data=None, description=f"{symbol} market order placed successfully", fields=order_response)
+                self.send_signal_updates(
+                    data=None,
+                    description=f"{symbol} market order placed successfully",
+                    fields=order_response,
+                )
 
             return order_response
 
         except ClientError as error:
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="Order Manager -> place_market_order")
+            self.clientExceptionHandler(
+                symbol=symbol,
+                error=error,
+                Location="Order Manager -> place_market_order",
+            )
         except Exception as e:
-            self.handle_exception(e, context_description="Exception caught while placing market order")
+            self.handle_exception(
+                e, context_description="Exception caught while placing market order"
+            )
 
         return None
 
@@ -895,12 +1012,18 @@ class OrderManager(AuthenticationManager, RedisManager):
             logger.info(f"Order canceled: {result}")
             return result
         except ClientError as error:
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> cancel_order")
+            self.clientExceptionHandler(
+                symbol=symbol, error=error, Location="OrderManager -> cancel_order"
+            )
         except Exception as e:
-            self.handle_exception(e, context_description="Exception caught while Cancelling order")
+            self.handle_exception(
+                e, context_description="Exception caught while Cancelling order"
+            )
         return None
 
-    def get_open_orders(self, symbol: str, orderId: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_open_orders(
+        self, symbol: str, orderId: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Return all orders for *symbol* (optionally filtered by *orderId*).
 
         Args:
@@ -917,9 +1040,13 @@ class OrderManager(AuthenticationManager, RedisManager):
             logger.info(f"Open orders: {orders} for symbol {symbol}")
             return orders
         except ClientError as error:
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> get_open_orders")
+            self.clientExceptionHandler(
+                symbol=symbol, error=error, Location="OrderManager -> get_open_orders"
+            )
         except Exception as e:
-            self.handle_exception(e, context_description="Exception caught while fetching open order")
+            self.handle_exception(
+                e, context_description="Exception caught while fetching open order"
+            )
         return []
 
     def get_order(self, symbol: str, order_id: int) -> Dict[str, Any]:
@@ -942,7 +1069,60 @@ class OrderManager(AuthenticationManager, RedisManager):
             )
         return {}
 
-    def get_conditional_open_orders(self, symbol: str) -> List[Dict[str, Any]]:
+    def get_account_trades(
+        self,
+        symbol: str,
+        start_time_ms: Optional[int] = None,
+        end_time_ms: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return every Binance Futures fill in a bounded lifecycle window."""
+        end_time_ms = end_time_ms or int(time.time() * 1000)
+        start_time_ms = start_time_ms or end_time_ms - 90 * 24 * 60 * 60 * 1000
+        max_window_ms = 7 * 24 * 60 * 60 * 1000
+        client = self.future_client_for(symbol)
+        records: List[Dict[str, Any]] = []
+        seen_ids: set[int] = set()
+        window_start = start_time_ms
+        while window_start <= end_time_ms:
+            window_end = min(window_start + max_window_ms - 1, end_time_ms)
+            params: Dict[str, Any] = {
+                "symbol": symbol,
+                "startTime": window_start,
+                "endTime": window_end,
+                "limit": 1000,
+                "recvWindow": 60000,
+            }
+            while True:
+                page = client.get_account_trades(**params)
+                added = [
+                    row
+                    for row in page
+                    if int(row.get("id", -1)) not in seen_ids
+                    and window_start
+                    <= int(row.get("time", window_start) or window_start)
+                    <= window_end
+                ]
+                for row in added:
+                    seen_ids.add(int(row.get("id", -1)))
+                    records.append(row)
+                if len(page) < 1000 or any(
+                    int(row.get("time", window_start) or window_start) > window_end
+                    for row in page
+                ):
+                    break
+                if not added:
+                    raise RuntimeError(
+                        "Binance account-trade pagination did not advance"
+                    )
+                params.pop("startTime", None)
+                params.pop("endTime", None)
+                params["fromId"] = max(int(row["id"]) for row in page) + 1
+            window_start = window_end + 1
+        return records
+
+    def get_conditional_open_orders(
+        self, symbol: str, raise_on_error: bool = False
+    ) -> List[Dict[str, Any]]:
         """Return all **open** conditional (SL/TP) algo orders for *symbol*.
 
         Only orders with ``algoStatus == "NEW"`` are included.
@@ -982,10 +1162,21 @@ class OrderManager(AuthenticationManager, RedisManager):
                         error=error,
                         Location="OrderManager -> get_conditional_open_orders",
                     )
+                    if raise_on_error:
+                        raise RuntimeError(
+                            f"Could not verify conditional orders for {symbol}"
+                        ) from error
                     return []
 
             except Exception as e:
-                self.handle_exception(e, context_description="Exception caught while fetching conditional open orders")
+                self.handle_exception(
+                    e,
+                    context_description="Exception caught while fetching conditional open orders",
+                )
+                if raise_on_error:
+                    raise RuntimeError(
+                        f"Could not verify conditional orders for {symbol}"
+                    ) from e
                 return []
 
         return []
@@ -1024,10 +1215,16 @@ class OrderManager(AuthenticationManager, RedisManager):
             future_leverage = 10 if symbol == "BTCUSDT" else leverage
 
             if self.mongo_handler is None:
-                self.send_alerts(data=None, description=f"MongoHandler not available; cannot place bridge order for {symbol}", fields=None)
+                self.send_alerts(
+                    data=None,
+                    description=f"MongoHandler not available; cannot place bridge order for {symbol}",
+                    fields=None,
+                )
                 return None, None
 
-            existing_data = self.mongo_handler.get_mongo_historical_data(symbol, interval="15m")
+            existing_data = self.mongo_handler.get_mongo_historical_data(
+                symbol, interval="15m"
+            )
 
             if side == "BUY":
                 sl_price = get_swing_sl(df=existing_data, n=5, buy_price=price)
@@ -1037,7 +1234,11 @@ class OrderManager(AuthenticationManager, RedisManager):
             sl_percent = float(risk_management.get("stop_loss_percent", 0))
 
             if sl_price is None:
-                self.send_alerts(data=None, description=f"No swing level found for {symbol}. Falling back to percent SL.", fields={"symbol": symbol, "price": price, "side": side})
+                self.send_alerts(
+                    data=None,
+                    description=f"No swing level found for {symbol}. Falling back to percent SL.",
+                    fields={"symbol": symbol, "price": price, "side": side},
+                )
                 if side == "BUY":
                     sl_price = round(price * (1.0 - sl_percent / 100.0), 1)
                 else:
@@ -1046,7 +1247,9 @@ class OrderManager(AuthenticationManager, RedisManager):
             sl_price = round(sl_price, 1)
             price_diff = abs(sl_price - price)
             if price_diff <= 0:
-                logger.error(f"Computed price_diff <= 0 for bridge order: price={price}, sl_price={sl_price}")
+                logger.error(
+                    f"Computed price_diff <= 0 for bridge order: price={price}, sl_price={sl_price}"
+                )
                 return None, None
 
             quantity = (self.MAX_LOSS_PER_BRIDGE / future_leverage) / price_diff
@@ -1081,11 +1284,15 @@ class OrderManager(AuthenticationManager, RedisManager):
                     status = order_status[0].get("status")
 
                 if status == "FILLED":
-                    logger.info(f"Bridge order filled for {symbol}, placing SL order at {sl_price}")
+                    logger.info(
+                        f"Bridge order filled for {symbol}, placing SL order at {sl_price}"
+                    )
                     break
 
                 if time.time() - start_time > timeout:
-                    logger.info(f"Timeout reached for bridge order for {symbol}. OrderId={order_id}")
+                    logger.info(
+                        f"Timeout reached for bridge order for {symbol}. OrderId={order_id}"
+                    )
                     break
 
                 time.sleep(2)
@@ -1094,13 +1301,21 @@ class OrderManager(AuthenticationManager, RedisManager):
             if used_qty is None:
                 used_qty = quantity
 
-            self.place_sl_order(symbol, sl_side, sl_price, used_qty, trade_id=effective_trade_id)
+            self.place_sl_order(
+                symbol, sl_side, sl_price, used_qty, trade_id=effective_trade_id
+            )
             return order_response, used_qty
 
         except ClientError as error:
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="Order Manager -> place_bridge_order")
+            self.clientExceptionHandler(
+                symbol=symbol,
+                error=error,
+                Location="Order Manager -> place_bridge_order",
+            )
         except Exception as e:
-            self.handle_exception(e, context_description="Exception caught at place_bridge_order")
+            self.handle_exception(
+                e, context_description="Exception caught at place_bridge_order"
+            )
 
         return None, None
 
@@ -1137,7 +1352,12 @@ class OrderManager(AuthenticationManager, RedisManager):
             quantity = self.adjust_quantity_step(symbol, quantity)
 
             modified_order = self._order_client_for(symbol).modify_order(
-                symbol=symbol, side=side, orderId=orderId, price=price, quantity=quantity, recvWindow=60000,
+                symbol=symbol,
+                side=side,
+                orderId=orderId,
+                price=price,
+                quantity=quantity,
+                recvWindow=60000,
             )
 
             self.send_active_trades_info(
@@ -1145,11 +1365,17 @@ class OrderManager(AuthenticationManager, RedisManager):
                 description=f"{symbol} {order_type or ''} Modified",
                 fields=modified_order,
             )
-            return modified_order if isinstance(modified_order, list) else [modified_order]
+            return (
+                modified_order if isinstance(modified_order, list) else [modified_order]
+            )
 
         except ClientError as error:
-            self.clientExceptionHandler(symbol=symbol, error=error, Location="OrderManager -> modify_order")
+            self.clientExceptionHandler(
+                symbol=symbol, error=error, Location="OrderManager -> modify_order"
+            )
         except Exception as e:
-            self.handle_exception(e, context_description="Exception caught while modifying order")
+            self.handle_exception(
+                e, context_description="Exception caught while modifying order"
+            )
 
         return []

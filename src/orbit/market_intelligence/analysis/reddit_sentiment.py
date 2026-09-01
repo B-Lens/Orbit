@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
 from orbit.utils.utils import extract_json
-from orbit.market_intelligence.llm.prompt_manager import PromptManager
+from orbit.llm.prompt_manager import PromptManager
 
 logger = logging.getLogger("Orbit")
 

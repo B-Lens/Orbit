@@ -177,6 +177,29 @@ class RedisManager:
         trade.update(updates)
         self.save_trade(trade_id, trade)
 
+    def merge_trade_fields(self, trade_id: str, updates: Dict[str, Any]) -> None:
+        """Atomically merge fields without erasing concurrent lifecycle state."""
+        script = """
+        local current = redis.call('GET', KEYS[1])
+        local trade = {}
+        if current then
+            trade = cjson.decode(current)
+        end
+        local updates = cjson.decode(ARGV[1])
+        for key, value in pairs(updates) do
+            trade[key] = value
+        end
+        redis.call('SET', KEYS[1], cjson.encode(trade))
+        return 1
+        """
+        try:
+            self.redis_client.eval(script, 1, _trade_key(trade_id), json.dumps(updates))
+        except Exception as error:
+            logger.exception(
+                "[Redis] merge_trade_fields(%s) failed: %s", trade_id, error
+            )
+            raise
+
     def delete_trade_with_orders(self, trade_id: str) -> None:
         """Remove ``trade:{trade_id}`` and all associated ``order:*`` keys.
 

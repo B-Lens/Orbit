@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from orbit.core.main import BinanceAutomation
 from orbit.core.order_manager import OrderManager
@@ -29,16 +29,7 @@ class TestReportingLifecycle(unittest.TestCase):
 
         self.assertEqual(signals, [])
         analyzer.mongo_handler.handle_mongo_data.assert_not_called()
-        analyzer._record_decision.assert_called_once_with(
-            symbol="ETHUSDT",
-            outcome="rejected",
-            reason="active_position",
-            cooldown_until=None,
-            position_side="BUY",
-            position_quantity=0.5,
-            strategy="orbit.strategies.eth_strategy.ETHStrategy",
-            strategy_version=ANY,
-        )
+        analyzer._record_decision.assert_not_called()
 
     def test_signal_blocks_distinguish_active_positions_and_post_exit_cooldowns(self):
         automation = BinanceAutomation.__new__(BinanceAutomation)
@@ -78,6 +69,7 @@ class TestReportingLifecycle(unittest.TestCase):
             "status": "FILLED",
             "executedQty": "0.5",
             "avgPrice": "100.25",
+            "time": 1_722_470_400_000,
         }
         automation.trade_checker = MagicMock()
         automation.trades = {}
@@ -88,6 +80,10 @@ class TestReportingLifecycle(unittest.TestCase):
         )
 
         automation.trade_checker.set_cooldown.assert_not_called()
+        self.assertEqual(
+            automation.trades["ETHUSDT"]["entered_at"],
+            "2024-08-01T00:00:00+00:00",
+        )
 
     def test_filled_order_is_appended_to_decision_ledger(self):
         automation = BinanceAutomation.__new__(BinanceAutomation)

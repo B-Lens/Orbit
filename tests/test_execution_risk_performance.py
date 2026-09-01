@@ -324,6 +324,30 @@ class TestPerformanceTracker(unittest.TestCase):
                 100, 500, page_size=1
             )
 
+    def test_sync_window_splits_long_intervals_into_seven_day_requests(self):
+        client = MagicMock()
+        client.get_income_history.side_effect = [
+            [],
+            [
+                {
+                    "tranId": 1,
+                    "time": 700_000_000,
+                    "incomeType": "FUNDING_FEE",
+                    "income": "-1",
+                }
+            ],
+        ]
+        seven_days_ms = 7 * 24 * 60 * 60 * 1000
+
+        summary = PerformanceTracker(client).sync_window(0, seven_days_ms + 100)
+
+        self.assertEqual(summary.records, 1)
+        self.assertEqual(client.get_income_history.call_count, 2)
+        first, second = client.get_income_history.call_args_list
+        self.assertEqual(first.kwargs["endTime"], seven_days_ms - 1)
+        self.assertEqual(second.kwargs["startTime"], seven_days_ms)
+        self.assertEqual(second.kwargs["endTime"], seven_days_ms + 99)
+
 
 if __name__ == "__main__":
     unittest.main()

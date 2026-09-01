@@ -24,7 +24,7 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 
 import time
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -36,14 +36,18 @@ from orbit.utils.utils import get_indian_time
 from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
+from orbit.core.performance import PerformanceTracker
 from orbit.core.binance_ws_manager import BinanceWSManager
 from orbit.core.redis_manager import RedisManager, TRADE_KEY_PREFIX
+from orbit.core.trade_reasoner import TradeReasoner
+from orbit.llm.llm_endpoint import LLM
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
 
 _POSITION_RISK_MAX_ATTEMPTS = 3
 _POSITION_RISK_RETRY_DELAY = 1.0
+_INCOME_SETTLEMENT_GRACE_MS = 60_000
 
 
 def _order_types(order: Optional[Dict[str, Any]]) -> Tuple[str, str]:
@@ -112,6 +116,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         mongo_handler: Optional[MongoHandler] = None,
         redis_client: Optional[redis.StrictRedis] = None,
         ws_stale_threshold: float = 5.0,
+        trade_reasoner: Optional[TradeReasoner] = None,
         **auth_kwargs: Any,
     ) -> None:
         AuthenticationManager.__init__(self, **auth_kwargs)
@@ -124,6 +129,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.live_prices: Dict[str, Tuple[float, float]] = {}
         self._ws_stale_threshold = ws_stale_threshold
         self._ws_manager: Optional[BinanceWSManager] = None
+        self._trade_reasoner = trade_reasoner
 
     # ------------------------------------------------------------------
     # WebSocket price-update callback
@@ -458,6 +464,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "stop_loss_price": stop_loss,
                     "target": target,
                     "quantity": trade["quantity"],
+                    "current_price": current_price,
                     "stop_loss_order": stop_loss_order,
                     "take_profit_order": take_profit_order,
                     "sl_order_id": sl_order_id,
@@ -466,7 +473,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
 
             trade_id = trade.get("trade_id") or symbol
-            self.save_trade(trade_id, self.trades[symbol])
+            self.merge_trade_fields(trade_id, self.trades[symbol])
 
             fields = {
                 "symbol": symbol,
@@ -554,6 +561,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             return False
 
+        self.set_cooldown(symbol)
         self._cancel_protective_orders(symbol, persisted_trade)
         current_trade = self.load_trade(trade_id) or {}
         persisted_order_ids = {
@@ -574,9 +582,178 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             return False
 
+        closed_at = datetime.now(timezone.utc)
+        entered_at_raw = persisted_trade.get("entered_at")
+        try:
+            entered_at = datetime.fromisoformat(str(entered_at_raw))
+            if entered_at.tzinfo is None:
+                entered_at = entered_at.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            entered_at = closed_at
+        execution_settings = getattr(self, "execution_settings", None) or getattr(
+            self.order_manager, "execution_settings", None
+        )
+        execution_mode = (
+            execution_settings.mode_for(symbol).value
+            if execution_settings is not None
+            else "unknown"
+        )
+        mongo_handler = getattr(self, "mongo_handler", None)
+        if mongo_handler is None:
+            self.delete_trade_with_orders(trade_id)
+            getattr(self, "trades", {}).pop(symbol, None)
+            return True
+        position_direction = str(
+            persisted_trade.get("positionSide") or persisted_trade.get("side") or ""
+        ).upper()
+        if position_direction not in {"BUY", "SELL"}:
+            raise RuntimeError(f"Trade direction was unavailable for {trade_id}")
+        closing_side = "SELL" if position_direction == "BUY" else "BUY"
+        expected_quantity = float(persisted_trade.get("quantity", 0) or 0)
+        if expected_quantity <= 0:
+            raise RuntimeError(f"Trade quantity was unavailable for {trade_id}")
+        entry_order_id = str(persisted_trade.get("orderId", ""))
+        query_start_ms = None
+        if entered_at_raw:
+            query_start_ms = max(0, int(entered_at.timestamp() * 1000))
+        all_fills = sorted(
+            self.order_manager.get_account_trades(
+                symbol,
+                query_start_ms,
+                int(closed_at.timestamp() * 1000),
+            ),
+            key=lambda fill: (
+                int(fill.get("time", 0) or 0),
+                int(fill.get("id", 0) or 0),
+            ),
+        )
+        entry_fills = (
+            [
+                fill
+                for fill in all_fills
+                if str(fill.get("orderId", "")) == entry_order_id
+            ]
+            if entry_order_id
+            else []
+        )
+        if entry_order_id and not entry_fills:
+            raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
+
+        # Consume exits chronologically from this entry.  Encountering another entry
+        # first means the account history no longer provides an unambiguous lifecycle;
+        # retain the Redis record for reconciliation instead of borrowing a newer
+        # round trip's closing fills.
+        last_entry_key = max(
+            (
+                (int(fill.get("time", 0) or 0), int(fill.get("id", 0) or 0))
+                for fill in entry_fills
+            ),
+            default=(int(entered_at.timestamp() * 1000) - 1, -1),
+        )
+        closing_fills: List[Dict[str, Any]] = []
+        closing_quantity = 0.0
+        for fill in all_fills:
+            fill_key = (
+                int(fill.get("time", 0) or 0),
+                int(fill.get("id", 0) or 0),
+            )
+            if fill_key <= last_entry_key:
+                continue
+            fill_side = str(fill.get("side", "")).upper()
+            if fill_side == position_direction:
+                raise RuntimeError(f"Binance exit fills were ambiguous for {trade_id}")
+            if fill_side != closing_side:
+                continue
+            closing_fills.append(fill)
+            closing_quantity += float(fill.get("qty", 0) or 0)
+            if closing_quantity >= expected_quantity:
+                break
+        if closing_quantity < expected_quantity:
+            raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
+        if entry_fills:
+            entered_at = datetime.fromtimestamp(
+                min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,
+                tz=timezone.utc,
+            )
+        duration_seconds = max(0.0, (closed_at - entered_at).total_seconds())
+        exit_price = (
+            sum(
+                float(fill.get("price", 0) or 0) * float(fill.get("qty", 0) or 0)
+                for fill in closing_fills
+            )
+            / closing_quantity
+        )
+        income_start_ms = (
+            min(int(fill.get("time", 0) or 0) for fill in entry_fills)
+            if entry_fills
+            else int(entered_at.timestamp() * 1000)
+        )
+        exit_end_ms = max(int(fill.get("time", 0) or 0) for fill in closing_fills) + 1
+        if int(datetime.now(timezone.utc).timestamp() * 1000) < (
+            exit_end_ms - 1 + _INCOME_SETTLEMENT_GRACE_MS
+        ):
+            raise RuntimeError(
+                f"Binance income history is still settling for {trade_id}"
+            )
+        tracker = PerformanceTracker(
+            self.order_manager.future_client_for(symbol),
+            mongo_handler,
+            execution_mode,
+        )
+        accounting = tracker.sync_window(income_start_ms, exit_end_ms, symbol=symbol)
+        if not tracker.last_records:
+            raise RuntimeError(f"Binance income history was unavailable for {trade_id}")
+        realized_pnl = sum(
+            float(fill.get("realizedPnl", 0) or 0) for fill in closing_fills
+        )
+        # Income history reports commission in the settlement currency. Fill-level
+        # commission can instead be denominated in assets such as BNB and must not
+        # be added directly to USDT realized P&L.
+        pnl = realized_pnl + accounting.commission + accounting.funding
+        exit_record: Dict[str, Any] = {
+            **persisted_trade,
+            "trade_id": trade_id,
+            "symbol": symbol,
+            "execution_mode": execution_mode,
+            "entered_at": entered_at,
+            "closed_at": closed_at,
+            "exit_price": exit_price,
+            "duration_seconds": duration_seconds,
+            "pnl": pnl,
+            "pnl_source": "binance_trade_fills_and_funding",
+            "lifecycle_scope": "complete" if entry_fills else "reconstructed",
+            "income_summary": accounting.to_dict(),
+        }
+        try:
+            if getattr(self, "_trade_reasoner", None) is None:
+                self._trade_reasoner = TradeReasoner(LLM())
+            exit_record["llm_exit_reasoning"] = TradeReasoner.serialize(
+                self._trade_reasoner.review_exit(exit_record)
+            )
+        except Exception as error:
+            logger.exception("Post-trade LLM review failed for %s", trade_id)
+            exit_record["llm_exit_reasoning"] = {
+                "outcome": "winning" if pnl >= 0 else "losing",
+                "reasoning": "LLM post-trade review failed",
+                "confidence": 0.0,
+                "error": str(error),
+            }
+        if not mongo_handler.store_trade_exit(exit_record):
+            raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
+        mongo_handler.append_decision_event(
+            trade_id,
+            {
+                "event_id": f"trade_closed:{trade_id}",
+                "status": "trade_closed",
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "duration_seconds": duration_seconds,
+                "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
+            },
+        )
+
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
-        self.set_cooldown(symbol)
         logger.info(
             f"[EXIT] Trade {trade_id} for {symbol} removed from state and Redis mappings."
         )
@@ -993,26 +1170,125 @@ class TradeChecker(AuthenticationManager, RedisManager):
         ]
         trades: Dict[str, Dict[str, Any]] = {}
 
+        persisted_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
+        handled_ambiguous_symbols: set[str] = set()
+        for key in self.scan_trade_keys():
+            candidate_id = key[len(TRADE_KEY_PREFIX) :]
+            candidate = self.load_trade(candidate_id) or {}
+            candidate_symbol = str(candidate.get("symbol") or candidate_id)
+            candidate.setdefault("trade_id", candidate_id)
+            persisted_by_symbol.setdefault(candidate_symbol, []).append(candidate)
+
         active_symbols = set()
         for position in positions:
             entry_price = float(position.get("entryPrice", 0) or 0)
-            positionAmount = float(position.get("positionAmt", 0) or 0)
-            if entry_price == 0 or positionAmount == 0:
+            position_amount = float(position.get("positionAmt", 0) or 0)
+            if entry_price == 0 or position_amount == 0:
                 continue
 
             symbol = position["symbol"]
             active_symbols.add(symbol)
 
-            trade_id = symbol
+            candidates = persisted_by_symbol.get(symbol, [])
+            persisted: Dict[str, Any] = {}
+            if len(candidates) == 1:
+                persisted = candidates[0]
+            elif candidates:
+                open_orders = self.order_manager.get_conditional_open_orders(symbol)
+                open_orders_by_id = {
+                    str(order.get("algoId", "")): order for order in open_orders
+                }
+                open_order_ids = set(open_orders_by_id)
+
+                def has_full_coverage(candidate: Dict[str, Any]) -> bool:
+                    order = open_orders_by_id.get(str(candidate.get("sl_order_id", "")))
+                    if not order or not is_stop_order(order):
+                        return False
+                    expected_side = "SELL" if position_amount > 0 else "BUY"
+                    if str(order.get("side", "")).upper() != expected_side:
+                        return False
+                    if str(order.get("closePosition", "")).lower() == "true":
+                        return True
+                    order_quantity = float(
+                        order.get("quantity") or order.get("origQty") or 0
+                    )
+                    return order_quantity >= abs(position_amount)
+
+                def candidate_rank(candidate: Dict[str, Any]) -> Tuple[int, float, str]:
+                    mapped_ids = {
+                        str(candidate.get(field, ""))
+                        for field in ("sl_order_id", "tp_order_id")
+                        if candidate.get(field)
+                    }
+                    verified = int(bool(mapped_ids & open_order_ids))
+                    try:
+                        entered = datetime.fromisoformat(
+                            str(candidate.get("entered_at"))
+                        ).timestamp()
+                    except (TypeError, ValueError):
+                        entered = 0.0
+                    return verified, entered, str(candidate.get("trade_id", ""))
+
+                fully_covered = [
+                    candidate
+                    for candidate in candidates
+                    if has_full_coverage(candidate)
+                ]
+                if not fully_covered:
+                    raise RuntimeError(
+                        f"Duplicate trade records for {symbol} have no verified "
+                        "full-position protective coverage; preserving all orders"
+                    )
+                persisted = max(fully_covered, key=candidate_rank)
+                logger.error(
+                    "Resolved %d Redis trade records for %s to %s using protective "
+                    "order identity, entry recency, and trade ID ordering.",
+                    len(candidates),
+                    symbol,
+                    persisted.get("trade_id"),
+                )
+                selected_order_ids = {
+                    str(persisted.get(field, ""))
+                    for field in ("sl_order_id", "tp_order_id")
+                    if persisted.get(field)
+                }
+                for stale in candidates:
+                    stale_id = str(stale.get("trade_id", ""))
+                    if stale_id and stale_id != persisted.get("trade_id"):
+                        stale_order_ids = {
+                            str(stale.get(field, ""))
+                            for field in ("sl_order_id", "tp_order_id")
+                            if stale.get(field)
+                        }
+                        for stale_order_id in stale_order_ids - selected_order_ids:
+                            try:
+                                self.order_manager.cancel_algo_conditional_order(
+                                    symbol, stale_order_id
+                                )
+                            except Exception as error:
+                                raise RuntimeError(
+                                    "Could not safely cancel stale protective order "
+                                    f"{stale_order_id} for {symbol}"
+                                ) from error
+                        # The stale record can share a protective order with the
+                        # selected record.  Delete only mappings that are exclusive
+                        # to the stale record, then explicitly preserve ownership of
+                        # every shared order for the selected trade.
+                        self.delete_trade(stale_id)
+                        for stale_order_id in stale_order_ids - selected_order_ids:
+                            self.deregister_order(stale_order_id)
+                        selected_trade_id = str(persisted.get("trade_id", ""))
+                        for shared_order_id in stale_order_ids & selected_order_ids:
+                            self.register_order(shared_order_id, selected_trade_id)
+            trade_id = str(persisted.get("trade_id") or symbol)
             _dict = {
                 "trade_id": trade_id,
                 "symbol": symbol,
-                "positionSide": "BUY" if positionAmount > 0 else "SELL",
-                "quantity": abs(positionAmount),
+                "positionSide": "BUY" if position_amount > 0 else "SELL",
+                "quantity": abs(position_amount),
                 "price": entry_price,
             }
 
-            persisted = self.load_trade(trade_id)
             if persisted:
                 for key in (
                     "sl_order_id",
@@ -1021,9 +1297,18 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "low",
                     "stop_loss_price",
                     "target",
+                    "entered_at",
                 ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])
+
+            if not persisted.get("orderId"):
+                _dict.setdefault("entered_at", datetime.now(timezone.utc).isoformat())
+                _dict["entry_source"] = "broker_reconstruction"
+            else:
+                _dict["orderId"] = persisted["orderId"]
+
+            self.merge_trade_fields(trade_id, _dict)
 
             trades[symbol] = _dict
 
@@ -1033,6 +1318,79 @@ class TradeChecker(AuthenticationManager, RedisManager):
             persisted = self.load_trade(trade_id) or {}
             symbol = str(persisted.get("symbol") or trade_id)
             if symbol not in active_symbols:
+                if len(persisted_by_symbol.get(symbol, [])) > 1:
+                    if symbol in handled_ambiguous_symbols:
+                        continue
+                    handled_ambiguous_symbols.add(symbol)
+                    candidates = persisted_by_symbol[symbol]
+                    self.set_cooldown(symbol)
+                    mongo_handler = getattr(self, "mongo_handler", None)
+                    persisted_all = mongo_handler is not None
+                    open_order_ids = {
+                        str(order.get("algoId", ""))
+                        for order in self.order_manager.get_conditional_open_orders(
+                            symbol, raise_on_error=True
+                        )
+                        if order.get("algoId")
+                    }
+                    candidate_order_ids = {
+                        str(candidate.get(field, ""))
+                        for candidate in candidates
+                        for field in ("sl_order_id", "tp_order_id")
+                        if candidate.get(field)
+                    }
+                    verified_order_ids = candidate_order_ids & open_order_ids
+                    cancellations_confirmed = True
+                    for order_id in verified_order_ids:
+                        try:
+                            self.order_manager.cancel_algo_conditional_order(
+                                symbol, order_id
+                            )
+                        except Exception as error:
+                            cancellations_confirmed = False
+                            logger.error(
+                                "Preserving duplicate flat-position records for %s "
+                                "because protective order %s could not be canceled: %s",
+                                symbol,
+                                order_id,
+                                error,
+                            )
+                    for candidate in candidates:
+                        candidate_id = str(candidate.get("trade_id", ""))
+                        block = {
+                            **candidate,
+                            "trade_id": candidate_id,
+                            "symbol": symbol,
+                            "status": "reconciliation_blocked",
+                            "reason": "ambiguous_duplicate_flat_records",
+                            "closed_at": datetime.now(timezone.utc),
+                        }
+                        if (
+                            mongo_handler is None
+                            or not mongo_handler.store_trade_reconciliation_block(block)
+                        ):
+                            persisted_all = False
+                            continue
+                        mongo_handler.append_decision_event(
+                            candidate_id,
+                            {
+                                "event_id": f"reconciliation_blocked:{candidate_id}",
+                                "status": "reconciliation_blocked",
+                                "reason": "ambiguous_duplicate_flat_records",
+                            },
+                        )
+                    if persisted_all and cancellations_confirmed:
+                        for candidate in candidates:
+                            self.delete_trade_with_orders(
+                                str(candidate.get("trade_id", ""))
+                            )
+                    else:
+                        logger.error(
+                            "Preserving duplicate flat-position records for %s until "
+                            "their blocked reconciliation audit is durable",
+                            symbol,
+                        )
+                    continue
                 logger.info(
                     "[CLEANUP] Broker exposure is flat for "
                     f"symbol={symbol}, trade_id={trade_id}; starting cooldown"

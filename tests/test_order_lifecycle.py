@@ -5,6 +5,7 @@ from binance.error import ClientError
 
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.order_manager import OrderManager
+from orbit.core.redis_manager import RedisManager
 from orbit.core.trade_checker import TradeChecker, is_stop_order, is_take_profit_order
 
 
@@ -34,6 +35,23 @@ class TestOrderManager(unittest.TestCase):
     def setUp(self):
         self.manager = _order_manager()
 
+    def test_trade_field_merge_uses_atomic_redis_script(self):
+        redis_client = MagicMock()
+        manager = RedisManager(redis_client=redis_client)
+
+        manager.merge_trade_fields("decision-1", {"orderId": 123})
+
+        redis_client.eval.assert_called_once()
+        self.assertEqual(redis_client.eval.call_args.args[1:3], (1, "trade:decision-1"))
+
+    def test_trade_field_merge_propagates_redis_failure(self):
+        redis_client = MagicMock()
+        redis_client.eval.side_effect = ConnectionError("redis unavailable")
+        manager = RedisManager(redis_client=redis_client)
+
+        with self.assertRaisesRegex(ConnectionError, "redis unavailable"):
+            manager.merge_trade_fields("decision-1", {"orderId": 123})
+
     def test_exchange_filter_normalization(self):
         self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 12.34), 12.3)
         self.assertEqual(self.manager.adjust_quantity_step("BTCUSDT", 0.0056), 0.005)
@@ -52,6 +70,41 @@ class TestOrderManager(unittest.TestCase):
         self.manager.future_client.query_order.assert_called_once_with(
             symbol="BTCUSDT", orderId=123, recvWindow=60000
         )
+
+    def test_account_trade_history_paginates_full_pages(self):
+        first_page = [{"id": trade_id} for trade_id in range(1000)]
+        self.manager.future_client.get_account_trades.side_effect = [
+            first_page,
+            [{"id": 1000}],
+        ]
+
+        records = self.manager.get_account_trades("BTCUSDT", 100, 200)
+
+        self.assertEqual(len(records), 1001)
+        self.assertEqual(
+            self.manager.future_client.get_account_trades.call_args_list[1].kwargs[
+                "fromId"
+            ],
+            1000,
+        )
+        self.assertNotIn(
+            "endTime",
+            self.manager.future_client.get_account_trades.call_args_list[1].kwargs,
+        )
+
+    def test_conditional_order_query_can_fail_closed(self):
+        self.manager.future_client.sign_request.side_effect = RuntimeError("timeout")
+
+        with self.assertRaisesRegex(RuntimeError, "Could not verify"):
+            self.manager.get_conditional_open_orders("BTCUSDT", raise_on_error=True)
+
+    def test_algo_cancellation_deregisters_only_after_exchange_confirmation(self):
+        self.manager.future_client.sign_request.return_value = None
+
+        with self.assertRaisesRegex(RuntimeError, "was not confirmed"):
+            self.manager.cancel_algo_conditional_order("BTCUSDT", "101")
+
+        self.manager.redis_client.delete.assert_not_called()
 
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
@@ -246,6 +299,7 @@ class TestTradeChecker(unittest.TestCase):
         )
         checker.load_trade = MagicMock(return_value=None)
         checker.scan_trade_keys = MagicMock(return_value=[])
+        checker.merge_trade_fields = MagicMock()
 
         trades = checker.activePosition_coolMaker()
 
@@ -283,6 +337,166 @@ class TestTradeChecker(unittest.TestCase):
         )
         checker.set_cooldown.assert_called_once_with("ETHUSDT")
         checker.delete_trade_with_orders.assert_called_once_with("decision-1")
+
+    def test_position_reconciliation_resolves_duplicate_records_by_open_order(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        client = MagicMock()
+        checker.order_manager.futures_clients = {"testnet": client}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0.5"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(
+            return_value=["trade:stale", "trade:current"]
+        )
+        records = {
+            "stale": {
+                "trade_id": "stale",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "101",
+                "entered_at": "2026-08-01T00:00:00+00:00",
+            },
+            "current": {
+                "trade_id": "current",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "202",
+                "entered_at": "2026-08-02T00:00:00+00:00",
+            },
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "202",
+                "quantity": "0.5",
+                "side": "SELL",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+            }
+        ]
+        checker.delete_trade = MagicMock()
+        checker.deregister_order = MagicMock()
+        checker.register_order = MagicMock()
+        checker.merge_trade_fields = MagicMock()
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades["ETHUSDT"]["trade_id"], "current")
+        checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
+            "ETHUSDT", "101"
+        )
+        checker.delete_trade.assert_called_once_with("stale")
+        checker.deregister_order.assert_called_once_with("101")
+
+    def test_duplicate_reconciliation_preserves_shared_order_mapping(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0.5"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(
+            return_value=["trade:stale", "trade:current"]
+        )
+        records = {
+            "stale": {
+                "trade_id": "stale",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "202",
+                "entered_at": "2026-08-01T00:00:00+00:00",
+            },
+            "current": {
+                "trade_id": "current",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "202",
+                "entered_at": "2026-08-02T00:00:00+00:00",
+            },
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "202",
+                "quantity": "0.5",
+                "side": "SELL",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+            }
+        ]
+        checker.delete_trade = MagicMock()
+        checker.deregister_order = MagicMock()
+        checker.register_order = MagicMock()
+        checker.merge_trade_fields = MagicMock()
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades["ETHUSDT"]["trade_id"], "current")
+        checker.order_manager.cancel_algo_conditional_order.assert_not_called()
+        checker.delete_trade.assert_called_once_with("stale")
+        checker.deregister_order.assert_not_called()
+        checker.register_order.assert_called_once_with("202", "current")
+
+    def test_duplicate_reconciliation_rejects_wrong_side_stop(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0.5"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(return_value=["trade:one", "trade:two"])
+        records = {
+            "one": {"trade_id": "one", "symbol": "ETHUSDT", "sl_order_id": "101"},
+            "two": {"trade_id": "two", "symbol": "ETHUSDT", "sl_order_id": "202"},
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "101",
+                "side": "BUY",
+                "closePosition": True,
+                "orderType": "STOP_MARKET",
+            }
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "no verified full-position"):
+            checker.activePosition_coolMaker()
+
+    def test_flat_duplicate_cleanup_retains_state_when_cancellation_fails(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(return_value=[])
+        checker.scan_trade_keys = MagicMock(return_value=["trade:one", "trade:two"])
+        records = {
+            "one": {"trade_id": "one", "symbol": "ETHUSDT", "sl_order_id": "101"},
+            "two": {"trade_id": "two", "symbol": "ETHUSDT", "tp_order_id": "202"},
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {"algoId": "101", "orderType": "STOP_MARKET"}
+        ]
+        checker.order_manager.cancel_algo_conditional_order.side_effect = RuntimeError(
+            "timeout"
+        )
+        checker.mongo_handler = MagicMock()
+        checker.mongo_handler.store_trade_reconciliation_block.return_value = True
+        checker.set_cooldown = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+
+        self.assertEqual(checker.activePosition_coolMaker(), {})
+
+        checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
+            "ETHUSDT", "101"
+        )
+        checker.delete_trade_with_orders.assert_not_called()
 
     def test_exit_starts_post_exit_cooldown(self):
         checker = TradeChecker.__new__(TradeChecker)
@@ -438,26 +652,28 @@ class TestTradeChecker(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
 def test_testnet_order_probe():
     from scripts import check_testnet_orders as SCRIPT
     from unittest.mock import MagicMock
+
     manager = MagicMock()
     manager.config = {}
     manager.config["risk_management"] = {"BTCUSDT": 0.01}
     manager.config["FUTURE_LEVERAGE"] = 2
-    
+
     # 1. Existing order skips submission
     manager.get_open_orders.return_value = [{"orderId": 7, "status": "NEW"}]
     manager.get_conditional_open_orders.return_value = []
     assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "SKIPPED"
     manager.place_order.assert_not_called()
-    
+
     # 2. No open orders, places and cancels order
     manager.get_open_orders.return_value = []
     manager.get_symbol_price.return_value = 100.0
     manager.place_order.return_value = ({"orderId": 123}, 0.1, {})
     manager.cancel_order.return_value = {"orderId": 123, "status": "CANCELED"}
-    
+
     assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "PASSED"
     manager.place_order.assert_called_once()
     manager.cancel_order.assert_called_once_with("BTCUSDT", 123)

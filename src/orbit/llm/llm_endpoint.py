@@ -10,16 +10,16 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from orbit.core.exception_manager import ExceptionManager
-from orbit.market_intelligence.llm.antigravity_client import (
+from orbit.llm.antigravity_client import (
     AntigravityClient,
     default_token_file,
 )
-from orbit.market_intelligence.llm.openai_client import (
+from orbit.llm.openai_client import (
     CodexOAuthResponsesClient,
     OpenAIResponsesClient,
     default_auth_file,
 )
-from orbit.market_intelligence.llm.openrouter_client import OpenRouterClient
+from orbit.llm.openrouter_client import OpenRouterClient
 
 load_dotenv()
 
@@ -83,7 +83,7 @@ class LLM(ExceptionManager):
         # ------------------------------------------------------------------
         if self.antigravity_llm is None and default_token_file().is_file():
             try:
-                antigravity = AntigravityClient()
+                antigravity = AntigravityClient(token_file=default_token_file())
                 antigravity.validate_configuration()
                 self.antigravity_llm = antigravity
                 logger.info("Google Antigravity configured as the Codex fallback")

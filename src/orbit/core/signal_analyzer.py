@@ -125,15 +125,8 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                         description=f"{symbol} entry blocked: {reason}",
                         fields=dict(availability),
                     )
-                    self._record_decision(
-                        symbol=symbol,
-                        outcome="rejected",
-                        reason=reason,
-                        cooldown_until=availability.get("cooldown_until"),
-                        position_side=availability.get("position_side"),
-                        position_quantity=availability.get("position_quantity"),
-                        **strategy_identity,
-                    )
+                    # Availability states are not candidate trades. They are
+                    # deliberately excluded from the blocked-trade audit ledger.
                     continue
 
                 historical_data = self.mongo_handler.handle_mongo_data(symbol)

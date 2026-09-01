@@ -56,8 +56,8 @@ from orbit.market_intelligence.models.mongodb_models import (
     MongoDBManager,
     SentimentRecord,
 )
-from orbit.market_intelligence.llm.llm_endpoint import LLM
-from orbit.market_intelligence.llm.prompt_manager import PromptManager
+from orbit.llm.llm_endpoint import LLM
+from orbit.llm.prompt_manager import PromptManager
 from orbit.market_intelligence.utils.utils import (
     fetch_market_indicators,
     SentimentType,
