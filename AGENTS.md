@@ -13,11 +13,11 @@ Application code uses a `src` layout under `src/orbit/`. Runtime orchestration a
 - `poetry run pytest tests/test_eth_strategy.py -q` runs one focused test module.
 - `poetry run mypy src/orbit/market_intelligence/*.py` performs the documented strict type check.
 - `poetry run pylint --disable=W,R,C,I --ignore=.venv .` runs the project lint command.
-- `poetry run black --check src tests` checks formatting; omit `--check` to reformat.
+- `poetry run black --check <changed-python-files>` checks formatting without modifying files. Do not run repository-wide formatting as part of an unrelated change.
 
 ## Coding Style & Naming Conventions
 
-Use four-space indentation and Black-compatible Python formatting. Add type annotations to new or changed interfaces; `mypy.ini` enables strict checking. Name modules, functions, and variables with `snake_case`, classes with `PascalCase`, and constants with `UPPER_SNAKE_CASE`. Keep strategy implementations in `<asset>_strategy.py` and register them through `strategy_registry.py`. Route exchange orders through `OrderManager`; market-intelligence code must not place orders directly.
+Use four-space indentation and Black-compatible Python formatting. Format newly created Python files when needed, but only check existing touched files; do not rewrite unrelated lines unless formatting is explicitly part of the task. Add type annotations to new or changed interfaces; `mypy.ini` enables strict checking. Name modules, functions, and variables with `snake_case`, classes with `PascalCase`, and constants with `UPPER_SNAKE_CASE`. Keep strategy implementations in `<asset>_strategy.py` and register them through `strategy_registry.py`. Route exchange orders through `OrderManager`; market-intelligence code must not place orders directly.
 
 ## Testing Guidelines
 

@@ -24,7 +24,8 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 
 import time
 import logging
-from datetime import timedelta
+import os
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -38,6 +39,10 @@ from orbit.core.order_manager import OrderManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.binance_ws_manager import BinanceWSManager
 from orbit.core.redis_manager import RedisManager, TRADE_KEY_PREFIX
+from orbit.core.post_trade_reviewer import (
+    PostTradeReviewer,
+    PostTradeReviewPersistenceError,
+)
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 logger = logging.getLogger("Orbit")
@@ -124,6 +129,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.live_prices: Dict[str, Tuple[float, float]] = {}
         self._ws_stale_threshold = ws_stale_threshold
         self._ws_manager: Optional[BinanceWSManager] = None
+        review_llm = None
+        if os.getenv("ORBIT_POST_TRADE_LLM_ENABLED", "false").lower() == "true":
+            from orbit.market_intelligence.llm.llm_endpoint import LLM
+
+            review_llm = LLM()
+        self.post_trade_reviewer = PostTradeReviewer(self.mongo_handler, review_llm)
 
     # ------------------------------------------------------------------
     # WebSocket price-update callback
@@ -543,6 +554,127 @@ class TradeChecker(AuthenticationManager, RedisManager):
             if position.get("symbol") == symbol
         )
 
+    def _closed_trade_accounting(
+        self,
+        symbol: str,
+        trade: Dict[str, Any],
+        closed_at: Optional[str] = None,
+    ) -> Optional[Tuple[float, float, float]]:
+        """Return bounded exit price, realized P&L, and signed income adjustments."""
+        try:
+            params: Dict[str, Any] = {"symbol": symbol, "recvWindow": 60000}
+            opened_at = trade.get("opened_at")
+            entry_order_id = trade.get("entry_order_id") or trade.get("orderId")
+            if not opened_at or entry_order_id is None:
+                return None
+            opened = datetime.fromisoformat(str(opened_at))
+            opened_ms = int(opened.timestamp() * 1000)
+            closed_ms = int(
+                datetime.fromisoformat(closed_at).timestamp() * 1000
+                if closed_at
+                else time.time() * 1000
+            )
+            params.update({"startTime": opened_ms, "endTime": closed_ms})
+            client = self.order_manager.future_client_for(symbol)
+            fills = client.get_account_trades(**params)
+            entry_fills = [
+                fill
+                for fill in fills
+                if str(fill.get("orderId")) == str(entry_order_id)
+            ]
+            if not entry_fills:
+                return None
+            entry_time = min(int(fill.get("time", opened_ms)) for fill in entry_fills)
+            exit_side = "SELL" if self.post_trade_reviewer._is_long(trade) else "BUY"
+            exit_candidates = sorted(
+                (
+                    fill
+                    for fill in fills
+                    if str(fill.get("side", "")).upper() == exit_side
+                    and int(fill.get("time", 0) or 0) >= entry_time
+                ),
+                key=lambda fill: int(fill.get("time", 0) or 0),
+            )
+            remaining = abs(float(trade.get("quantity") or 0))
+            exit_fills: List[Tuple[Dict[str, Any], float]] = []
+            for fill in exit_candidates:
+                fill_quantity = abs(float(fill.get("qty", 0) or 0))
+                used_quantity = min(remaining, fill_quantity)
+                if used_quantity > 0:
+                    exit_fills.append((fill, used_quantity / fill_quantity))
+                    remaining -= used_quantity
+                if remaining <= 1e-12:
+                    break
+            if not exit_fills or remaining > 1e-12:
+                return None
+            exit_quantity = sum(
+                abs(float(fill.get("qty", 0) or 0)) * fraction
+                for fill, fraction in exit_fills
+            )
+            exit_price = sum(
+                float(fill.get("price", 0) or 0)
+                * abs(float(fill.get("qty", 0) or 0))
+                * fraction
+                for fill, fraction in exit_fills
+            ) / exit_quantity
+            realized_pnl = sum(
+                float(fill.get("realizedPnl", 0) or 0) * fraction
+                for fill, fraction in exit_fills
+            )
+            commission = sum(
+                abs(float(fill.get("commission", 0) or 0)) for fill in entry_fills
+            ) + sum(
+                abs(float(fill.get("commission", 0) or 0)) * fraction
+                for fill, fraction in exit_fills
+            )
+            income = client.get_income_history(
+                symbol=symbol,
+                startTime=entry_time,
+                endTime=closed_ms,
+                recvWindow=60000,
+            )
+            other_income = sum(
+                float(row.get("income", 0) or 0)
+                for row in income
+                if str(row.get("incomeType", "")).upper()
+                not in {"REALIZED_PNL", "COMMISSION"}
+            )
+            return exit_price, realized_pnl, -commission + other_income
+        except Exception as error:
+            logger.warning("Could not load closing fills for %s: %s", symbol, error)
+            return None
+
+    def _flush_pending_reviews(self) -> None:
+        """Retry Mongo handoffs without treating advisory work as active exposure."""
+        for trade_id in list(self.scan_pending_reviews()):
+            payload = self.load_pending_review(trade_id) or {}
+            review = payload.get("review")
+            if review and self.post_trade_reviewer.persist(review):
+                self.delete_pending_review(trade_id)
+                continue
+            trade = payload.get("trade")
+            symbol = payload.get("symbol")
+            if not trade or not symbol:
+                continue
+            accounting = self._closed_trade_accounting(
+                symbol, trade, payload.get("closed_at")
+            )
+            if accounting is None:
+                continue
+            exit_price, realized_pnl, commission = accounting
+            try:
+                self.post_trade_reviewer.review(
+                    trade_id,
+                    trade,
+                    exit_price,
+                    realized_pnl=realized_pnl,
+                    fees=commission,
+                )
+            except PostTradeReviewPersistenceError as error:
+                self.save_pending_review(trade_id, {"review": error.review})
+            else:
+                self.delete_pending_review(trade_id)
+
     def _exit_trade(self, symbol: str, trade_id: str) -> bool:
         """Clean up a trade after broker reconciliation confirms it is flat."""
         persisted_trade = self.load_trade(trade_id) or {}
@@ -574,6 +706,48 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             return False
 
+        if hasattr(self, "post_trade_reviewer"):
+            closed_at = datetime.now().astimezone().isoformat()
+            accounting = self._closed_trade_accounting(
+                symbol, persisted_trade, closed_at
+            )
+            review: Optional[Dict[str, Any]] = None
+            if accounting is None:
+                self.save_pending_review(
+                    trade_id,
+                    {
+                        "symbol": symbol,
+                        "trade": persisted_trade,
+                        "closed_at": closed_at,
+                    },
+                )
+            else:
+                exit_price, realized_pnl, commission = accounting
+                try:
+                    review = self.post_trade_reviewer.review(
+                        trade_id,
+                        persisted_trade,
+                        exit_price,
+                        realized_pnl=realized_pnl,
+                        fees=commission,
+                    )
+                except PostTradeReviewPersistenceError as error:
+                    self.save_pending_review(trade_id, {"review": error.review})
+            event: Dict[str, Any] = {
+                "event_id": f"position_closed:{trade_id}",
+                "status": "position_closed",
+                "review_status": "persisted" if review else "pending",
+            }
+            if review:
+                event.update(
+                    {
+                        "exit_price": review["exit_price"],
+                        "exit_reason": review["exit_reason"],
+                        "net_pnl": review["net_pnl"],
+                        "pnl_source": review["pnl_source"],
+                    }
+                )
+            self.mongo_handler.append_decision_event(trade_id, event)
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
         self.set_cooldown(symbol)
@@ -980,6 +1154,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
         """Discover Futures positions with non-zero broker exposure."""
+        if hasattr(self, "post_trade_reviewer"):
+            self._flush_pending_reviews()
         clients = {
             id(
                 self.order_manager.futures_clients[mode]
@@ -1003,7 +1179,34 @@ class TradeChecker(AuthenticationManager, RedisManager):
             symbol = position["symbol"]
             active_symbols.add(symbol)
 
-            trade_id = symbol
+            candidates: List[Tuple[str, Dict[str, Any]]] = []
+            for key in self.scan_trade_keys():
+                candidate_id = key[len(TRADE_KEY_PREFIX) :]
+                candidate = self.load_trade(candidate_id) or {}
+                if candidate.get("symbol") == symbol:
+                    candidates.append((candidate_id, candidate))
+            candidates.sort(
+                key=lambda item: (
+                    str(item[1].get("opened_at") or ""),
+                    bool(item[1].get("entry_order_id")),
+                    item[0] != symbol,
+                ),
+                reverse=True,
+            )
+            matching_trade_id, matching_persisted = (
+                candidates[0] if candidates else (None, {})
+            )
+            for stale_id, stale_trade in candidates[1:]:
+                self.save_pending_review(
+                    stale_id,
+                    {
+                        "symbol": symbol,
+                        "trade": stale_trade,
+                        "closed_at": matching_persisted.get("opened_at"),
+                    },
+                )
+                self.delete_trade_with_orders(stale_id)
+            trade_id = matching_trade_id or symbol
             _dict = {
                 "trade_id": trade_id,
                 "symbol": symbol,
@@ -1012,7 +1215,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 "price": entry_price,
             }
 
-            persisted = self.load_trade(trade_id)
+            persisted = matching_persisted or self.load_trade(trade_id)
             if persisted:
                 for key in (
                     "sl_order_id",
@@ -1021,6 +1224,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "low",
                     "stop_loss_price",
                     "target",
+                    "opened_at",
+                    "strategy",
+                    "strategy_version",
+                    "pattern",
+                    "sentiment",
+                    "entry_order_id",
+                    "side",
                 ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])

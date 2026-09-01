@@ -5,6 +5,8 @@ from binance.error import ClientError
 
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.order_manager import OrderManager
+from orbit.core.post_trade_reviewer import PostTradeReviewer
+from orbit.core.redis_manager import RedisManager
 from orbit.core.trade_checker import TradeChecker, is_stop_order, is_take_profit_order
 
 
@@ -28,6 +30,23 @@ def _order_manager():
     manager.send_signal_updates = MagicMock()
     manager.get_available_usdt_balance = MagicMock(return_value=5000)
     return manager
+
+
+def test_trade_claim_atomically_replaces_provisional_state():
+    redis_client = MagicMock()
+    manager = RedisManager(redis_client=redis_client)
+
+    manager.claim_trade(
+        "BTCUSDT", "decision-1", {"symbol": "BTCUSDT", "strategy": "example"}
+    )
+
+    args = redis_client.eval.call_args.args
+    self_script, key_count, old_key, new_key, incoming = args
+    assert "cjson.decode" in self_script
+    assert key_count == 2
+    assert old_key == "trade:BTCUSDT"
+    assert new_key == "trade:decision-1"
+    assert '"strategy": "example"' in incoming
 
 
 class TestOrderManager(unittest.TestCase):
@@ -284,6 +303,30 @@ class TestTradeChecker(unittest.TestCase):
         checker.set_cooldown.assert_called_once_with("ETHUSDT")
         checker.delete_trade_with_orders.assert_called_once_with("decision-1")
 
+    def test_position_discovery_preserves_decision_id(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "BTCUSDT", "entryPrice": "100000", "positionAmt": "0.01"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(return_value=["trade:decision-1"])
+        checker.load_trade = MagicMock(
+            return_value={
+                "trade_id": "decision-1",
+                "symbol": "BTCUSDT",
+                "strategy": "example.Strategy",
+            }
+        )
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades["BTCUSDT"]["trade_id"], "decision-1")
+        self.assertEqual(trades["BTCUSDT"]["strategy"], "example.Strategy")
+
     def test_exit_starts_post_exit_cooldown(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.trades = {
@@ -395,6 +438,68 @@ class TestTradeChecker(unittest.TestCase):
         checker.set_cooldown.assert_not_called()
         self.assertIn("ETHUSDT", checker.trades)
 
+    def test_closed_trade_accounting_uses_exchange_fills(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.post_trade_reviewer = PostTradeReviewer(MagicMock())
+        checker.order_manager.future_client_for.return_value.get_account_trades.return_value = [
+            {
+                "orderId": 10,
+                "side": "BUY",
+                "price": "3500",
+                "qty": "0.1",
+                "realizedPnl": "0",
+                "commission": "0.1",
+                "time": 1787997600000,
+            },
+            {
+                "orderId": 11,
+                "side": "SELL",
+                "price": "3430",
+                "qty": "0.1",
+                "realizedPnl": "-7",
+                "commission": "0.1",
+                "time": 1787997660000,
+            },
+        ]
+        checker.order_manager.future_client_for.return_value.get_income_history.return_value = [
+            {"incomeType": "FUNDING_FEE", "income": "-0.05"}
+        ]
+
+        accounting = checker._closed_trade_accounting(
+            "ETHUSDT",
+            {
+                "positionSide": "BUY",
+                "opened_at": "2026-08-29T10:00:00+00:00",
+                "entry_order_id": 10,
+                "quantity": 0.1,
+            },
+        )
+
+        self.assertEqual(accounting, (3430.0, -7.0, -0.25))
+
+    def test_review_failure_is_queued_without_blocking_exit_cleanup(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "decision-1"}}
+        checker.order_manager = MagicMock()
+        checker._position_is_flat = MagicMock(return_value=True)
+        trade = {"symbol": "ETHUSDT", "positionSide": "BUY", "price": 3500}
+        checker.load_trade = MagicMock(return_value=trade)
+        checker._cancel_protective_orders = MagicMock()
+        checker._closed_trade_accounting = MagicMock(return_value=None)
+        checker.post_trade_reviewer = MagicMock()
+        checker.mongo_handler = MagicMock()
+        checker.save_pending_review = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        checker.set_cooldown = MagicMock()
+
+        exited = checker._exit_trade("ETHUSDT", "decision-1")
+
+        self.assertTrue(exited)
+        checker.save_pending_review.assert_called_once()
+        checker.delete_trade_with_orders.assert_called_once_with("decision-1")
+        checker.set_cooldown.assert_called_once_with("ETHUSDT")
+
     def test_order_classification(self):
         stop_orders = [
             {"orderType": "STOP_MARKET"},
@@ -409,6 +514,7 @@ class TestTradeChecker(unittest.TestCase):
         self.assertTrue(all(is_take_profit_order(order) for order in target_orders))
         self.assertFalse(is_stop_order(None))
         self.assertFalse(is_take_profit_order({"orderType": "LIMIT"}))
+
 
     @staticmethod
     def _client_error(status_code=408, error_code=-1007):
@@ -433,6 +539,95 @@ class TestTradeChecker(unittest.TestCase):
         with self.assertRaises(ClientError):
             checker._get_position_risk(client)
         client.get_position_risk.assert_called_once_with()
+
+
+class TestPostTradeReviewer(unittest.TestCase):
+    @staticmethod
+    def losing_long():
+        return {
+            "symbol": "ETHUSDT",
+            "positionSide": "BUY",
+            "quantity": 0.1,
+            "price": 3500,
+            "stop_loss_price": 3430,
+            "target": 3605,
+            "strategy": "orbit.strategies.eth_strategy.ETHStrategy",
+            "pattern": "momentum",
+            "sentiment": "BULLISH",
+        }
+
+    def test_losing_stop_is_classified_and_stored(self):
+        mongo = MagicMock()
+        review = PostTradeReviewer(mongo).review(
+            "decision-1", self.losing_long(), 3430
+        )
+        self.assertEqual(review["exit_reason"], "stop_loss")
+        self.assertEqual(review["gross_pnl"], -7)
+        self.assertEqual(review["pnl_source"], "estimated")
+        mongo.store_trade_review.assert_called_once_with(review)
+
+    def test_exchange_pnl_and_fees_override_estimate(self):
+        review = PostTradeReviewer(MagicMock()).review(
+            "decision-1", self.losing_long(), 3430, realized_pnl=-6.5, fees=-0.5
+        )
+        self.assertEqual(review["gross_pnl"], -6.5)
+        self.assertEqual(review["net_pnl"], -7)
+        self.assertEqual(review["pnl_source"], "exchange")
+
+    def test_llm_analysis_is_scheduled_as_an_observation(self):
+        mongo = MagicMock()
+        llm = MagicMock()
+        llm.invoke.return_value = (
+            '{"explanation":"Entered against trend","hypothesis":"counter trend",'
+            '"confidence":0.8,"suggested_rule":{"type":"block_setup"}}'
+        )
+        reviewer = PostTradeReviewer(mongo, llm)
+        with patch("orbit.core.post_trade_reviewer.threading.Thread") as thread:
+            reviewer.review("decision-1", self.losing_long(), 3430)
+        thread.return_value.start.assert_called_once_with()
+        reviewer._analyze_and_store(
+            {"decision_id": "decision-1", "net_pnl": -7, "symbol": "ETHUSDT"}
+        )
+        analysis = mongo.store_trade_review_analysis.call_args.args[1]
+        self.assertEqual(analysis["status"], "observation")
+        self.assertEqual(analysis["suggested_rule"]["type"], "block_setup")
+
+    def test_profitable_trade_does_not_invoke_llm(self):
+        llm = MagicMock()
+        review = PostTradeReviewer(MagicMock(), llm).review(
+            "decision-2", self.losing_long(), 3605
+        )
+        self.assertEqual(review["exit_reason"], "profitable_exit")
+        llm.invoke.assert_not_called()
+
+    def test_binance_long_and_short_position_sides_are_supported(self):
+        reviewer = PostTradeReviewer(MagicMock())
+        long_trade = {**self.losing_long(), "positionSide": "LONG"}
+        short_trade = {
+            **self.losing_long(),
+            "positionSide": "SHORT",
+            "stop_loss_price": 3570,
+        }
+        self.assertEqual(reviewer.review("long", long_trade, 3430)["gross_pnl"], -7)
+        self.assertEqual(
+            reviewer.review("short", short_trade, 3570)["gross_pnl"], -7
+        )
+        self.assertEqual(reviewer.classify(long_trade, 3430, -7), "stop_loss")
+        self.assertEqual(reviewer.classify(short_trade, 3570, -7), "stop_loss")
+
+        one_way_short = {**short_trade, "positionSide": "BOTH", "side": "SELL"}
+        self.assertEqual(
+            reviewer.review("one-way-short", one_way_short, 3570)["gross_pnl"],
+            -7,
+        )
+
+    def test_review_failure_is_reported_to_caller(self):
+        mongo = MagicMock()
+        mongo.store_trade_review.return_value = False
+        with self.assertRaisesRegex(RuntimeError, "decision-1"):
+            PostTradeReviewer(mongo).review(
+                "decision-1", self.losing_long(), 3430
+            )
 
 
 if __name__ == "__main__":
