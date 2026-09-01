@@ -26,11 +26,10 @@ from orbit.core.exception_manager import ExceptionManager
 from orbit.utils.utils import get_indian_time
 
 try:  # pragma: no cover - dependency may be missing in test environment
-    from pymongo import ASCENDING, MongoClient, ReturnDocument  # type: ignore
+    from pymongo import ASCENDING, MongoClient  # type: ignore
 except Exception:  # pragma: no cover - handled gracefully if pymongo not installed
     MongoClient = None  # type: ignore
     ASCENDING = None  # type: ignore
-    ReturnDocument = None  # type: ignore
 
 logger = logging.getLogger("Orbit")
 
@@ -477,64 +476,62 @@ class MongoHandler(ExceptionManager):
             if stored and stored.get("metrics_status") == "recorded":
                 return True
             execution_mode = str(record["execution_mode"])
-            pnl = float(record["pnl"])
-            pushes: Dict[str, Any] = {
-                "recorded_trade_ids": record["trade_id"],
-                "duration_samples": float(record["duration_seconds"]),
-            }
-            if pnl > 0:
-                pushes["winning_pnl_samples"] = pnl
-            elif pnl < 0:
-                pushes["losing_pnl_samples"] = pnl
+            completed_trades = list(
+                lifecycle.find(
+                    {"execution_mode": execution_mode},
+                    {"duration_seconds": 1, "pnl": 1},
+                )
+            )
+            duration_samples = [
+                float(trade["duration_seconds"])
+                for trade in completed_trades
+                if "duration_seconds" in trade
+            ]
+            pnl_samples = [
+                float(trade["pnl"]) for trade in completed_trades if "pnl" in trade
+            ]
+            sample_count = len(completed_trades)
             metrics.update_one(
                 {"execution_mode": execution_mode},
                 {
                     "$setOnInsert": {
                         "execution_mode": execution_mode,
-                        "sample_version": 0,
-                        "recorded_trade_ids": [],
-                    },
+                        "sample_count": 0,
+                    }
                 },
                 upsert=True,
             )
-            aggregate = metrics.find_one_and_update(
-                {
-                    "execution_mode": execution_mode,
-                    "recorded_trade_ids": {"$ne": record["trade_id"]},
-                },
-                {
-                    "$push": pushes,
-                    "$inc": {"sample_version": 1},
-                },
-                return_document=ReturnDocument.AFTER,
-            )
-            if aggregate is None:
-                aggregate = metrics.find_one({"execution_mode": execution_mode})
-            if aggregate is None:
-                raise RuntimeError("Trade metrics document disappeared during update")
-            version = int(aggregate["sample_version"])
             metrics.update_one(
                 {
                     "execution_mode": execution_mode,
                     "$or": [
-                        {"computed_version": {"$lt": version}},
-                        {"computed_version": {"$exists": False}},
+                        {"sample_count": {"$lte": sample_count}},
+                        {"sample_count": {"$exists": False}},
                     ],
                 },
                 {
                     "$set": {
+                        "execution_mode": execution_mode,
                         "updated_at": datetime.now(timezone.utc),
-                        "computed_version": version,
+                        "sample_count": sample_count,
                         "active_trade_duration_seconds": self._distribution(
-                            aggregate.get("duration_samples", [])
+                            duration_samples
                         ),
                         "winning_trade_pnl": self._distribution(
-                            aggregate.get("winning_pnl_samples", [])
+                            [pnl for pnl in pnl_samples if pnl > 0]
                         ),
                         "losing_trade_pnl": self._distribution(
-                            aggregate.get("losing_pnl_samples", [])
+                            [pnl for pnl in pnl_samples if pnl < 0]
                         ),
-                    }
+                    },
+                    "$unset": {
+                        "computed_version": "",
+                        "sample_version": "",
+                        "recorded_trade_ids": "",
+                        "duration_samples": "",
+                        "winning_pnl_samples": "",
+                        "losing_pnl_samples": "",
+                    },
                 },
             )
             lifecycle.update_one(

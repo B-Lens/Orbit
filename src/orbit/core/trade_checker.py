@@ -631,9 +631,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         if not entry_order_id:
             raise RuntimeError(f"Entry order identity was unavailable for {trade_id}")
         entry_fills = [
-            fill
-            for fill in all_fills
-            if str(fill.get("orderId", "")) == entry_order_id
+            fill for fill in all_fills if str(fill.get("orderId", "")) == entry_order_id
         ]
         if not entry_fills:
             raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
@@ -657,9 +655,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 continue
             fill_side = str(fill.get("side", "")).upper()
             if fill_side == position_direction:
-                raise RuntimeError(
-                    f"Binance exit fills were ambiguous for {trade_id}"
-                )
+                raise RuntimeError(f"Binance exit fills were ambiguous for {trade_id}")
             if fill_side != closing_side:
                 continue
             closing_fills.append(fill)
@@ -688,18 +684,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
             execution_mode,
         )
         accounting = tracker.sync_window(income_start_ms, exit_end_ms, symbol=symbol)
-        lifecycle_fills = entry_fills + closing_fills
-        if any("commission" not in fill for fill in lifecycle_fills):
-            raise RuntimeError(
-                f"Binance fill commission was unavailable for {trade_id}"
-            )
         realized_pnl = sum(
             float(fill.get("realizedPnl", 0) or 0) for fill in closing_fills
         )
-        commission = -sum(
-            abs(float(fill.get("commission", 0) or 0)) for fill in lifecycle_fills
-        )
-        pnl = realized_pnl + commission + accounting.funding
+        # Income history reports commission in the settlement currency. Fill-level
+        # commission can instead be denominated in assets such as BNB and must not
+        # be added directly to USDT realized P&L.
+        pnl = realized_pnl + accounting.commission + accounting.funding
         exit_record: Dict[str, Any] = {
             **persisted_trade,
             "trade_id": trade_id,
@@ -727,6 +718,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 "confidence": 0.0,
                 "error": str(error),
             }
+        # Keep entry availability closed while durable reconciliation is retried.
+        # Each failed scan refreshes this marker; successful persistence below then
+        # performs the normal state cleanup and final post-exit cooldown.
+        self.set_cooldown(symbol)
         if not mongo_handler.store_trade_exit(exit_record):
             raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
         mongo_handler.append_decision_event(
@@ -743,7 +738,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
-        self.set_cooldown(symbol)
         logger.info(
             f"[EXIT] Trade {trade_id} for {symbol} removed from state and Redis mappings."
         )
