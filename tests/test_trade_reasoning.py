@@ -72,6 +72,8 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     checker.order_manager.get_account_trades.return_value = [
         {
+            "id": 1,
+            "orderId": 10,
             "side": "BUY",
             "price": "100",
             "qty": "2",
@@ -80,6 +82,8 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
             "realizedPnl": "0",
         },
         {
+            "id": 2,
+            "orderId": 20,
             "side": "SELL",
             "price": "110",
             "qty": "2",
@@ -117,6 +121,7 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
         "positionSide": "BUY",
         "price": 100.0,
         "quantity": 2.0,
+        "orderId": 10,
     }
     checker.load_trade = MagicMock(return_value=persisted)
     checker.delete_trade_with_orders = MagicMock()
@@ -130,3 +135,33 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     assert exit_record["duration_seconds"] >= 599
     assert exit_record["llm_exit_reasoning"]["reasoning"] == "momentum continued"
     checker.mongo_handler.append_decision_event.assert_called_once()
+
+
+def test_exit_rejects_fills_after_a_new_entry_lifecycle() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.trades = {"BTCUSDT": {"trade_id": "stale"}}
+    checker.order_manager = MagicMock()
+    checker.order_manager.get_account_trades.return_value = [
+        {"id": 1, "orderId": 10, "side": "BUY", "qty": "1", "time": 1000},
+        {"id": 2, "orderId": 11, "side": "BUY", "qty": "1", "time": 2000},
+        {"id": 3, "orderId": 12, "side": "SELL", "qty": "1", "time": 3000},
+    ]
+    checker.execution_settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
+    checker.mongo_handler = MagicMock()
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "stale",
+            "symbol": "BTCUSDT",
+            "positionSide": "BUY",
+            "quantity": 1.0,
+            "orderId": 10,
+        }
+    )
+    checker.delete_trade_with_orders = MagicMock()
+
+    with pytest.raises(RuntimeError, match="exit fills were ambiguous"):
+        checker._exit_trade("BTCUSDT", "stale")
+
+    checker.mongo_handler.store_trade_exit.assert_not_called()
+    checker.delete_trade_with_orders.assert_not_called()

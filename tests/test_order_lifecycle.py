@@ -44,6 +44,14 @@ class TestOrderManager(unittest.TestCase):
         redis_client.eval.assert_called_once()
         self.assertEqual(redis_client.eval.call_args.args[1:3], (1, "trade:decision-1"))
 
+    def test_trade_field_merge_propagates_redis_failure(self):
+        redis_client = MagicMock()
+        redis_client.eval.side_effect = ConnectionError("redis unavailable")
+        manager = RedisManager(redis_client=redis_client)
+
+        with self.assertRaisesRegex(ConnectionError, "redis unavailable"):
+            manager.merge_trade_fields("decision-1", {"orderId": 123})
+
     def test_exchange_filter_normalization(self):
         self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 12.34), 12.3)
         self.assertEqual(self.manager.adjust_quantity_step("BTCUSDT", 0.0056), 0.005)

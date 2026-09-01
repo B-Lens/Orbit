@@ -198,6 +198,7 @@ class RedisManager:
             logger.exception(
                 "[Redis] merge_trade_fields(%s) failed: %s", trade_id, error
             )
+            raise
 
     def delete_trade_with_orders(self, trade_id: str) -> None:
         """Remove ``trade:{trade_id}`` and all associated ``order:*`` keys.

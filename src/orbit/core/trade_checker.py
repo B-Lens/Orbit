@@ -622,12 +622,45 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 query_start_ms,
                 int(closed_at.timestamp() * 1000),
             ),
-            key=lambda fill: int(fill.get("time", 0) or 0),
+            key=lambda fill: (
+                int(fill.get("time", 0) or 0),
+                int(fill.get("id", 0) or 0),
+            ),
+        )
+        entry_order_id = str(persisted_trade.get("orderId", ""))
+        if not entry_order_id:
+            raise RuntimeError(f"Entry order identity was unavailable for {trade_id}")
+        entry_fills = [
+            fill
+            for fill in all_fills
+            if str(fill.get("orderId", "")) == entry_order_id
+        ]
+        if not entry_fills:
+            raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
+
+        # Consume exits chronologically from this entry.  Encountering another entry
+        # first means the account history no longer provides an unambiguous lifecycle;
+        # retain the Redis record for reconciliation instead of borrowing a newer
+        # round trip's closing fills.
+        last_entry_key = max(
+            (int(fill.get("time", 0) or 0), int(fill.get("id", 0) or 0))
+            for fill in entry_fills
         )
         closing_fills: List[Dict[str, Any]] = []
         closing_quantity = 0.0
-        for fill in reversed(all_fills):
-            if str(fill.get("side", "")).upper() != closing_side:
+        for fill in all_fills:
+            fill_key = (
+                int(fill.get("time", 0) or 0),
+                int(fill.get("id", 0) or 0),
+            )
+            if fill_key <= last_entry_key:
+                continue
+            fill_side = str(fill.get("side", "")).upper()
+            if fill_side == position_direction:
+                raise RuntimeError(
+                    f"Binance exit fills were ambiguous for {trade_id}"
+                )
+            if fill_side != closing_side:
                 continue
             closing_fills.append(fill)
             closing_quantity += float(fill.get("qty", 0) or 0)
@@ -635,26 +668,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 break
         if closing_quantity < expected_quantity:
             raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
-        entry_order_id = str(persisted_trade.get("orderId", ""))
-        entry_fills = [
-            fill
-            for fill in all_fills
-            if entry_order_id and str(fill.get("orderId", "")) == entry_order_id
-        ]
-        if not entry_fills:
-            entry_quantity = 0.0
-            first_exit_ms = min(int(fill.get("time", 0) or 0) for fill in closing_fills)
-            for fill in reversed(all_fills):
-                if int(fill.get("time", 0) or 0) >= first_exit_ms:
-                    continue
-                if str(fill.get("side", "")).upper() != position_direction:
-                    continue
-                entry_fills.append(fill)
-                entry_quantity += float(fill.get("qty", 0) or 0)
-                if entry_quantity >= expected_quantity:
-                    break
-        if not entry_fills:
-            raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
         entered_at = datetime.fromtimestamp(
             min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,
             tz=timezone.utc,
