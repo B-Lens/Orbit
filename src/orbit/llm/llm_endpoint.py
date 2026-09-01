@@ -2,6 +2,7 @@
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any, Optional, Protocol, cast
 
 from langchain_groq import ChatGroq
@@ -38,6 +39,14 @@ class WebSearchProvider(Protocol):
 
     def invoke_web_search(self, prompt: str) -> Any:
         """Return a web-grounded response for ``prompt``."""
+
+
+@dataclass(frozen=True)
+class WebSearchInvocation:
+    """Content and provider identity for a grounded LLM response."""
+
+    content: str
+    provider: str
 
 
 class LLM(ExceptionManager):
@@ -176,11 +185,20 @@ class LLM(ExceptionManager):
 
     def invoke_web_search(self, prompt: str) -> str:
         """Run a web-grounded query through OpenAI, then Antigravity."""
+        return self.invoke_web_search_with_provider(prompt).content
+
+    def invoke_web_search_with_provider(self, prompt: str) -> WebSearchInvocation:
+        """Run a grounded query and return both its content and author."""
         prompt_token_length = len(prompt.split())
         self._track_token_usage(prompt_token_length)
         last_error: Optional[Exception] = None
+        openai_provider_name = (
+            "Codex"
+            if isinstance(self.openai_llm, CodexOAuthResponsesClient)
+            else "OpenAI"
+        )
         for provider_name, provider in (
-            ("OpenAI", self.openai_llm),
+            (openai_provider_name, self.openai_llm),
             ("Antigravity", self.antigravity_llm),
         ):
             web_invoke = getattr(provider, "invoke_web_search", None)
@@ -191,7 +209,9 @@ class LLM(ExceptionManager):
                 response = web_provider.invoke_web_search(prompt)
                 content = response.content if hasattr(response, "content") else response
                 if content and str(content).strip():
-                    return str(content).strip()
+                    return WebSearchInvocation(
+                        content=str(content).strip(), provider=provider_name
+                    )
                 raise RuntimeError(
                     f"{provider_name} web search returned an empty response"
                 )

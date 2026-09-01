@@ -522,6 +522,23 @@ def test_llm_web_search_prefers_openai_provider() -> None:
     fallback.invoke.assert_not_called()
 
 
+def test_llm_web_search_reports_antigravity_provider() -> None:
+    openai_client = MagicMock()
+    openai_client.invoke_web_search.side_effect = RuntimeError("Codex unavailable")
+    antigravity_client = MagicMock()
+    antigravity_client.invoke_web_search.return_value = "grounded backup"
+    llm = LLM(
+        openai_client=openai_client,
+        antigravity_client=antigravity_client,
+        redis_client=MagicMock(),
+    )
+
+    result = llm.invoke_web_search_with_provider("market prompt")
+
+    assert result.content == "grounded backup"
+    assert result.provider == "Antigravity"
+
+
 def test_llm_web_search_falls_back_to_antigravity() -> None:
     openai_client = MagicMock()
     openai_client.invoke_web_search.side_effect = RuntimeError("Codex unavailable")

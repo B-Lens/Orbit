@@ -156,7 +156,7 @@ class Croner(ExceptionManager, RedisManager):
         sentiment = result.get("sentiment")
         sentiment_confidence = result.get("confidence")
         sentiment_reasoning = result.get("explanation")
-        dominant_memory_sentiment = result.get("dominant_memory_sentiment")
+        provider = result.get("provider", "Unknown")
 
         effective_sentiment, signal_action, confirmation_count = (
             self._resolve_effective_sentiment(sentiment, sentiment_confidence)
@@ -170,8 +170,7 @@ class Croner(ExceptionManager, RedisManager):
             data=(
                 f"Observed Sentiment = {sentiment}, Effective Signal = {effective_sentiment}, "
                 f"Confidence: {sentiment_confidence}, Action: {signal_action}, "
-                f"Reasoning : {sentiment_reasoning} | "
-                f"Memory dominant: {dominant_memory_sentiment}"
+                f"Provider: {provider}, Reasoning: {sentiment_reasoning}"
             ),
             description=None,
             fields=result,
@@ -198,7 +197,5 @@ class Croner(ExceptionManager, RedisManager):
 
                 time.sleep(self.scheduler_poll_interval)
             except Exception as e:
-                self.handle_exception(
-                    e, context_description="Exception in News Croner"
-                )
+                self.handle_exception(e, context_description="Exception in News Croner")
                 time.sleep(self.scheduler_poll_interval)
