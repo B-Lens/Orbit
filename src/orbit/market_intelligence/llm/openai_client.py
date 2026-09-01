@@ -24,6 +24,10 @@ DEFAULT_INSTRUCTIONS = (
 DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 
 
+class _TransientOpenAIError(RuntimeError):
+    """A temporary transport failure that is safe to retry."""
+
+
 class OpenAIResponsesClient:
     """Small adapter exposing the ``invoke(prompt)`` interface used by Orbit."""
 
@@ -172,7 +176,13 @@ class CodexOAuthResponsesClient:
             raise ValueError("prompt must not be empty")
 
         for attempt in range(MAX_PREMATURE_STREAM_RETRIES + 1):
-            output_text = self._invoke_stream(prompt, web_search)
+            try:
+                output_text = self._invoke_stream(prompt, web_search)
+            except _TransientOpenAIError:
+                if attempt >= MAX_PREMATURE_STREAM_RETRIES:
+                    raise
+                logger.warning("OpenAI stream transport failed; retrying once")
+                continue
             if output_text is not None:
                 logger.info("OpenAI OAuth response generated with %s", self.model)
                 return output_text
@@ -256,7 +266,9 @@ class CodexOAuthResponsesClient:
             hint = " Run `codex login` to refresh auth.json." if error.code == 401 else ""
             raise RuntimeError(f"OpenAI HTTP {error.code}: {details}.{hint}") from error
         except urllib.error.URLError as error:
-            raise RuntimeError(f"OpenAI request failed: {error.reason}") from error
+            raise _TransientOpenAIError(f"OpenAI request failed: {error.reason}") from error
+        except (ConnectionError, TimeoutError) as error:
+            raise _TransientOpenAIError(f"OpenAI request failed: {error}") from error
         except json.JSONDecodeError as error:
             raise RuntimeError("OpenAI returned an invalid streaming event") from error
 
