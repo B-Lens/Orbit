@@ -1181,6 +1181,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     order = open_orders_by_id.get(str(candidate.get("sl_order_id", "")))
                     if not order or not is_stop_order(order):
                         return False
+                    expected_side = "SELL" if position_amount > 0 else "BUY"
+                    if str(order.get("side", "")).upper() != expected_side:
+                        return False
                     if str(order.get("closePosition", "")).lower() == "true":
                         return True
                     order_quantity = float(

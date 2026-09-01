@@ -344,6 +344,7 @@ class TestTradeChecker(unittest.TestCase):
             {
                 "algoId": "202",
                 "quantity": "0.5",
+                "side": "SELL",
                 "algoType": "CONDITIONAL",
                 "orderType": "STOP_MARKET",
             }
@@ -393,6 +394,7 @@ class TestTradeChecker(unittest.TestCase):
             {
                 "algoId": "202",
                 "quantity": "0.5",
+                "side": "SELL",
                 "algoType": "CONDITIONAL",
                 "orderType": "STOP_MARKET",
             }
@@ -408,6 +410,34 @@ class TestTradeChecker(unittest.TestCase):
         checker.delete_trade.assert_called_once_with("stale")
         checker.deregister_order.assert_not_called()
         checker.register_order.assert_called_once_with("202", "current")
+
+    def test_duplicate_reconciliation_rejects_wrong_side_stop(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0.5"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(return_value=["trade:one", "trade:two"])
+        records = {
+            "one": {"trade_id": "one", "symbol": "ETHUSDT", "sl_order_id": "101"},
+            "two": {"trade_id": "two", "symbol": "ETHUSDT", "sl_order_id": "202"},
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "101",
+                "side": "BUY",
+                "closePosition": True,
+                "orderType": "STOP_MARKET",
+            }
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "no verified full-position"):
+            checker.activePosition_coolMaker()
 
     def test_flat_duplicate_cleanup_retains_state_when_cancellation_fails(self):
         checker = TradeChecker.__new__(TradeChecker)

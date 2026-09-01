@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+BINANCE_MAX_INCOME_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
 
 @dataclass(frozen=True)
 class PerformanceSummary:
@@ -86,42 +88,46 @@ class PerformanceTracker:
         """Synchronize all income pages in a half-open exchange-time window."""
         records: list[dict[str, Any]] = []
         seen: set[tuple[Any, ...]] = set()
-        cursor = start_time_ms
-        while cursor < end_time_ms:
-            params: dict[str, Any] = {
-                "startTime": cursor,
-                "endTime": end_time_ms - 1,
-                "limit": page_size,
-                "recvWindow": 60000,
-            }
-            if symbol:
-                params["symbol"] = symbol
-            page_records = self.futures_client.get_income_history(**params)
-            if not page_records:
-                break
-            added = 0
-            for record in page_records:
-                identity = (
-                    record.get("tranId"),
-                    record.get("incomeType"),
-                    record.get("time"),
-                    record.get("asset"),
-                    record.get("symbol"),
-                )
-                if identity not in seen:
-                    seen.add(identity)
-                    records.append(record)
-                    added += 1
-            if len(page_records) < page_size:
-                break
-            latest_time = max(int(row.get("time", cursor)) for row in page_records)
-            if latest_time > cursor:
-                cursor = latest_time
-            elif not added:
-                raise RuntimeError(
-                    "Binance income history cannot advance past a full-page "
-                    "timestamp; refusing to publish incomplete accounting"
-                )
+        window_start = start_time_ms
+        while window_start < end_time_ms:
+            window_end = min(end_time_ms, window_start + BINANCE_MAX_INCOME_WINDOW_MS)
+            cursor = window_start
+            while cursor < window_end:
+                params: dict[str, Any] = {
+                    "startTime": cursor,
+                    "endTime": window_end - 1,
+                    "limit": page_size,
+                    "recvWindow": 60000,
+                }
+                if symbol:
+                    params["symbol"] = symbol
+                page_records = self.futures_client.get_income_history(**params)
+                if not page_records:
+                    break
+                added = 0
+                for record in page_records:
+                    identity = (
+                        record.get("tranId"),
+                        record.get("incomeType"),
+                        record.get("time"),
+                        record.get("asset"),
+                        record.get("symbol"),
+                    )
+                    if identity not in seen:
+                        seen.add(identity)
+                        records.append(record)
+                        added += 1
+                if len(page_records) < page_size:
+                    break
+                latest_time = max(int(row.get("time", cursor)) for row in page_records)
+                if latest_time > cursor:
+                    cursor = latest_time
+                elif not added:
+                    raise RuntimeError(
+                        "Binance income history cannot advance past a full-page "
+                        "timestamp; refusing to publish incomplete accounting"
+                    )
+            window_start = window_end
         if self.mongo_handler is not None:
             self.mongo_handler.store_income_records(records, self.execution_mode)
         self.last_records = records
