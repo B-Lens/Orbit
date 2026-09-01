@@ -165,3 +165,26 @@ def test_exit_rejects_fills_after_a_new_entry_lifecycle() -> None:
 
     checker.mongo_handler.store_trade_exit.assert_not_called()
     checker.delete_trade_with_orders.assert_not_called()
+
+
+def test_exit_requires_persisted_entry_order_identity() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.trades = {"BTCUSDT": {"trade_id": "legacy"}}
+    checker.order_manager = MagicMock()
+    checker.order_manager.get_account_trades.return_value = []
+    checker.execution_settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
+    checker.mongo_handler = MagicMock()
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "legacy",
+            "symbol": "BTCUSDT",
+            "positionSide": "BUY",
+            "quantity": 1.0,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="Entry order identity was unavailable"):
+        checker._exit_trade("BTCUSDT", "legacy")
+
+    checker.mongo_handler.store_trade_exit.assert_not_called()
