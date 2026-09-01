@@ -218,7 +218,7 @@ class CodexOAuthResponsesClient:
         if web_search:
             payload_data.update(
                 {
-                    "tools": [{"type": "web_search", "external_web_access": True}],
+                    "tools": [{"type": "web_search"}],
                     "tool_choice": "auto",
                     "parallel_tool_calls": False,
                     "reasoning": {"effort": "medium", "summary": "auto"},
