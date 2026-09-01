@@ -124,7 +124,9 @@ class CodexOAuthResponsesClient:
         endpoint: Optional[str] = None,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
     ) -> None:
-        self.auth_file = Path(auth_file).expanduser() if auth_file else default_auth_file()
+        self.auth_file = (
+            Path(auth_file).expanduser() if auth_file else default_auth_file()
+        )
         self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
         self.timeout = timeout
         self.web_search_timeout = web_search_timeout or float(
@@ -146,9 +148,13 @@ class CodexOAuthResponsesClient:
         try:
             auth = json.loads(self.auth_file.read_text(encoding="utf-8"))
         except FileNotFoundError as error:
-            raise RuntimeError(f"Codex auth file not found: {self.auth_file}") from error
+            raise RuntimeError(
+                f"Codex auth file not found: {self.auth_file}"
+            ) from error
         except (OSError, json.JSONDecodeError) as error:
-            raise RuntimeError(f"Could not read Codex auth file: {self.auth_file}") from error
+            raise RuntimeError(
+                f"Could not read Codex auth file: {self.auth_file}"
+            ) from error
 
         auth = auth if isinstance(auth, dict) else {}
         tokens = auth.get("tokens")
@@ -249,16 +255,41 @@ class CodexOAuthResponsesClient:
                             assistant_text.append(delta)
                     elif event_type == "response.completed":
                         completed = True
-                    elif event_type in {"error", "response.failed", "response.incomplete"}:
+                    elif event_type in {
+                        "error",
+                        "response.failed",
+                        "response.incomplete",
+                    }:
                         raise RuntimeError(f"OpenAI streaming error: {event}")
         except urllib.error.HTTPError as error:
-            details = error.read().decode("utf-8", errors="replace")
-            hint = " Run `codex login` to refresh auth.json." if error.code == 401 else ""
-            raise RuntimeError(f"OpenAI HTTP {error.code}: {details}.{hint}") from error
+            hint = (
+                " Run `codex login` to refresh auth.json." if error.code == 401 else ""
+            )
+            upstream_request_id = self._safe_response_header(error, "x-request-id")
+            context = f"client_request_id={request_id}"
+            if upstream_request_id:
+                context += f", upstream_request_id={upstream_request_id}"
+            reason = str(error.reason).replace("\r", " ").replace("\n", " ")[:128]
+            raise RuntimeError(
+                f"OpenAI HTTP {error.code} ({reason}; {context}).{hint}"
+            ) from error
         except urllib.error.URLError as error:
-            raise RuntimeError(f"OpenAI request failed: {error.reason}") from error
+            reason_type = type(error.reason).__name__
+            reason = str(error.reason).replace("\r", " ").replace("\n", " ")[:128]
+            raise RuntimeError(
+                "OpenAI request failed "
+                f"({reason_type}: {reason}; client_request_id={request_id})"
+            ) from error
+        except (ConnectionError, TimeoutError) as error:
+            raise RuntimeError(
+                "OpenAI request transport failed "
+                f"({type(error).__name__}; client_request_id={request_id})"
+            ) from error
         except json.JSONDecodeError as error:
-            raise RuntimeError("OpenAI returned an invalid streaming event") from error
+            raise RuntimeError(
+                "OpenAI returned an invalid streaming event "
+                f"(client_request_id={request_id})"
+            ) from error
 
         output_text = "".join(assistant_text).strip()
         if not completed:
@@ -266,3 +297,12 @@ class CodexOAuthResponsesClient:
         if not output_text:
             raise RuntimeError("OpenAI returned an empty response")
         return output_text
+
+    @staticmethod
+    def _safe_response_header(error: urllib.error.HTTPError, name: str) -> str:
+        """Return a bounded, single-line diagnostic header value."""
+        headers = getattr(error, "headers", None)
+        value = headers.get(name) if headers is not None else None
+        if not isinstance(value, str):
+            return ""
+        return value.replace("\r", " ").replace("\n", " ")[:128]

@@ -256,6 +256,79 @@ def test_codex_oauth_client_rejects_repeated_premature_streams(tmp_path) -> None
     assert urlopen.call_count == 2
 
 
+def test_codex_oauth_client_reports_safe_http_diagnostics(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    error = urllib.error.HTTPError(
+        "https://example.invalid",
+        503,
+        "Service Unavailable",
+        {"x-request-id": "upstream-id\ninjected"},
+        None,
+    )
+    error.read = MagicMock(return_value=b"sensitive response")
+    urlopen = MagicMock(side_effect=error)
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    with pytest.raises(RuntimeError, match="OpenAI HTTP 503") as raised:
+        client.invoke_web_search("Assess markets")
+
+    message = str(raised.value)
+    assert "Service Unavailable" in message
+    assert "client_request_id=" in message
+    assert "upstream_request_id=upstream-id injected" in message
+    assert "sensitive" not in message
+    error.read.assert_not_called()
+    urlopen.assert_called_once()
+
+
+def test_codex_oauth_client_does_not_retry_or_expose_auth_error(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    error = urllib.error.HTTPError("https://example.invalid", 401, "error", {}, None)
+    error.read = MagicMock(return_value=b"sensitive response")
+    urlopen = MagicMock(side_effect=error)
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    with pytest.raises(RuntimeError, match="codex login") as raised:
+        client.invoke_web_search("Assess markets")
+
+    assert "sensitive" not in str(raised.value)
+    assert "client_request_id=" in str(raised.value)
+    error.read.assert_not_called()
+    urlopen.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (urllib.error.URLError("connection reset"), "str: connection reset"),
+        (TimeoutError(), "TimeoutError"),
+        (ConnectionResetError(), "ConnectionResetError"),
+    ],
+)
+def test_codex_oauth_client_reports_transport_diagnostics(
+    tmp_path, error, expected
+) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    client = CodexOAuthResponsesClient(
+        auth_file=auth_file, urlopen=MagicMock(side_effect=error)
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        client.invoke_web_search("Assess markets")
+
+    assert expected in str(raised.value)
+    assert "client_request_id=" in str(raised.value)
+
+
 def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> None:
     token_file = tmp_path / "token.json"
     token_file.write_text(
