@@ -177,7 +177,7 @@ def test_codex_oauth_client_enables_external_web_search(tmp_path) -> None:
     request, timeout = requests[0]
     payload = json.loads(request.data)
     assert timeout == 300.0
-    assert payload["tools"] == [{"type": "web_search", "external_web_access": True}]
+    assert payload["tools"] == [{"type": "web_search"}]
     assert payload["include"] == [
         "reasoning.encrypted_content",
         "web_search_call.action.sources",
