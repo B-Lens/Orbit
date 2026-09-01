@@ -173,6 +173,8 @@ class TestOrderManager(unittest.TestCase):
             "BTCUSDT", "SELL", "STOP_MARKET", 41000, 0.01, trade_id="trade-1"
         )
         self.assertEqual(response, {"algoId": 123})
+        params = self.manager.future_client.sign_request.call_args.args[2]
+        self.assertEqual(params["workingType"], "CONTRACT_PRICE")
         self.manager.redis_client.set.assert_called_once_with("order:123", "trade-1")
 
     def test_notional_rejection_is_attached_to_decision(self):
