@@ -87,6 +87,10 @@ class TestOrderManager(unittest.TestCase):
             ],
             1000,
         )
+        self.assertNotIn(
+            "endTime",
+            self.manager.future_client.get_account_trades.call_args_list[1].kwargs,
+        )
 
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
@@ -281,6 +285,7 @@ class TestTradeChecker(unittest.TestCase):
         )
         checker.load_trade = MagicMock(return_value=None)
         checker.scan_trade_keys = MagicMock(return_value=[])
+        checker.merge_trade_fields = MagicMock()
 
         trades = checker.activePosition_coolMaker()
 
@@ -360,6 +365,7 @@ class TestTradeChecker(unittest.TestCase):
         checker.delete_trade = MagicMock()
         checker.deregister_order = MagicMock()
         checker.register_order = MagicMock()
+        checker.merge_trade_fields = MagicMock()
 
         trades = checker.activePosition_coolMaker()
 
@@ -410,6 +416,7 @@ class TestTradeChecker(unittest.TestCase):
         checker.delete_trade = MagicMock()
         checker.deregister_order = MagicMock()
         checker.register_order = MagicMock()
+        checker.merge_trade_fields = MagicMock()
 
         trades = checker.activePosition_coolMaker()
 

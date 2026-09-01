@@ -472,7 +472,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
 
             trade_id = trade.get("trade_id") or symbol
-            self.save_trade(trade_id, self.trades[symbol])
+            self.merge_trade_fields(trade_id, self.trades[symbol])
 
             fields = {
                 "symbol": symbol,
@@ -611,11 +611,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
         expected_quantity = float(persisted_trade.get("quantity", 0) or 0)
         if expected_quantity <= 0:
             raise RuntimeError(f"Trade quantity was unavailable for {trade_id}")
-        query_start_ms = (
-            max(0, int(entered_at.timestamp() * 1000) - 60_000)
-            if entered_at_raw
-            else None
-        )
+        entry_order_id = str(persisted_trade.get("orderId", ""))
+        query_start_ms = None
+        if entered_at_raw:
+            query_start_ms = max(0, int(entered_at.timestamp() * 1000))
+            if entry_order_id:
+                query_start_ms = max(0, query_start_ms - 60_000)
         all_fills = sorted(
             self.order_manager.get_account_trades(
                 symbol,
@@ -627,13 +628,16 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 int(fill.get("id", 0) or 0),
             ),
         )
-        entry_order_id = str(persisted_trade.get("orderId", ""))
-        if not entry_order_id:
-            raise RuntimeError(f"Entry order identity was unavailable for {trade_id}")
-        entry_fills = [
-            fill for fill in all_fills if str(fill.get("orderId", "")) == entry_order_id
-        ]
-        if not entry_fills:
+        entry_fills = (
+            [
+                fill
+                for fill in all_fills
+                if str(fill.get("orderId", "")) == entry_order_id
+            ]
+            if entry_order_id
+            else []
+        )
+        if entry_order_id and not entry_fills:
             raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
 
         # Consume exits chronologically from this entry.  Encountering another entry
@@ -641,8 +645,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
         # retain the Redis record for reconciliation instead of borrowing a newer
         # round trip's closing fills.
         last_entry_key = max(
-            (int(fill.get("time", 0) or 0), int(fill.get("id", 0) or 0))
-            for fill in entry_fills
+            (
+                (int(fill.get("time", 0) or 0), int(fill.get("id", 0) or 0))
+                for fill in entry_fills
+            ),
+            default=(int(entered_at.timestamp() * 1000) - 1, -1),
         )
         closing_fills: List[Dict[str, Any]] = []
         closing_quantity = 0.0
@@ -664,10 +671,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 break
         if closing_quantity < expected_quantity:
             raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
-        entered_at = datetime.fromtimestamp(
-            min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,
-            tz=timezone.utc,
-        )
+        if entry_fills:
+            entered_at = datetime.fromtimestamp(
+                min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,
+                tz=timezone.utc,
+            )
         duration_seconds = max(0.0, (closed_at - entered_at).total_seconds())
         exit_price = (
             sum(
@@ -676,7 +684,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             / closing_quantity
         )
-        income_start_ms = min(int(fill.get("time", 0) or 0) for fill in entry_fills)
+        income_start_ms = (
+            min(int(fill.get("time", 0) or 0) for fill in entry_fills)
+            if entry_fills
+            else int(entered_at.timestamp() * 1000)
+        )
         exit_end_ms = max(int(fill.get("time", 0) or 0) for fill in closing_fills) + 1
         tracker = PerformanceTracker(
             self.order_manager.future_client_for(symbol),
@@ -702,6 +714,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             "duration_seconds": duration_seconds,
             "pnl": pnl,
             "pnl_source": "binance_trade_fills_and_funding",
+            "lifecycle_scope": "complete" if entry_fills else "reconstructed",
             "income_summary": accounting.to_dict(),
         }
         try:
@@ -1285,6 +1298,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])
+
+            if not persisted.get("orderId"):
+                _dict.setdefault("entered_at", datetime.now(timezone.utc).isoformat())
+                _dict["entry_source"] = "broker_reconstruction"
+            else:
+                _dict["orderId"] = persisted["orderId"]
+
+            self.merge_trade_fields(trade_id, _dict)
 
             trades[symbol] = _dict
 

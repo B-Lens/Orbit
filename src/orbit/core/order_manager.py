@@ -1080,17 +1080,28 @@ class OrderManager(AuthenticationManager, RedisManager):
             }
             while True:
                 page = client.get_account_trades(**params)
-                added = [row for row in page if int(row.get("id", -1)) not in seen_ids]
+                added = [
+                    row
+                    for row in page
+                    if int(row.get("id", -1)) not in seen_ids
+                    and window_start
+                    <= int(row.get("time", window_start) or window_start)
+                    <= window_end
+                ]
                 for row in added:
                     seen_ids.add(int(row.get("id", -1)))
                     records.append(row)
-                if len(page) < 1000:
+                if len(page) < 1000 or any(
+                    int(row.get("time", window_start) or window_start) > window_end
+                    for row in page
+                ):
                     break
                 if not added:
                     raise RuntimeError(
                         "Binance account-trade pagination did not advance"
                     )
                 params.pop("startTime", None)
+                params.pop("endTime", None)
                 params["fromId"] = max(int(row["id"]) for row in page) + 1
             window_start = window_end + 1
         return records
