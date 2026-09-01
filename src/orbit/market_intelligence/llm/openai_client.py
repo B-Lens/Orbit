@@ -24,6 +24,10 @@ DEFAULT_INSTRUCTIONS = (
 DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 
 
+class OpenAITransientError(RuntimeError):
+    """A temporary transport or server failure that is safe to retry."""
+
+
 class OpenAIResponsesClient:
     """Small adapter exposing the ``invoke(prompt)`` interface used by Orbit."""
 
@@ -172,7 +176,13 @@ class CodexOAuthResponsesClient:
             raise ValueError("prompt must not be empty")
 
         for attempt in range(MAX_PREMATURE_STREAM_RETRIES + 1):
-            output_text = self._invoke_stream(prompt, web_search)
+            try:
+                output_text = self._invoke_stream(prompt, web_search)
+            except OpenAITransientError:
+                if attempt >= MAX_PREMATURE_STREAM_RETRIES:
+                    raise
+                logger.warning("OpenAI request failed transiently; retrying once")
+                continue
             if output_text is not None:
                 logger.info("OpenAI OAuth response generated with %s", self.model)
                 return output_text
@@ -252,11 +262,17 @@ class CodexOAuthResponsesClient:
                     elif event_type in {"error", "response.failed", "response.incomplete"}:
                         raise RuntimeError(f"OpenAI streaming error: {event}")
         except urllib.error.HTTPError as error:
-            details = error.read().decode("utf-8", errors="replace")
             hint = " Run `codex login` to refresh auth.json." if error.code == 401 else ""
-            raise RuntimeError(f"OpenAI HTTP {error.code}: {details}.{hint}") from error
+            error_type = (
+                OpenAITransientError
+                if error.code in {408, 429} or error.code >= 500
+                else RuntimeError
+            )
+            raise error_type(f"OpenAI HTTP {error.code}.{hint}") from error
         except urllib.error.URLError as error:
-            raise RuntimeError(f"OpenAI request failed: {error.reason}") from error
+            raise OpenAITransientError("OpenAI request failed") from error
+        except TimeoutError as error:
+            raise OpenAITransientError("OpenAI request timed out") from error
         except json.JSONDecodeError as error:
             raise RuntimeError("OpenAI returned an invalid streaming event") from error
 

@@ -175,7 +175,16 @@ class BinanceWSManager:
         # but _stream_url itself is cheap — just read under the lock.
         with self._lock:
             pairs = list(self.trading_pairs)
-        streams = "/".join(f"{p.lower()}@trade" for p in pairs)
+        # PAXG can go several seconds without a trade. Its mark-price stream
+        # publishes every second and uses the same ``s``/``p`` payload fields.
+        streams = "/".join(
+            (
+                f"{pair.lower()}@markPrice@1s"
+                if pair.upper() == "PAXGUSDT"
+                else f"{pair.lower()}@trade"
+            )
+            for pair in pairs
+        )
         return f"wss://fstream.binance.com/stream?streams={streams}"
 
     def _notify_status(self, msg: str) -> None:
