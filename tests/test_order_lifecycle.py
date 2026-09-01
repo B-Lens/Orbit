@@ -348,7 +348,9 @@ class TestTradeChecker(unittest.TestCase):
                 "orderType": "STOP_MARKET",
             }
         ]
-        checker.delete_trade_with_orders = MagicMock()
+        checker.delete_trade = MagicMock()
+        checker.deregister_order = MagicMock()
+        checker.register_order = MagicMock()
 
         trades = checker.activePosition_coolMaker()
 
@@ -356,7 +358,86 @@ class TestTradeChecker(unittest.TestCase):
         checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
             "ETHUSDT", "101"
         )
-        checker.delete_trade_with_orders.assert_called_once_with("stale")
+        checker.delete_trade.assert_called_once_with("stale")
+        checker.deregister_order.assert_called_once_with("101")
+
+    def test_duplicate_reconciliation_preserves_shared_order_mapping(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "ETHUSDT", "entryPrice": "3500", "positionAmt": "0.5"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(
+            return_value=["trade:stale", "trade:current"]
+        )
+        records = {
+            "stale": {
+                "trade_id": "stale",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "202",
+                "entered_at": "2026-08-01T00:00:00+00:00",
+            },
+            "current": {
+                "trade_id": "current",
+                "symbol": "ETHUSDT",
+                "sl_order_id": "202",
+                "entered_at": "2026-08-02T00:00:00+00:00",
+            },
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "202",
+                "quantity": "0.5",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+            }
+        ]
+        checker.delete_trade = MagicMock()
+        checker.deregister_order = MagicMock()
+        checker.register_order = MagicMock()
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades["ETHUSDT"]["trade_id"], "current")
+        checker.order_manager.cancel_algo_conditional_order.assert_not_called()
+        checker.delete_trade.assert_called_once_with("stale")
+        checker.deregister_order.assert_not_called()
+        checker.register_order.assert_called_once_with("202", "current")
+
+    def test_flat_duplicate_cleanup_retains_state_when_cancellation_fails(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(return_value=[])
+        checker.scan_trade_keys = MagicMock(return_value=["trade:one", "trade:two"])
+        records = {
+            "one": {"trade_id": "one", "symbol": "ETHUSDT", "sl_order_id": "101"},
+            "two": {"trade_id": "two", "symbol": "ETHUSDT", "tp_order_id": "202"},
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {"algoId": "101", "orderType": "STOP_MARKET"}
+        ]
+        checker.order_manager.cancel_algo_conditional_order.side_effect = RuntimeError(
+            "timeout"
+        )
+        checker.mongo_handler = MagicMock()
+        checker.mongo_handler.store_trade_reconciliation_block.return_value = True
+        checker.set_cooldown = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+
+        self.assertEqual(checker.activePosition_coolMaker(), {})
+
+        checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
+            "ETHUSDT", "101"
+        )
+        checker.delete_trade_with_orders.assert_not_called()
 
     def test_exit_starts_post_exit_cooldown(self):
         checker = TradeChecker.__new__(TradeChecker)

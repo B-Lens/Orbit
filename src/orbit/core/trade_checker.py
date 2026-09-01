@@ -1159,8 +1159,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
         active_symbols = set()
         for position in positions:
             entry_price = float(position.get("entryPrice", 0) or 0)
-            positionAmount = float(position.get("positionAmt", 0) or 0)
-            if entry_price == 0 or positionAmount == 0:
+            position_amount = float(position.get("positionAmt", 0) or 0)
+            if entry_price == 0 or position_amount == 0:
                 continue
 
             symbol = position["symbol"]
@@ -1186,7 +1186,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     order_quantity = float(
                         order.get("quantity") or order.get("origQty") or 0
                     )
-                    return order_quantity >= abs(positionAmount)
+                    return order_quantity >= abs(position_amount)
 
                 def candidate_rank(candidate: Dict[str, Any]) -> Tuple[int, float, str]:
                     mapped_ids = {
@@ -1244,13 +1244,22 @@ class TradeChecker(AuthenticationManager, RedisManager):
                                     "Could not safely cancel stale protective order "
                                     f"{stale_order_id} for {symbol}"
                                 ) from error
-                        self.delete_trade_with_orders(stale_id)
+                        # The stale record can share a protective order with the
+                        # selected record.  Delete only mappings that are exclusive
+                        # to the stale record, then explicitly preserve ownership of
+                        # every shared order for the selected trade.
+                        self.delete_trade(stale_id)
+                        for stale_order_id in stale_order_ids - selected_order_ids:
+                            self.deregister_order(stale_order_id)
+                        selected_trade_id = str(persisted.get("trade_id", ""))
+                        for shared_order_id in stale_order_ids & selected_order_ids:
+                            self.register_order(shared_order_id, selected_trade_id)
             trade_id = str(persisted.get("trade_id") or symbol)
             _dict = {
                 "trade_id": trade_id,
                 "symbol": symbol,
-                "positionSide": "BUY" if positionAmount > 0 else "SELL",
-                "quantity": abs(positionAmount),
+                "positionSide": "BUY" if position_amount > 0 else "SELL",
+                "quantity": abs(position_amount),
                 "price": entry_price,
             }
 
@@ -1283,6 +1292,35 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     self.set_cooldown(symbol)
                     mongo_handler = getattr(self, "mongo_handler", None)
                     persisted_all = mongo_handler is not None
+                    open_order_ids = {
+                        str(order.get("algoId", ""))
+                        for order in self.order_manager.get_conditional_open_orders(
+                            symbol
+                        )
+                        if order.get("algoId")
+                    }
+                    candidate_order_ids = {
+                        str(candidate.get(field, ""))
+                        for candidate in candidates
+                        for field in ("sl_order_id", "tp_order_id")
+                        if candidate.get(field)
+                    }
+                    verified_order_ids = candidate_order_ids & open_order_ids
+                    cancellations_confirmed = True
+                    for order_id in verified_order_ids:
+                        try:
+                            self.order_manager.cancel_algo_conditional_order(
+                                symbol, order_id
+                            )
+                        except Exception as error:
+                            cancellations_confirmed = False
+                            logger.error(
+                                "Preserving duplicate flat-position records for %s "
+                                "because protective order %s could not be canceled: %s",
+                                symbol,
+                                order_id,
+                                error,
+                            )
                     for candidate in candidates:
                         candidate_id = str(candidate.get("trade_id", ""))
                         block = {
@@ -1307,7 +1345,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                                 "reason": "ambiguous_duplicate_flat_records",
                             },
                         )
-                    if persisted_all:
+                    if persisted_all and cancellations_confirmed:
                         for candidate in candidates:
                             self.delete_trade_with_orders(
                                 str(candidate.get("trade_id", ""))
