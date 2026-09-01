@@ -27,6 +27,7 @@ import time
 import logging
 import threading
 import traceback
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -205,6 +206,14 @@ class BinanceAutomation(ExceptionManager):
                                     "average_price": order.get("avgPrice"),
                                 },
                             )
+                        entered_at = get_indian_time()
+                        try:
+                            if order.get("time") is not None:
+                                entered_at = datetime.fromtimestamp(
+                                    int(order["time"]) / 1000, tz=timezone.utc
+                                )
+                        except (TypeError, ValueError, OSError):
+                            pass
                         self.trades[symbol] = {
                             "symbol": symbol,
                             "positionSide": action,
@@ -212,7 +221,9 @@ class BinanceAutomation(ExceptionManager):
                             "orderId": order_id,
                             "price": price,
                             "trade_id": decision_id or symbol,
-                            "entered_at": get_indian_time().isoformat(),
+                            # Creation time is a conservative lower bound for all
+                            # partial fills belonging to this order.
+                            "entered_at": entered_at.isoformat(),
                         }
                         self.trade_checker.merge_trade_fields(
                             decision_id or symbol, self.trades[symbol]

@@ -349,6 +349,20 @@ class OrderManager(AuthenticationManager, RedisManager):
         )
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
 
+        if not isinstance(resp, dict):
+            raise RuntimeError(
+                f"Conditional order {algo_id} cancellation was not confirmed"
+            )
+        status = str(resp.get("algoStatus") or resp.get("status") or "").upper()
+        code = str(resp.get("code", ""))
+        message = str(resp.get("msg", "")).lower()
+        if status != "CANCELED" and not (
+            code == "200" and message in {"success", "successful"}
+        ):
+            raise RuntimeError(
+                f"Conditional order {algo_id} cancellation was not confirmed: {resp}"
+            )
+
         self.deregister_order(str(algo_id))
 
         return resp

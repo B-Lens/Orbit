@@ -47,6 +47,7 @@ logger = logging.getLogger("Orbit")
 
 _POSITION_RISK_MAX_ATTEMPTS = 3
 _POSITION_RISK_RETRY_DELAY = 1.0
+_INCOME_SETTLEMENT_GRACE_MS = 60_000
 
 
 def _order_types(order: Optional[Dict[str, Any]]) -> Tuple[str, str]:
@@ -615,8 +616,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
         query_start_ms = None
         if entered_at_raw:
             query_start_ms = max(0, int(entered_at.timestamp() * 1000))
-            if entry_order_id:
-                query_start_ms = max(0, query_start_ms - 60_000)
         all_fills = sorted(
             self.order_manager.get_account_trades(
                 symbol,
@@ -690,12 +689,20 @@ class TradeChecker(AuthenticationManager, RedisManager):
             else int(entered_at.timestamp() * 1000)
         )
         exit_end_ms = max(int(fill.get("time", 0) or 0) for fill in closing_fills) + 1
+        if int(datetime.now(timezone.utc).timestamp() * 1000) < (
+            exit_end_ms - 1 + _INCOME_SETTLEMENT_GRACE_MS
+        ):
+            raise RuntimeError(
+                f"Binance income history is still settling for {trade_id}"
+            )
         tracker = PerformanceTracker(
             self.order_manager.future_client_for(symbol),
             mongo_handler,
             execution_mode,
         )
         accounting = tracker.sync_window(income_start_ms, exit_end_ms, symbol=symbol)
+        if not tracker.last_records:
+            raise RuntimeError(f"Binance income history was unavailable for {trade_id}")
         realized_pnl = sum(
             float(fill.get("realizedPnl", 0) or 0) for fill in closing_fills
         )

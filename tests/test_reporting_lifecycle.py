@@ -69,6 +69,7 @@ class TestReportingLifecycle(unittest.TestCase):
             "status": "FILLED",
             "executedQty": "0.5",
             "avgPrice": "100.25",
+            "time": 1_722_470_400_000,
         }
         automation.trade_checker = MagicMock()
         automation.trades = {}
@@ -79,6 +80,10 @@ class TestReportingLifecycle(unittest.TestCase):
         )
 
         automation.trade_checker.set_cooldown.assert_not_called()
+        self.assertEqual(
+            automation.trades["ETHUSDT"]["entered_at"],
+            "2024-08-01T00:00:00+00:00",
+        )
 
     def test_filled_order_is_appended_to_decision_ledger(self):
         automation = BinanceAutomation.__new__(BinanceAutomation)

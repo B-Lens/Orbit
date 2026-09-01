@@ -98,6 +98,14 @@ class TestOrderManager(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Could not verify"):
             self.manager.get_conditional_open_orders("BTCUSDT", raise_on_error=True)
 
+    def test_algo_cancellation_deregisters_only_after_exchange_confirmation(self):
+        self.manager.future_client.sign_request.return_value = None
+
+        with self.assertRaisesRegex(RuntimeError, "was not confirmed"):
+            self.manager.cancel_algo_conditional_order("BTCUSDT", "101")
+
+        self.manager.redis_client.delete.assert_not_called()
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 

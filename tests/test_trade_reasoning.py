@@ -97,7 +97,7 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     checker.trades = {"BTCUSDT": {"trade_id": "decision-1"}}
     checker.order_manager = MagicMock()
     checker.order_manager.get_symbol_price.return_value = 110.0
-    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 120_000
     checker.order_manager.get_account_trades.return_value = [
         {
             "id": 1,
@@ -169,7 +169,7 @@ def test_exit_uses_income_commission_when_fill_commission_is_non_usdt() -> None:
     checker = TradeChecker.__new__(TradeChecker)
     checker.trades = {"BTCUSDT": {"trade_id": "decision-bnb-fee"}}
     checker.order_manager = MagicMock()
-    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 120_000
     checker.order_manager.get_account_trades.return_value = [
         {
             "id": 1,
@@ -230,7 +230,7 @@ def test_exit_refreshes_cooldown_before_failed_lifecycle_persistence() -> None:
     checker = TradeChecker.__new__(TradeChecker)
     checker.trades = {"BTCUSDT": {"trade_id": "decision-1"}}
     checker.order_manager = MagicMock()
-    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 120_000
     checker.order_manager.get_account_trades.return_value = [
         {
             "id": 1,
@@ -251,9 +251,15 @@ def test_exit_refreshes_cooldown_before_failed_lifecycle_persistence() -> None:
             "realizedPnl": "1",
         },
     ]
-    checker.order_manager.future_client_for.return_value.get_income_history.return_value = (
-        []
-    )
+    checker.order_manager.future_client_for.return_value.get_income_history.return_value = [
+        {
+            "tranId": 1,
+            "time": exit_time_ms,
+            "symbol": "BTCUSDT",
+            "incomeType": "REALIZED_PNL",
+            "income": "1",
+        }
+    ]
     checker.execution_settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
     checker.mongo_handler = MagicMock()
     checker.mongo_handler.store_trade_exit.return_value = False
@@ -300,6 +306,7 @@ def test_exit_rejects_fills_after_a_new_entry_lifecycle() -> None:
         }
     )
     checker.delete_trade_with_orders = MagicMock()
+    checker.set_cooldown = MagicMock()
 
     with pytest.raises(RuntimeError, match="exit fills were ambiguous"):
         checker._exit_trade("BTCUSDT", "stale")
@@ -324,8 +331,56 @@ def test_reconstructed_exit_requires_closing_fills() -> None:
             "quantity": 1.0,
         }
     )
+    checker.set_cooldown = MagicMock()
 
     with pytest.raises(RuntimeError, match="exit fills were unavailable"):
         checker._exit_trade("BTCUSDT", "legacy")
+
+
+def test_exit_preserves_trade_when_income_history_is_empty() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.trades = {"BTCUSDT": {"trade_id": "delayed-income"}}
+    checker.order_manager = MagicMock()
+    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 120_000
+    checker.order_manager.get_account_trades.return_value = [
+        {
+            "id": 1,
+            "orderId": 10,
+            "side": "BUY",
+            "qty": "1",
+            "time": exit_time_ms - 1000,
+        },
+        {
+            "id": 2,
+            "orderId": 20,
+            "side": "SELL",
+            "qty": "1",
+            "time": exit_time_ms,
+            "price": "101",
+        },
+    ]
+    checker.order_manager.future_client_for.return_value.get_income_history.return_value = (
+        []
+    )
+    checker.execution_settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
+    checker.mongo_handler = MagicMock()
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "delayed-income",
+            "symbol": "BTCUSDT",
+            "positionSide": "BUY",
+            "quantity": 1.0,
+            "orderId": 10,
+        }
+    )
+    checker.set_cooldown = MagicMock()
+    checker.delete_trade_with_orders = MagicMock()
+
+    with pytest.raises(RuntimeError, match="income history was unavailable"):
+        checker._exit_trade("BTCUSDT", "delayed-income")
+
+    checker.mongo_handler.store_trade_exit.assert_not_called()
+    checker.delete_trade_with_orders.assert_not_called()
 
     checker.mongo_handler.store_trade_exit.assert_not_called()
