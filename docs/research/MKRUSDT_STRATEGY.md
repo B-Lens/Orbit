@@ -10,9 +10,10 @@ The strongest robust candidate tested was an hourly trend-following breakout:
 - enter at the next hourly open; permit one position at a time
 
 The strategy was positive in development, validation, and untouched holdout data.
-It is **research-only and not registered for production**. Binance MKRUSDT
-Futures data stops in September 2025 following the MKR-to-SKY market migration,
-so this result does not establish that an executable MKRUSDT market exists now.
+It is registered for **Futures Testnet only**. Binance MKRUSDT historical data
+used by this study stops in September 2025 following the MKR-to-SKY market
+migration, so testnet symbol availability must be monitored and order rejection
+must not be interpreted as strategy performance.
 
 ## Method
 
@@ -41,13 +42,14 @@ These are historical simulated returns, not a profit forecast. The low win rate
 is intentional: profitability depends on retaining the 4:1 payoff, and higher
 real-world costs can erase the modest profit-factor edge.
 
-## Reproduction and operational status
+## Testnet operational status
 
-Run `python3 scripts/run_mkr_backtest.py`. The command downloads and caches the
-fixed historical range in `data/MKRUSDT_1h.csv`, then writes the detailed report
-to ignored path `results/mkr_backtest.json`.
+`config/strategies.yaml` registers `MKRUSDTStrategy` with `execution_mode:
+testnet`. The runtime configuration grants a $100 fixed allocation while the
+global risk policy remains authoritative and may reduce or reject an order.
+Do not promote this strategy to live execution from these historical results.
 
 Before adapting this work to SKYUSDT, perform a new study on native SKY data,
 include funding and exchange filters, and require paper/testnet forward results.
 Do not transfer MKR price parameters mechanically across the 1:24,000 token
-conversion or enable this class in `config/strategies.yaml`.
+conversion. Any SKYUSDT strategy requires separate research and review.

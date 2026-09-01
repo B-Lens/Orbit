@@ -1,4 +1,4 @@
-"""Research strategy for the retired MKRUSDT perpetual market."""
+"""Hourly breakout strategy for MKRUSDT Futures Testnet."""
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -10,11 +10,7 @@ from orbit.strategies.strategies_base import Strategy
 
 @dataclass
 class MKRUSDTStrategy(Strategy):
-    """Trade hourly Donchian breakouts in the EMA trend direction.
-
-    This class is intentionally not in the production registry because the
-    Binance MKRUSDT market used for the research is no longer current.
-    """
+    """Trade hourly Donchian breakouts in the EMA trend direction."""
 
     data: pd.DataFrame
     breakout_period: int = 24

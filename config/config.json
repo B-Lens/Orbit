@@ -14,6 +14,7 @@
       "ETHUSDT": 0.03,
       "BCHUSDT": 0.03,
       "PAXGUSDT": 0.01,
+      "MKRUSDT": 0.01,
       "stop_loss_percent":1
     },
     "FUTURE_LEVERAGE": 2,
@@ -24,7 +25,7 @@
       "max_daily_loss_pct": 0.02,
       "min_reward_risk_ratio": 1.5
     },
-    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "PAXGUSDT"], 
+    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "PAXGUSDT", "MKRUSDT"],
     "trade_checker_pair": [ "BCHUSDT", "BTCUSDT", "BNBUSDT", "ETHUSDT", "MKRUSDT", "LTCUSDT", "SOLUSDT", "ATOMUSDT", "XRPUSDT", "PAXGUSDT"],
     "trading_pairs_precision":{
       "BTCUSDT": 3,
@@ -42,6 +43,7 @@
       "BTCUSDT": 600,
       "ETHUSDT": 30,
       "BCHUSDT": 30,
-      "PAXGUSDT": 100
+      "PAXGUSDT": 100,
+      "MKRUSDT": 100
     }
   }

@@ -5,6 +5,7 @@ import pandas as pd
 
 from orbit.strategies.btc_strategy import BTCStrategy
 from orbit.strategies.eth_strategy import ETHStrategy
+from orbit.strategies.mkrusdt_strategy import MKRUSDTStrategy
 from orbit.strategies.paxgusdt_strategy import PAXGUSDTStrategy
 from orbit.strategies.reversal_strategy import BollingerAdaptiveReversalStrategyBCH
 from orbit.strategies.strategies_base import Strategy
@@ -19,6 +20,7 @@ class TestProductionStrategyOwnership(unittest.TestCase):
             STRATEGY_REGISTRY["BCHUSDT"], BollingerAdaptiveReversalStrategyBCH
         )
         self.assertIs(STRATEGY_REGISTRY["PAXGUSDT"], PAXGUSDTStrategy)
+        self.assertIs(STRATEGY_REGISTRY["MKRUSDT"], MKRUSDTStrategy)
 
     def test_all_production_strategies_use_orbit_contract(self):
         for strategy_class in (
@@ -26,6 +28,7 @@ class TestProductionStrategyOwnership(unittest.TestCase):
             BollingerAdaptiveReversalStrategyBCH,
             ETHStrategy,
             PAXGUSDTStrategy,
+            MKRUSDTStrategy,
         ):
             self.assertTrue(issubclass(strategy_class, Strategy))
             self.assertTrue(strategy_class.__module__.startswith("orbit.strategies."))
@@ -61,9 +64,9 @@ def hourly_btc_frame(closes: list[float]) -> pd.DataFrame:
 class TestBTCStrategy(unittest.TestCase):
     @patch("orbit.strategies.btc_strategy.generate_chart", return_value=None)
     def test_long_breakout_has_three_to_one_reward_risk(self, _chart):
-        signal = BTCStrategy(
-            hourly_btc_frame([100.0] * 55 + [105.0])
-        ).generate_signals(symbol="BTCUSDT")
+        signal = BTCStrategy(hourly_btc_frame([100.0] * 55 + [105.0])).generate_signals(
+            symbol="BTCUSDT"
+        )
 
         self.assertEqual(signal["signal"], "BUY")
         risk = signal["entry_price"] - signal["stop_loss"]
@@ -72,9 +75,9 @@ class TestBTCStrategy(unittest.TestCase):
 
     @patch("orbit.strategies.btc_strategy.generate_chart", return_value=None)
     def test_short_breakout_has_three_to_one_reward_risk(self, _chart):
-        signal = BTCStrategy(
-            hourly_btc_frame([100.0] * 55 + [95.0])
-        ).generate_signals(symbol="BTCUSDT")
+        signal = BTCStrategy(hourly_btc_frame([100.0] * 55 + [95.0])).generate_signals(
+            symbol="BTCUSDT"
+        )
 
         self.assertEqual(signal["signal"], "SELL")
         risk = signal["stop_loss"] - signal["entry_price"]
@@ -104,6 +107,58 @@ class TestBTCStrategy(unittest.TestCase):
         self.assertLess(signal["stop_loss"], data["high"].iloc[-12:].max())
 
 
+def hourly_mkr_frame(final_close: float) -> pd.DataFrame:
+    closes = [100.0] * 105 + [final_close]
+    return pd.DataFrame(
+        {
+            "open": closes,
+            "high": [value + 1 for value in closes],
+            "low": [value - 1 for value in closes],
+            "close": closes,
+            "volume": [100.0] * len(closes),
+        },
+        index=pd.date_range("2025-01-01", periods=len(closes), freq="1h"),
+    )
+
+
+class TestMKRUSDTStrategy(unittest.TestCase):
+    def test_long_breakout_has_four_to_one_reward_risk(self):
+        signal = MKRUSDTStrategy(hourly_mkr_frame(105.0)).generate_signals()
+
+        self.assertEqual(signal["signal"], "BUY")
+        risk = signal["entry_price"] - signal["stop_loss"]
+        reward = signal["take_profit"] - signal["entry_price"]
+        self.assertAlmostEqual(reward / risk, 4.0)
+
+    def test_short_breakout_has_four_to_one_reward_risk(self):
+        signal = MKRUSDTStrategy(hourly_mkr_frame(95.0)).generate_signals()
+
+        self.assertEqual(signal["signal"], "SELL")
+        risk = signal["stop_loss"] - signal["entry_price"]
+        reward = signal["entry_price"] - signal["take_profit"]
+        self.assertAlmostEqual(reward / risk, 4.0)
+
+    def test_existing_position_suppresses_entry(self):
+        signal = MKRUSDTStrategy(hourly_mkr_frame(105.0)).generate_signals(
+            position_side="LONG"
+        )
+
+        self.assertIsNone(signal)
+
+    def test_incomplete_resampled_hour_suppresses_entry(self):
+        hourly = hourly_mkr_frame(105.0)
+        rows = [
+            (timestamp + pd.Timedelta(minutes=15 * offset), row)
+            for timestamp, row in hourly.iterrows()
+            for offset in range(4)
+        ]
+        partial = pd.DataFrame(
+            [row for _, row in rows], index=[timestamp for timestamp, _ in rows]
+        ).iloc[:-1]
+
+        self.assertIsNone(MKRUSDTStrategy(partial).generate_signals())
+
+
 class TestBCHStrategyRiskContract(unittest.TestCase):
     def setUp(self):
         index = pd.date_range("2026-01-01", periods=20, freq="15min")
@@ -123,11 +178,15 @@ class TestBCHStrategyRiskContract(unittest.TestCase):
         lower = pd.Series([101.0] * 19 + [100.0], index=self.data.index)
         upper = pd.Series([200.0] * 20, index=self.data.index)
         with (
-            patch.object(strategy, "compute_bollinger_bands", return_value=(upper, upper, lower)),
+            patch.object(
+                strategy, "compute_bollinger_bands", return_value=(upper, upper, lower)
+            ),
             patch.object(strategy, "compute_sma", return_value=upper),
             patch.object(strategy, "is_bullish_reversal", return_value=True),
             patch.object(strategy, "send_params"),
-            patch("orbit.strategies.reversal_strategy.generate_chart", return_value=None),
+            patch(
+                "orbit.strategies.reversal_strategy.generate_chart", return_value=None
+            ),
         ):
             signal = strategy.generate_signals(symbol="BCHUSDT")
 
@@ -143,11 +202,15 @@ class TestBCHStrategyRiskContract(unittest.TestCase):
         upper = pd.Series([98.0] * 19 + [100.0], index=data.index)
         lower = pd.Series([0.0] * 20, index=data.index)
         with (
-            patch.object(strategy, "compute_bollinger_bands", return_value=(upper, lower, lower)),
+            patch.object(
+                strategy, "compute_bollinger_bands", return_value=(upper, lower, lower)
+            ),
             patch.object(strategy, "compute_sma", return_value=upper),
             patch.object(strategy, "is_bearish_reversal", return_value=True),
             patch.object(strategy, "send_params"),
-            patch("orbit.strategies.reversal_strategy.generate_chart", return_value=None),
+            patch(
+                "orbit.strategies.reversal_strategy.generate_chart", return_value=None
+            ),
         ):
             signal = strategy.generate_signals(symbol="BCHUSDT")
 

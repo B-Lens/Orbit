@@ -1,6 +1,5 @@
 monitored_assets:
   BNBUSDT: testnet
-  MKRUSDT: testnet
   LTCUSDT: testnet
   SOLUSDT: testnet
   ATOMUSDT: testnet
@@ -21,4 +20,8 @@ strategies:
 
   PAXGUSDT:
     strategy: orbit.strategies.paxgusdt_strategy.PAXGUSDTStrategy
+    execution_mode: testnet
+
+  MKRUSDT:
+    strategy: orbit.strategies.mkrusdt_strategy.MKRUSDTStrategy
     execution_mode: testnet
