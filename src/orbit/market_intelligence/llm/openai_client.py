@@ -16,12 +16,17 @@ logger = logging.getLogger("Orbit")
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_OUTPUT_TOKENS = 2_000
 MAX_PREMATURE_STREAM_RETRIES = 1
+RETRYABLE_HTTP_STATUS_CODES = {408, 409, 429}
 DEFAULT_INSTRUCTIONS = (
     "You are Orbit's market-intelligence analyst. Follow the requested output "
     "schema exactly. When JSON is requested, return only valid JSON without "
     "Markdown fences or additional commentary. Do not invent market data."
 )
 DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+
+
+class _RetryableOpenAIError(RuntimeError):
+    """A transient transport failure that is safe to retry."""
 
 
 class OpenAIResponsesClient:
@@ -171,16 +176,26 @@ class CodexOAuthResponsesClient:
         if not prompt or not prompt.strip():
             raise ValueError("prompt must not be empty")
 
+        last_retryable_error: Optional[_RetryableOpenAIError] = None
         for attempt in range(MAX_PREMATURE_STREAM_RETRIES + 1):
-            output_text = self._invoke_stream(prompt, web_search)
+            try:
+                output_text = self._invoke_stream(prompt, web_search)
+            except _RetryableOpenAIError as error:
+                last_retryable_error = error
+                output_text = None
             if output_text is not None:
                 logger.info("OpenAI OAuth response generated with %s", self.model)
                 return output_text
             if attempt < MAX_PREMATURE_STREAM_RETRIES:
-                logger.warning(
-                    "OpenAI stream ended before response.completed; retrying once"
-                )
+                if last_retryable_error is not None:
+                    logger.warning("%s; retrying once", last_retryable_error)
+                else:
+                    logger.warning(
+                        "OpenAI stream ended before response.completed; retrying once"
+                    )
 
+        if last_retryable_error is not None:
+            raise last_retryable_error
         raise RuntimeError("OpenAI stream ended before response.completed")
 
     def _invoke_stream(self, prompt: str, web_search: bool) -> Optional[str]:
@@ -254,9 +269,14 @@ class CodexOAuthResponsesClient:
         except urllib.error.HTTPError as error:
             details = error.read().decode("utf-8", errors="replace")
             hint = " Run `codex login` to refresh auth.json." if error.code == 401 else ""
-            raise RuntimeError(f"OpenAI HTTP {error.code}: {details}.{hint}") from error
+            message = f"OpenAI HTTP {error.code}: {details}.{hint}"
+            if error.code in RETRYABLE_HTTP_STATUS_CODES or error.code >= 500:
+                raise _RetryableOpenAIError(message) from error
+            raise RuntimeError(message) from error
         except urllib.error.URLError as error:
-            raise RuntimeError(f"OpenAI request failed: {error.reason}") from error
+            raise _RetryableOpenAIError(f"OpenAI request failed: {error.reason}") from error
+        except TimeoutError as error:
+            raise _RetryableOpenAIError("OpenAI request timed out") from error
         except json.JSONDecodeError as error:
             raise RuntimeError("OpenAI returned an invalid streaming event") from error
 
