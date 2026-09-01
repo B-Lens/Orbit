@@ -47,7 +47,9 @@ real-world costs can erase the modest profit-factor edge.
 `config/strategies.yaml` registers `MKRUSDTStrategy` with `execution_mode:
 testnet`. The runtime configuration grants a $100 fixed allocation while the
 global risk policy remains authoritative and may reduce or reject an order.
-Do not promote this strategy to live execution from these historical results.
+The signal candle must also be the immediately preceding completed UTC hour,
+preventing retained historical data from producing an order. Do not promote
+this strategy to live execution from these historical results.
 
 Before adapting this work to SKYUSDT, perform a new study on native SKY data,
 include funding and exchange filters, and require paper/testnet forward results.

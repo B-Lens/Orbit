@@ -22,6 +22,21 @@ class MKRUSDTStrategy(Strategy):
     def __post_init__(self) -> None:
         super().__init__(self.data)
 
+    @staticmethod
+    def _current_hour() -> pd.Timestamp:
+        """Return the current UTC hour boundary for freshness checks."""
+        return pd.Timestamp.now(tz="UTC").floor("1h")
+
+    def _is_latest_completed_hour(self, timestamp: pd.Timestamp) -> bool:
+        """Reject aligned but stale cached candles before they can trade."""
+        candle_hour = pd.Timestamp(timestamp)
+        current_hour = self._current_hour()
+        if candle_hour.tzinfo is None:
+            current_hour = current_hour.tz_localize(None)
+        else:
+            current_hour = current_hour.tz_convert(candle_hour.tzinfo)
+        return candle_hour == current_hour - pd.Timedelta(hours=1)
+
     def _hourly_data(self) -> tuple[pd.DataFrame, bool]:
         if self.data.empty or not isinstance(self.data.index, pd.DatetimeIndex):
             return self.data.copy(), False
@@ -29,7 +44,8 @@ class MKRUSDTStrategy(Strategy):
         intervals = self.data.index.to_series().diff().dropna()
         interval = intervals.median() if not intervals.empty else pd.Timedelta(hours=1)
         if interval >= pd.Timedelta(hours=1):
-            return self.data.copy(), True
+            hourly = self.data.copy()
+            return hourly, self._is_latest_completed_hour(hourly.index[-1])
 
         grouped = self.data.resample("1h")
         hourly = grouped.agg(
@@ -45,8 +61,11 @@ class MKRUSDTStrategy(Strategy):
         hourly = hourly[grouped.size() == expected_bars].dropna()
         if hourly.empty:
             return hourly, False
-        latest_closed = (
+        structurally_complete = (
             self.data.index[-1] - hourly.index[-1] == pd.Timedelta(hours=1) - interval
+        )
+        latest_closed = structurally_complete and self._is_latest_completed_hour(
+            hourly.index[-1]
         )
         return hourly, latest_closed
 

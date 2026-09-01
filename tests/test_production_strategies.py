@@ -123,7 +123,13 @@ def hourly_mkr_frame(final_close: float) -> pd.DataFrame:
 
 class TestMKRUSDTStrategy(unittest.TestCase):
     def test_long_breakout_has_four_to_one_reward_risk(self):
-        signal = MKRUSDTStrategy(hourly_mkr_frame(105.0)).generate_signals()
+        data = hourly_mkr_frame(105.0)
+        with patch.object(
+            MKRUSDTStrategy,
+            "_current_hour",
+            return_value=data.index[-1] + pd.Timedelta(hours=1),
+        ):
+            signal = MKRUSDTStrategy(data).generate_signals()
 
         self.assertEqual(signal["signal"], "BUY")
         risk = signal["entry_price"] - signal["stop_loss"]
@@ -131,7 +137,13 @@ class TestMKRUSDTStrategy(unittest.TestCase):
         self.assertAlmostEqual(reward / risk, 4.0)
 
     def test_short_breakout_has_four_to_one_reward_risk(self):
-        signal = MKRUSDTStrategy(hourly_mkr_frame(95.0)).generate_signals()
+        data = hourly_mkr_frame(95.0)
+        with patch.object(
+            MKRUSDTStrategy,
+            "_current_hour",
+            return_value=data.index[-1] + pd.Timedelta(hours=1),
+        ):
+            signal = MKRUSDTStrategy(data).generate_signals()
 
         self.assertEqual(signal["signal"], "SELL")
         risk = signal["stop_loss"] - signal["entry_price"]
@@ -157,6 +169,17 @@ class TestMKRUSDTStrategy(unittest.TestCase):
         ).iloc[:-1]
 
         self.assertIsNone(MKRUSDTStrategy(partial).generate_signals())
+
+    def test_stale_completed_hour_suppresses_entry(self):
+        data = hourly_mkr_frame(105.0)
+        with patch.object(
+            MKRUSDTStrategy,
+            "_current_hour",
+            return_value=data.index[-1] + pd.Timedelta(hours=2),
+        ):
+            signal = MKRUSDTStrategy(data).generate_signals()
+
+        self.assertIsNone(signal)
 
 
 class TestBCHStrategyRiskContract(unittest.TestCase):
