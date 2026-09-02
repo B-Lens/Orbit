@@ -10,10 +10,10 @@ The strongest robust candidate tested was an hourly trend-following breakout:
 - enter at the next hourly open; permit one position at a time
 
 The strategy was positive in development, validation, and untouched holdout data.
-It is registered for **Futures Testnet only**. Binance MKRUSDT historical data
-used by this study stops in September 2025 following the MKR-to-SKY market
-migration, so testnet symbol availability must be monitored and order rejection
-must not be interpreted as strategy performance.
+It is retained as a research implementation but is **not registered for
+execution**. Binance MKRUSDT historical data used by this study stops in
+September 2025 following the MKR-to-SKY market migration, so activating it would
+only cause futile market-data requests for a delisted pair.
 
 ## Method
 
@@ -42,14 +42,14 @@ These are historical simulated returns, not a profit forecast. The low win rate
 is intentional: profitability depends on retaining the 4:1 payoff, and higher
 real-world costs can erase the modest profit-factor edge.
 
-## Testnet operational status
+## Operational status
 
-`config/strategies.yaml` registers `MKRUSDTStrategy` with `execution_mode:
-testnet`. The runtime configuration grants a $100 fixed allocation while the
-global risk policy remains authoritative and may reduce or reject an order.
-The signal candle must also be the immediately preceding completed UTC hour,
-preventing retained historical data from producing an order. Do not promote
-this strategy to live execution from these historical results.
+`config/strategies.yaml` keeps MKRUSDT as a monitored asset for position
+reconciliation, but the symbol is absent from both the strategy registry and
+the active `trading_pairs` list. It therefore cannot generate or execute new
+orders. The research implementation also rejects any signal whose candle is
+not the immediately preceding completed UTC hour. Do not activate this strategy
+for either testnet or live execution from these historical results.
 
 Before adapting this work to SKYUSDT, perform a new study on native SKY data,
 include funding and exchange filters, and require paper/testnet forward results.
