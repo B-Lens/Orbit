@@ -692,9 +692,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
         if int(datetime.now(timezone.utc).timestamp() * 1000) < (
             exit_end_ms - 1 + _INCOME_SETTLEMENT_GRACE_MS
         ):
-            raise RuntimeError(
-                f"Binance income history is still settling for {trade_id}"
+            logger.info(
+                "[EXIT] Binance income history is still settling for %s; "
+                "preserving trade state for retry.",
+                trade_id,
             )
+            return False
         tracker = PerformanceTracker(
             self.order_manager.future_client_for(symbol),
             mongo_handler,
@@ -702,7 +705,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
         )
         accounting = tracker.sync_window(income_start_ms, exit_end_ms, symbol=symbol)
         if not tracker.last_records:
-            raise RuntimeError(f"Binance income history was unavailable for {trade_id}")
+            logger.info(
+                "[EXIT] Binance income history is not yet available for %s; "
+                "preserving trade state for retry.",
+                trade_id,
+            )
+            return False
         realized_pnl = sum(
             float(fill.get("realizedPnl", 0) or 0) for fill in closing_fills
         )
