@@ -38,12 +38,5 @@
       "ATOMUSDT": 3,
       "XRPUSDT": 3,
       "PAXGUSDT": 2
-    },
-    "FIXED_TRADE_AMOUNT": {
-      "BTCUSDT": 600,
-      "ETHUSDT": 30,
-      "BCHUSDT": 30,
-      "PAXGUSDT": 100,
-      "SKYUSDT": 100
     }
   }
