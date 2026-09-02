@@ -20,7 +20,7 @@ class TestProductionStrategyOwnership(unittest.TestCase):
             STRATEGY_REGISTRY["BCHUSDT"], BollingerAdaptiveReversalStrategyBCH
         )
         self.assertIs(STRATEGY_REGISTRY["PAXGUSDT"], PAXGUSDTStrategy)
-        self.assertNotIn("MKRUSDT", STRATEGY_REGISTRY)
+        self.assertIs(STRATEGY_REGISTRY["MKRUSDT"], MKRUSDTStrategy)
 
     def test_all_production_strategies_use_orbit_contract(self):
         for strategy_class in (
