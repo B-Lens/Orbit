@@ -25,9 +25,6 @@ Key schema
 ``sentiment:pending_count``         – expiring consecutive-observation count
 ``sentiment:last_run_slot``         – dated half-hour slot of last analysis
 ``sentiment:run_slot_lease``        – in-progress analysis slot lease
-``sentiment:last_news_fetch``       – ISO-8601 last news fetch time
-``sentiment:last_reddit_fetch``     – ISO-8601 last Reddit fetch time
-``sentiment:last_twitter_fetch``    – ISO-8601 last Twitter fetch time
 """
 
 import json
@@ -53,12 +50,6 @@ REDIS_KEY_PENDING_SENTIMENT_BASE: str = "sentiment:pending_base"
 REDIS_KEY_PENDING_SENTIMENT_COUNT: str = "sentiment:pending_count"
 REDIS_KEY_SENTIMENT_LAST_RUN_SLOT: str = "sentiment:last_run_slot"
 REDIS_KEY_SENTIMENT_RUN_SLOT_LEASE: str = "sentiment:run_slot_lease"
-REDIS_KEY_LAST_NEWS_FETCH: str = "sentiment:last_news_fetch"
-REDIS_KEY_LAST_REDDIT_FETCH: str = "sentiment:last_reddit_fetch"
-REDIS_KEY_LAST_TWITTER_FETCH: str = "sentiment:last_twitter_fetch"
-
-# TTL for timestamp keys (48 hours)
-_TIMESTAMP_TTL: int = 172_800
 
 # Pending observations must remain recent across half-hour confirmation windows.
 _PENDING_SENTIMENT_TTL: int = 7_200
@@ -215,7 +206,9 @@ class RedisManager:
                         self.redis_client.delete(_order_key(str(oid)))
             self.redis_client.delete(_trade_key(trade_id))
         except Exception as e:
-            logger.exception(f"[Redis] delete_trade_with_orders({trade_id}) failed: {e}")
+            logger.exception(
+                f"[Redis] delete_trade_with_orders({trade_id}) failed: {e}"
+            )
 
     def scan_trade_keys(self) -> Iterator[str]:
         """Yield all ``trade:*`` keys currently in Redis."""
@@ -302,18 +295,20 @@ class RedisManager:
         return count
         """
         try:
-            count = int(self.redis_client.eval(
-                script,
-                4,
-                REDIS_KEY_MARKET_SENTIMENT,
-                REDIS_KEY_PENDING_SENTIMENT,
-                REDIS_KEY_PENDING_SENTIMENT_BASE,
-                REDIS_KEY_PENDING_SENTIMENT_COUNT,
-                base_sentiment,
-                sentiment,
-                str(_PENDING_SENTIMENT_TTL),
-                str(confirmations_required),
-            ))
+            count = int(
+                self.redis_client.eval(
+                    script,
+                    4,
+                    REDIS_KEY_MARKET_SENTIMENT,
+                    REDIS_KEY_PENDING_SENTIMENT,
+                    REDIS_KEY_PENDING_SENTIMENT_BASE,
+                    REDIS_KEY_PENDING_SENTIMENT_COUNT,
+                    base_sentiment,
+                    sentiment,
+                    str(_PENDING_SENTIMENT_TTL),
+                    str(confirmations_required),
+                )
+            )
             if count == 0:
                 return None
             return abs(count), count < 0
@@ -335,18 +330,22 @@ class RedisManager:
         return 1
         """
         try:
-            return bool(self.redis_client.eval(
-                script,
-                4,
-                REDIS_KEY_MARKET_SENTIMENT,
-                REDIS_KEY_PENDING_SENTIMENT,
-                REDIS_KEY_PENDING_SENTIMENT_BASE,
-                REDIS_KEY_PENDING_SENTIMENT_COUNT,
-                expected or "",
-                sentiment,
-            ))
+            return bool(
+                self.redis_client.eval(
+                    script,
+                    4,
+                    REDIS_KEY_MARKET_SENTIMENT,
+                    REDIS_KEY_PENDING_SENTIMENT,
+                    REDIS_KEY_PENDING_SENTIMENT_BASE,
+                    REDIS_KEY_PENDING_SENTIMENT_COUNT,
+                    expected or "",
+                    sentiment,
+                )
+            )
         except Exception as e:
-            logger.exception("[Redis] Conditional market-sentiment update failed: %s", e)
+            logger.exception(
+                "[Redis] Conditional market-sentiment update failed: %s", e
+            )
             return False
 
     def set_market_sentiment_and_clear_pending(self, sentiment: str) -> None:
@@ -459,67 +458,3 @@ class RedisManager:
         except Exception as e:
             logger.exception("[Redis] Releasing sentiment run slot failed: %s", e)
             return False
-
-    # ------------------------------------------------------------------
-    # Sentiment fetch timestamps
-    # ------------------------------------------------------------------
-
-    def get_last_fetch_times(
-        self,
-    ) -> tuple[Optional[datetime], Optional[datetime], Optional[datetime]]:
-        """Load last-fetch timestamps from Redis.
-
-        Returns:
-            Tuple of ``(last_news_fetch, last_reddit_fetch, last_twitter_fetch)``.
-            Any element is ``None`` when not yet stored.
-        """
-        last_news_fetch: Optional[datetime] = None
-        last_reddit_fetch: Optional[datetime] = None
-        last_twitter_fetch: Optional[datetime] = None
-
-        try:
-            raw_news = self.redis_client.get(REDIS_KEY_LAST_NEWS_FETCH)
-            if raw_news:
-                last_news_fetch = datetime.fromisoformat(raw_news)
-
-            raw_reddit = self.redis_client.get(REDIS_KEY_LAST_REDDIT_FETCH)
-            if raw_reddit:
-                last_reddit_fetch = datetime.fromisoformat(raw_reddit)
-
-            raw_twitter = self.redis_client.get(REDIS_KEY_LAST_TWITTER_FETCH)
-            if raw_twitter:
-                last_twitter_fetch = datetime.fromisoformat(raw_twitter)
-
-        except Exception as e:
-            logger.exception(f"[Redis] get_last_fetch_times failed: {e}")
-
-        return last_news_fetch, last_reddit_fetch, last_twitter_fetch
-
-    def save_last_fetch_times(
-        self,
-        last_news_fetch: Optional[str],
-        last_reddit_fetch: Optional[str],
-        last_twitter_fetch: Optional[str],
-    ) -> None:
-        """Persist last-fetch timestamps to Redis with a 48-hour TTL.
-
-        Args:
-            last_news_fetch: ISO-8601 string for the last news fetch time.
-            last_reddit_fetch: ISO-8601 string for the last Reddit fetch time.
-            last_twitter_fetch: ISO-8601 string for the last Twitter fetch time.
-        """
-        try:
-            if last_news_fetch:
-                self.redis_client.setex(
-                    REDIS_KEY_LAST_NEWS_FETCH, _TIMESTAMP_TTL, last_news_fetch
-                )
-            if last_reddit_fetch:
-                self.redis_client.setex(
-                    REDIS_KEY_LAST_REDDIT_FETCH, _TIMESTAMP_TTL, last_reddit_fetch
-                )
-            if last_twitter_fetch:
-                self.redis_client.setex(
-                    REDIS_KEY_LAST_TWITTER_FETCH, _TIMESTAMP_TTL, last_twitter_fetch
-                )
-        except Exception as e:
-            logger.exception(f"[Redis] save_last_fetch_times failed: {e}")
