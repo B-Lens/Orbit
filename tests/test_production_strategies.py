@@ -181,6 +181,18 @@ class TestSKYUSDTStrategy(unittest.TestCase):
 
         self.assertIsNone(signal)
 
+    def test_missing_complete_hour_suppresses_entry(self):
+        data = hourly_sky_frame(105.0)
+        data = data.drop(data.index[-10])
+        with patch.object(
+            SKYUSDTStrategy,
+            "_current_hour",
+            return_value=data.index[-1] + pd.Timedelta(hours=1),
+        ):
+            signal = SKYUSDTStrategy(data).generate_signals()
+
+        self.assertIsNone(signal)
+
 
 class TestBCHStrategyRiskContract(unittest.TestCase):
     def setUp(self):

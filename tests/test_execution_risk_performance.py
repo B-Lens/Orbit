@@ -32,6 +32,7 @@ class TestExecutionSettings(unittest.TestCase):
                 "BCHUSDT",
                 "PAXGUSDT",
                 "BNBUSDT",
+                "MKRUSDT",
                 "SKYUSDT",
                 "LTCUSDT",
                 "SOLUSDT",

@@ -37,6 +37,14 @@ class SKYUSDTStrategy(Strategy):
             current_hour = current_hour.tz_convert(candle_hour.tzinfo)
         return candle_hour == current_hour - pd.Timedelta(hours=1)
 
+    @staticmethod
+    def _has_contiguous_hours(data: pd.DataFrame) -> bool:
+        """Return whether every strategy bar is exactly one hour apart."""
+        if len(data) < 2:
+            return True
+        differences = data.index.to_series().diff().dropna()
+        return bool((differences == pd.Timedelta(hours=1)).all())
+
     def _hourly_data(self) -> tuple[pd.DataFrame, bool]:
         if self.data.empty or not isinstance(self.data.index, pd.DatetimeIndex):
             return self.data.copy(), False
@@ -45,7 +53,10 @@ class SKYUSDTStrategy(Strategy):
         interval = intervals.median() if not intervals.empty else pd.Timedelta(hours=1)
         if interval >= pd.Timedelta(hours=1):
             hourly = self.data.copy()
-            return hourly, self._is_latest_completed_hour(hourly.index[-1])
+            valid = self._has_contiguous_hours(
+                hourly
+            ) and self._is_latest_completed_hour(hourly.index[-1])
+            return hourly, valid
 
         grouped = self.data.resample("1h")
         hourly = grouped.agg(
@@ -64,8 +75,10 @@ class SKYUSDTStrategy(Strategy):
         structurally_complete = (
             self.data.index[-1] - hourly.index[-1] == pd.Timedelta(hours=1) - interval
         )
-        latest_closed = structurally_complete and self._is_latest_completed_hour(
-            hourly.index[-1]
+        latest_closed = (
+            structurally_complete
+            and self._has_contiguous_hours(hourly)
+            and self._is_latest_completed_hour(hourly.index[-1])
         )
         return hourly, latest_closed
 
