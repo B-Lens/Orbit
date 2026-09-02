@@ -109,7 +109,7 @@ class TestBTCStrategy(unittest.TestCase):
 
 def hourly_sky_frame(final_close: float) -> pd.DataFrame:
     closes = [100.0] * 105 + [final_close]
-    return pd.DataFrame(
+    hourly = pd.DataFrame(
         {
             "open": closes,
             "high": [value + 1 for value in closes],
@@ -119,6 +119,15 @@ def hourly_sky_frame(final_close: float) -> pd.DataFrame:
         },
         index=pd.date_range("2025-01-01", periods=len(closes), freq="1h"),
     )
+    rows = [
+        (timestamp + pd.Timedelta(minutes=15 * offset), row)
+        for timestamp, row in hourly.iterrows()
+        for offset in range(4)
+    ]
+    rows.append((hourly.index[-1] + pd.Timedelta(hours=1), hourly.iloc[-1]))
+    return pd.DataFrame(
+        [row for _, row in rows], index=[timestamp for timestamp, _ in rows]
+    )
 
 
 class TestSKYUSDTStrategy(unittest.TestCase):
@@ -127,7 +136,7 @@ class TestSKYUSDTStrategy(unittest.TestCase):
         with patch.object(
             SKYUSDTStrategy,
             "_current_hour",
-            return_value=data.index[-1] + pd.Timedelta(hours=1),
+            return_value=data.index[-1].floor("h"),
         ):
             signal = SKYUSDTStrategy(data).generate_signals()
 
@@ -136,12 +145,24 @@ class TestSKYUSDTStrategy(unittest.TestCase):
         reward = signal["take_profit"] - signal["entry_price"]
         self.assertAlmostEqual(reward / risk, 4.0)
 
+    def test_entry_uses_the_next_hour_open(self):
+        data = hourly_sky_frame(105.0)
+        data.iloc[-1, data.columns.get_loc("open")] = 106.0
+        with patch.object(
+            SKYUSDTStrategy,
+            "_current_hour",
+            return_value=data.index[-1].floor("h"),
+        ):
+            signal = SKYUSDTStrategy(data).generate_signals()
+
+        self.assertEqual(signal["entry_price"], 106.0)
+
     def test_short_breakout_has_four_to_one_reward_risk(self):
         data = hourly_sky_frame(95.0)
         with patch.object(
             SKYUSDTStrategy,
             "_current_hour",
-            return_value=data.index[-1] + pd.Timedelta(hours=1),
+            return_value=data.index[-1].floor("h"),
         ):
             signal = SKYUSDTStrategy(data).generate_signals()
 
@@ -175,7 +196,7 @@ class TestSKYUSDTStrategy(unittest.TestCase):
         with patch.object(
             SKYUSDTStrategy,
             "_current_hour",
-            return_value=data.index[-1] + pd.Timedelta(hours=2),
+            return_value=data.index[-1].floor("h") + pd.Timedelta(hours=1),
         ):
             signal = SKYUSDTStrategy(data).generate_signals()
 
@@ -183,11 +204,11 @@ class TestSKYUSDTStrategy(unittest.TestCase):
 
     def test_missing_complete_hour_suppresses_entry(self):
         data = hourly_sky_frame(105.0)
-        data = data.drop(data.index[-10])
+        data = data.drop(data.index[-12:-8])
         with patch.object(
             SKYUSDTStrategy,
             "_current_hour",
-            return_value=data.index[-1] + pd.Timedelta(hours=1),
+            return_value=data.index[-1].floor("h"),
         ):
             signal = SKYUSDTStrategy(data).generate_signals()
 

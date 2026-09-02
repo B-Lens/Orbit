@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from binance.spot import Spot
 from binance.um_futures import UMFutures
 
+from config import COIN_TRADE_TYPE, TRAILING_STOPLOSS
 from config.config import load_config
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.execution import ExecutionMode, ExecutionSettings, FUTURES_TESTNET_URL
@@ -130,6 +131,25 @@ class AuthenticationManager(ExceptionManager):
             raise ValueError(
                 "Trading assets missing strategy execution modes: "
                 + ", ".join(sorted(missing_assets))
+            )
+        missing_reconciliation_metadata = {
+            "trading_pairs_precision": configured_assets
+            - set(self.config.get("trading_pairs_precision", {})),
+            "COIN_TRADE_TYPE": configured_assets - set(COIN_TRADE_TYPE),
+            "TRAILING_STOPLOSS": configured_assets - set(TRAILING_STOPLOSS),
+        }
+        missing_reconciliation_metadata = {
+            name: symbols
+            for name, symbols in missing_reconciliation_metadata.items()
+            if symbols
+        }
+        if missing_reconciliation_metadata:
+            details = "; ".join(
+                f"{name}: {', '.join(sorted(symbols))}"
+                for name, symbols in missing_reconciliation_metadata.items()
+            )
+            raise ValueError(
+                f"Trading assets missing reconciliation metadata: {details}"
             )
         logger.info(
             "Asset execution modes: %s",

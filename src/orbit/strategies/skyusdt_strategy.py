@@ -72,15 +72,21 @@ class SKYUSDTStrategy(Strategy):
         hourly = hourly[grouped.size() == expected_bars].dropna()
         if hourly.empty:
             return hourly, False
-        structurally_complete = (
-            self.data.index[-1] - hourly.index[-1] == pd.Timedelta(hours=1) - interval
-        )
-        latest_closed = (
-            structurally_complete
-            and self._has_contiguous_hours(hourly)
-            and self._is_latest_completed_hour(hourly.index[-1])
-        )
+        latest_closed = self._has_contiguous_hours(
+            hourly
+        ) and self._is_latest_completed_hour(hourly.index[-1])
         return hourly, latest_closed
+
+    def _next_hour_open(self, completed_hour: pd.Timestamp) -> Optional[float]:
+        """Return the first available candle open in the hour after a signal."""
+        next_hour = completed_hour + pd.Timedelta(hours=1)
+        next_hour_candles = self.data[
+            (self.data.index >= next_hour)
+            & (self.data.index < next_hour + pd.Timedelta(hours=1))
+        ]
+        if next_hour_candles.empty:
+            return None
+        return float(next_hour_candles.iloc[0]["open"])
 
     def _indicators(self, data: pd.DataFrame) -> pd.DataFrame:
         frame = data.copy()
@@ -118,12 +124,16 @@ class SKYUSDTStrategy(Strategy):
         if not long_signal and not short_signal:
             return None
 
+        entry_price = self._next_hour_open(hourly.index[-1])
+        if entry_price is None:
+            return None
+
         direction = 1 if long_signal else -1
         risk = self.atr_stop_multiple * float(current["atr"])
         return {
             "signal": "BUY" if long_signal else "SELL",
-            "entry_price": close,
-            "stop_loss": close - direction * risk,
-            "take_profit": close + direction * self.reward_risk * risk,
+            "entry_price": entry_price,
+            "stop_loss": entry_price - direction * risk,
+            "take_profit": entry_price + direction * self.reward_risk * risk,
             "pattern": "1H 24-bar Donchian breakout + EMA100 trend",
         }
