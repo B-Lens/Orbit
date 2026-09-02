@@ -1,4 +1,4 @@
-"""Hourly breakout strategy for MKRUSDT Futures Testnet."""
+"""Hourly breakout strategy for SKYUSDT Futures Testnet."""
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -9,7 +9,7 @@ from orbit.strategies.strategies_base import Strategy
 
 
 @dataclass
-class MKRUSDTStrategy(Strategy):
+class SKYUSDTStrategy(Strategy):
     """Trade hourly Donchian breakouts in the EMA trend direction."""
 
     data: pd.DataFrame

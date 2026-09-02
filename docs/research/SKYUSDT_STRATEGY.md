@@ -1,4 +1,4 @@
-# MKRUSDT intraday strategy research
+# SKYUSDT migration notes
 
 ## Decision
 
@@ -9,11 +9,10 @@ The strongest robust candidate tested was an hourly trend-following breakout:
 - stop at 1.5 ATR(14), target at four times the initial risk
 - enter at the next hourly open; permit one position at a time
 
-The strategy was positive in development, validation, and untouched holdout data.
-It is retained as a research implementation but is **not registered for
-execution**. Binance MKRUSDT historical data used by this study stops in
-September 2025 following the MKR-to-SKY market migration, so activating it would
-only cause futile market-data requests for a delisted pair.
+The strategy was positive in development, validation, and untouched holdout data
+when tested against the predecessor MKRUSDT market. Orbit now targets SKYUSDT
+following Binance's MKR-to-SKY migration. These historical results have not been
+independently validated against native SKYUSDT history.
 
 ## Method
 
@@ -44,14 +43,11 @@ real-world costs can erase the modest profit-factor edge.
 
 ## Operational status
 
-`config/strategies.yaml` keeps MKRUSDT as a monitored asset for position
-reconciliation, but the symbol is absent from both the strategy registry and
-the active `trading_pairs` list. It therefore cannot generate or execute new
-orders. The research implementation also rejects any signal whose candle is
-not the immediately preceding completed UTC hour. Do not activate this strategy
-for either testnet or live execution from these historical results.
+`config/strategies.yaml` registers SKYUSDT for testnet execution and the active
+`trading_pairs` list includes it. The implementation rejects any signal whose
+candle is not the immediately preceding completed UTC hour.
 
-Before adapting this work to SKYUSDT, perform a new study on native SKY data,
-include funding and exchange filters, and require paper/testnet forward results.
-Do not transfer MKR price parameters mechanically across the 1:24,000 token
-conversion. Any SKYUSDT strategy requires separate research and review.
+Before promoting SKYUSDT to live execution, perform a new study on native SKY
+data, include funding and exchange filters, and require testnet forward results.
+The Donchian, EMA, and ATR rules are relative to market prices, but the inherited
+MKR performance record is not evidence of SKY performance.

@@ -5,7 +5,7 @@ import pandas as pd
 
 from orbit.strategies.btc_strategy import BTCStrategy
 from orbit.strategies.eth_strategy import ETHStrategy
-from orbit.strategies.mkrusdt_strategy import MKRUSDTStrategy
+from orbit.strategies.skyusdt_strategy import SKYUSDTStrategy
 from orbit.strategies.paxgusdt_strategy import PAXGUSDTStrategy
 from orbit.strategies.reversal_strategy import BollingerAdaptiveReversalStrategyBCH
 from orbit.strategies.strategies_base import Strategy
@@ -20,7 +20,7 @@ class TestProductionStrategyOwnership(unittest.TestCase):
             STRATEGY_REGISTRY["BCHUSDT"], BollingerAdaptiveReversalStrategyBCH
         )
         self.assertIs(STRATEGY_REGISTRY["PAXGUSDT"], PAXGUSDTStrategy)
-        self.assertIs(STRATEGY_REGISTRY["MKRUSDT"], MKRUSDTStrategy)
+        self.assertIs(STRATEGY_REGISTRY["SKYUSDT"], SKYUSDTStrategy)
 
     def test_all_production_strategies_use_orbit_contract(self):
         for strategy_class in (
@@ -28,6 +28,7 @@ class TestProductionStrategyOwnership(unittest.TestCase):
             BollingerAdaptiveReversalStrategyBCH,
             ETHStrategy,
             PAXGUSDTStrategy,
+            SKYUSDTStrategy,
         ):
             self.assertTrue(issubclass(strategy_class, Strategy))
             self.assertTrue(strategy_class.__module__.startswith("orbit.strategies."))
@@ -106,7 +107,7 @@ class TestBTCStrategy(unittest.TestCase):
         self.assertLess(signal["stop_loss"], data["high"].iloc[-12:].max())
 
 
-def hourly_mkr_frame(final_close: float) -> pd.DataFrame:
+def hourly_sky_frame(final_close: float) -> pd.DataFrame:
     closes = [100.0] * 105 + [final_close]
     return pd.DataFrame(
         {
@@ -120,15 +121,15 @@ def hourly_mkr_frame(final_close: float) -> pd.DataFrame:
     )
 
 
-class TestMKRUSDTStrategy(unittest.TestCase):
+class TestSKYUSDTStrategy(unittest.TestCase):
     def test_long_breakout_has_four_to_one_reward_risk(self):
-        data = hourly_mkr_frame(105.0)
+        data = hourly_sky_frame(105.0)
         with patch.object(
-            MKRUSDTStrategy,
+            SKYUSDTStrategy,
             "_current_hour",
             return_value=data.index[-1] + pd.Timedelta(hours=1),
         ):
-            signal = MKRUSDTStrategy(data).generate_signals()
+            signal = SKYUSDTStrategy(data).generate_signals()
 
         self.assertEqual(signal["signal"], "BUY")
         risk = signal["entry_price"] - signal["stop_loss"]
@@ -136,13 +137,13 @@ class TestMKRUSDTStrategy(unittest.TestCase):
         self.assertAlmostEqual(reward / risk, 4.0)
 
     def test_short_breakout_has_four_to_one_reward_risk(self):
-        data = hourly_mkr_frame(95.0)
+        data = hourly_sky_frame(95.0)
         with patch.object(
-            MKRUSDTStrategy,
+            SKYUSDTStrategy,
             "_current_hour",
             return_value=data.index[-1] + pd.Timedelta(hours=1),
         ):
-            signal = MKRUSDTStrategy(data).generate_signals()
+            signal = SKYUSDTStrategy(data).generate_signals()
 
         self.assertEqual(signal["signal"], "SELL")
         risk = signal["stop_loss"] - signal["entry_price"]
@@ -150,14 +151,14 @@ class TestMKRUSDTStrategy(unittest.TestCase):
         self.assertAlmostEqual(reward / risk, 4.0)
 
     def test_existing_position_suppresses_entry(self):
-        signal = MKRUSDTStrategy(hourly_mkr_frame(105.0)).generate_signals(
+        signal = SKYUSDTStrategy(hourly_sky_frame(105.0)).generate_signals(
             position_side="LONG"
         )
 
         self.assertIsNone(signal)
 
     def test_incomplete_resampled_hour_suppresses_entry(self):
-        hourly = hourly_mkr_frame(105.0)
+        hourly = hourly_sky_frame(105.0)
         rows = [
             (timestamp + pd.Timedelta(minutes=15 * offset), row)
             for timestamp, row in hourly.iterrows()
@@ -167,16 +168,16 @@ class TestMKRUSDTStrategy(unittest.TestCase):
             [row for _, row in rows], index=[timestamp for timestamp, _ in rows]
         ).iloc[:-1]
 
-        self.assertIsNone(MKRUSDTStrategy(partial).generate_signals())
+        self.assertIsNone(SKYUSDTStrategy(partial).generate_signals())
 
     def test_stale_completed_hour_suppresses_entry(self):
-        data = hourly_mkr_frame(105.0)
+        data = hourly_sky_frame(105.0)
         with patch.object(
-            MKRUSDTStrategy,
+            SKYUSDTStrategy,
             "_current_hour",
             return_value=data.index[-1] + pd.Timedelta(hours=2),
         ):
-            signal = MKRUSDTStrategy(data).generate_signals()
+            signal = SKYUSDTStrategy(data).generate_signals()
 
         self.assertIsNone(signal)
 

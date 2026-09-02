@@ -2,7 +2,7 @@
     "cooldown_hours": {
       "BCHUSDT" : 0,
       "BNBUSDT" : 0,
-      "MKRUSDT" : 0,
+      "SKYUSDT" : 0,
       "LTCUSDT" : 0,
       "SOLUSDT" : 0,
       "ETHUSDT" : 0,
@@ -14,6 +14,7 @@
       "ETHUSDT": 0.03,
       "BCHUSDT": 0.03,
       "PAXGUSDT": 0.01,
+      "SKYUSDT": 0.01,
       "stop_loss_percent":1
     },
     "FUTURE_LEVERAGE": 2,
@@ -24,14 +25,14 @@
       "max_daily_loss_pct": 0.02,
       "min_reward_risk_ratio": 1.5
     },
-    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "PAXGUSDT", "MKRUSDT"],
-    "trade_checker_pair": [ "BCHUSDT", "BTCUSDT", "BNBUSDT", "ETHUSDT", "MKRUSDT", "LTCUSDT", "SOLUSDT", "ATOMUSDT", "XRPUSDT", "PAXGUSDT"],
+    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "PAXGUSDT", "SKYUSDT"],
+    "trade_checker_pair": [ "BCHUSDT", "BTCUSDT", "BNBUSDT", "ETHUSDT", "SKYUSDT", "LTCUSDT", "SOLUSDT", "ATOMUSDT", "XRPUSDT", "PAXGUSDT"],
     "trading_pairs_precision":{
       "BTCUSDT": 3,
       "ETHUSDT": 3,
       "BCHUSDT": 3,
       "BNBUSDT": 2,
-      "MKRUSDT": 3,
+      "SKYUSDT": 0,
       "LTCUSDT": 3,
       "SOLUSDT": 2,
       "ATOMUSDT": 3,
@@ -42,6 +43,7 @@
       "BTCUSDT": 600,
       "ETHUSDT": 30,
       "BCHUSDT": 30,
-      "PAXGUSDT": 100
+      "PAXGUSDT": 100,
+      "SKYUSDT": 100
     }
   }
