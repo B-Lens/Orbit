@@ -77,17 +77,6 @@ class SKYUSDTStrategy(Strategy):
         ) and self._is_latest_completed_hour(hourly.index[-1])
         return hourly, latest_closed
 
-    def _next_hour_open(self, completed_hour: pd.Timestamp) -> Optional[float]:
-        """Return the first available candle open in the hour after a signal."""
-        next_hour = completed_hour + pd.Timedelta(hours=1)
-        next_hour_candles = self.data[
-            (self.data.index >= next_hour)
-            & (self.data.index < next_hour + pd.Timedelta(hours=1))
-        ]
-        if next_hour_candles.empty:
-            return None
-        return float(next_hour_candles.iloc[0]["open"])
-
     def _indicators(self, data: pd.DataFrame) -> pd.DataFrame:
         frame = data.copy()
         previous_close = frame["close"].shift(1)
@@ -124,11 +113,11 @@ class SKYUSDTStrategy(Strategy):
         if not long_signal and not short_signal:
             return None
 
-        entry_price = self._next_hour_open(hourly.index[-1])
-        if entry_price is None:
-            return None
-
         direction = 1 if long_signal else -1
+        # Mongo deliberately omits the in-progress 15-minute candle.  Enter at
+        # the just-completed breakout bar's close, which is the latest price
+        # guaranteed by that data contract.
+        entry_price = close
         risk = self.atr_stop_multiple * float(current["atr"])
         return {
             "signal": "BUY" if long_signal else "SELL",
