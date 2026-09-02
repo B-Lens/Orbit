@@ -33,6 +33,7 @@ class TestExecutionSettings(unittest.TestCase):
                 "PAXGUSDT",
                 "BNBUSDT",
                 "MKRUSDT",
+                "SKYUSDT",
                 "LTCUSDT",
                 "SOLUSDT",
                 "ATOMUSDT",
@@ -169,6 +170,25 @@ class TestExecutionSettings(unittest.TestCase):
                 config={
                     "trading_pairs": ["BCHUSDT", "PAXGUSDT"],
                     "trade_checker_pair": ["BCHUSDT", "PAXGUSDT"],
+                },
+            )
+
+    def test_reconciliation_metadata_is_required_for_monitored_assets(self):
+        settings = ExecutionSettings({"BCHUSDT": ExecutionMode.TESTNET})
+        with (
+            patch("orbit.core.authentication_manager.COIN_TRADE_TYPE", {}),
+            self.assertRaisesRegex(
+                ValueError, "Trading assets missing reconciliation metadata"
+            ),
+        ):
+            AuthenticationManager(
+                spot_client=MagicMock(),
+                futures_clients={ExecutionMode.TESTNET: MagicMock()},
+                execution_settings=settings,
+                config={
+                    "trading_pairs": ["BCHUSDT"],
+                    "trade_checker_pair": ["BCHUSDT"],
+                    "trading_pairs_precision": {"BCHUSDT": 3},
                 },
             )
 

@@ -22,3 +22,7 @@ strategies:
   PAXGUSDT:
     strategy: orbit.strategies.paxgusdt_strategy.PAXGUSDTStrategy
     execution_mode: testnet
+
+  SKYUSDT:
+    strategy: orbit.strategies.skyusdt_strategy.SKYUSDTStrategy
+    execution_mode: testnet

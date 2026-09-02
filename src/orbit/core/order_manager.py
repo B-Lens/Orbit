@@ -55,9 +55,6 @@ class OrderManager(AuthenticationManager, RedisManager):
             ``spot_client``, ``futures_client``, ``config``).
     """
 
-    FIXED_SPEND_USDT: float = 30.0
-    """Default USDT amount allocated per trade."""
-
     MAX_LOSS_PER_BRIDGE: float = 0.3
     """Maximum acceptable USDT loss for a single bridge order."""
 
@@ -224,37 +221,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                 trade_id,
                 {"status": "order_rejected", "reason": reason, **details},
             )
-
-    def fixed_asset_allocated(self, symbol: str, price: float) -> float:
-        """Compute the coin quantity affordable from the fixed USDT allocation.
-
-        Args:
-            symbol: Trading pair.
-            price: Current coin price in USDT.
-
-        Returns:
-            The computed coin quantity.  Returns ``0.0`` when the wallet
-            balance is insufficient.
-        """
-        usdt_balance = self.get_usdt_balance(symbol)
-        amount_to_spend = self.config["FIXED_TRADE_AMOUNT"].get(
-            symbol, self.FIXED_SPEND_USDT
-        )
-
-        if usdt_balance <= 0 or usdt_balance < amount_to_spend:
-            msg = (
-                f"Insufficient USDT balance for fixed allocation. "
-                f"Balance: {usdt_balance}, required: {amount_to_spend}"
-            )
-            logger.warning(msg)
-            self.send_alerts(
-                data=None,
-                description="Insufficient Wallet balance",
-                fields={"balance": usdt_balance, "required": amount_to_spend},
-            )
-            return 0.0
-
-        return amount_to_spend / price
 
     @staticmethod
     def _get_opposite_side(side: str) -> str:
@@ -603,7 +569,8 @@ class OrderManager(AuthenticationManager, RedisManager):
             sl: Explicit stop-loss price; computed from *risk_management* when ``None``.
             target: Explicit take-profit price; no TP placed when ``None``.
             leverage: Leverage to apply on Binance before placing the order.
-            quantity: Coin quantity; computed from fixed allocation when ``None``.
+            quantity: Explicit coin quantity. When omitted, it is calculated
+                from the configured risk limit and stop-loss distance.
             ros: *Return On Signal* mode — when ``True`` the method returns
                 immediately after the main order without placing SL/TP.
             trade_id: Parent trade identifier for Redis order mappings.  Falls
@@ -643,9 +610,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                     description=f"Required margin for {symbol} is {req_margin}",
                     fields=None,
                 )
-            else:
-                qty_from_alloc = self.fixed_asset_allocated(symbol=symbol, price=price)
-
             if quantity is None:
                 quantity = qty_from_alloc
 
@@ -881,7 +845,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         self,
         symbol: str,
         side: str,
-        quantity: Optional[float] = None,
+        quantity: float,
         leverage: int = 1,
     ) -> Optional[Dict[str, Any]]:
         """Place a ``MARKET`` order on Binance Futures.
@@ -889,7 +853,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         Args:
             symbol: Trading pair (e.g. ``"BTCUSDT"``).
             side: ``"BUY"`` or ``"SELL"``.
-            quantity: Coin quantity; computed from fixed allocation when ``None``.
+            quantity: Coin quantity to submit.
             leverage: Multiplier applied to the computed quantity.
 
         Returns:
@@ -897,24 +861,6 @@ class OrderManager(AuthenticationManager, RedisManager):
         """
         try:
             current_price = self.get_symbol_price(symbol)
-
-            if quantity is None:
-                qty_alloc = self.fixed_asset_allocated(
-                    symbol=symbol, price=current_price
-                )
-                balance = self.get_usdt_balance(symbol)
-                if balance < self.FIXED_SPEND_USDT or qty_alloc <= 0:
-                    self.send_alerts(
-                        data=None,
-                        description=f"Not Enough funds for {symbol} market order",
-                        fields={
-                            "symbol": symbol,
-                            "balance": balance,
-                            "price": current_price,
-                        },
-                    )
-                    return None
-                quantity = qty_alloc
 
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity) * leverage, precision)
