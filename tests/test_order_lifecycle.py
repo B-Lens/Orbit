@@ -198,53 +198,57 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(decision_id, "decision-1")
         self.assertEqual(event["reason"], "minimum_notional")
 
-    def test_order_uses_actual_required_margin_below_fixed_spend(self):
-        self.manager.get_usdt_balance = MagicMock(return_value=1000)
-        self.manager.get_available_usdt_balance = MagicMock(return_value=20)
-        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
-        self.manager.future_client.new_order.return_value = {"orderId": 1}
-
-        response, quantity, _ = self.manager.place_order(
-            {"BTCUSDT": 0.01},
-            "BTCUSDT",
-            "BUY",
-            price=100,
-            sl=99,
-            target=102,
-            leverage=2,
-            quantity=0.1,
-            ros=True,
-            trade_id="decision-low-margin",
+    @patch("orbit.core.order_manager.time.sleep", return_value=None)
+    def test_configured_quantity_obeys_margin_and_precision(self, _sleep):
+        cases = (
+            {
+                "name": "actual margin below fixed spend",
+                "price": 100,
+                "sl": 99,
+                "target": 102,
+                "leverage": 2,
+                "quantity": 0.1,
+                "expected": 0.1,
+                "available_margin": 20,
+            },
+            {
+                "name": "precision rounds down",
+                "price": 1000,
+                "sl": 990,
+                "target": 1020,
+                "leverage": 1,
+                "quantity": 0.2499,
+                "expected": 0.24,
+                "available_margin": 5000,
+            },
         )
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                manager = _order_manager()
+                manager.get_usdt_balance = MagicMock(return_value=1000)
+                manager.get_available_usdt_balance = MagicMock(
+                    return_value=case["available_margin"]
+                )
+                manager.get_daily_net_pnl = MagicMock(return_value=0)
+                manager.future_client.new_order.return_value = {"orderId": 1}
+                manager.config["trading_pairs_precision"]["BTCUSDT"] = 2
 
-        self.assertEqual(response, {"orderId": 1})
-        self.assertEqual(quantity, 0.1)
-        self.manager.future_client.new_order.assert_called_once()
+                response, quantity, _ = manager.place_order(
+                    {"BTCUSDT": 0.01},
+                    "BTCUSDT",
+                    "BUY",
+                    price=case["price"],
+                    sl=case["sl"],
+                    target=case["target"],
+                    leverage=case["leverage"],
+                    quantity=case["quantity"],
+                    ros=True,
+                    trade_id="decision-configured-quantity",
+                )
 
-    def test_order_rounds_configured_quantity_precision_down(self):
-        self.manager.get_usdt_balance = MagicMock(return_value=1000)
-        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
-        self.manager.future_client.new_order.return_value = {"orderId": 1}
-        self.manager.config["trading_pairs_precision"]["BTCUSDT"] = 2
-        self.manager.get_symbol_filters.return_value["LOT_SIZE"] = {
-            "stepSize": "0.001",
-            "minQty": "0.001",
-        }
-
-        response, quantity, _ = self.manager.place_order(
-            {"BTCUSDT": 0.01},
-            "BTCUSDT",
-            "BUY",
-            price=1000,
-            sl=990,
-            target=1020,
-            quantity=0.2499,
-            ros=True,
-            trade_id="decision-high-priced-asset",
-        )
-
-        self.assertEqual(response, {"orderId": 1})
-        self.assertEqual(quantity, 0.24)
+                self.assertEqual(response, {"orderId": 1})
+                self.assertEqual(quantity, case["expected"])
+                manager.future_client.new_order.assert_called_once()
 
     def test_order_submission_is_persisted_before_post_submission_work(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
