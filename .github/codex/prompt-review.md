@@ -19,6 +19,12 @@ paths.
 - `OrderManager` is the only exchange-order gateway. `TradeChecker` reconciles
   positions and protective orders. Market intelligence may filter signals but
   must never place orders.
+- Every actionable candidate must pass the core-owned pre-trade LLM review before
+  reaching `OrderManager`; unavailable, failed, or malformed reviews fail closed.
+  Entry reasoning, order transitions, broker-confirmed exits, and post-exit
+  reasoning must stay attributable to the same immutable decision lifecycle.
+  Post-exit review is observational and must never delay or initiate exchange
+  mutations.
 - `config/strategies.yaml` is the execution-mode authority. Every configured
   trading pair must explicitly use `execution_mode: testnet` or `execution_mode:
   live`; missing or paper modes must fail startup. Orders, balances, income, and
