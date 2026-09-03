@@ -212,16 +212,17 @@ class TradeChecker(AuthenticationManager, RedisManager):
         """Return a fresh price for *symbol*, falling back to the REST API."""
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
-            if time.time() - last_updated > 2:
+            now = time.time()
+            if now - last_updated > self._ws_stale_threshold:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
-                    f"({time.time() - last_updated:.2f}s old) — falling back to REST."
+                    f"({now - last_updated:.2f}s old) — falling back to REST."
                 )
                 try:
                     current_price = self.get_future_symbol_price(symbol=symbol)
                     self.live_prices[symbol] = (current_price, time.time())
                 except Exception:
-                    pass
+                    return None
             return current_price
 
         logger.warning(f"[WARN] Live price for {symbol} not found — fetching via REST.")
