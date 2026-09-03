@@ -54,6 +54,9 @@ jobs:
       - name: Install dependencies
         run: |
           poetry config virtualenvs.in-project true
+          # The spot and futures Binance connectors share the `binance` package.
+          # Parallel installation can interleave writes and corrupt modules.
+          poetry config installer.parallel false
           poetry install --no-interaction --no-ansi
 
       - name: Run Unit Tests with Coverage
