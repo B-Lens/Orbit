@@ -318,13 +318,30 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
                 time.sleep(0.5)
                 if stop_loss_order:
+                    stop_loss_order = {
+                        **stop_loss_order,
+                        "triggerPrice": stop_loss_order.get("triggerPrice")
+                        or str(sl_price),
+                    }
                     new_sl_id = str(stop_loss_order.get("algoId", ""))
                     self.register_order(new_sl_id, trade_id)
-                    self.update_trade_fields(trade_id, {"sl_order_id": new_sl_id})
+                    self.update_trade_fields(
+                        trade_id,
+                        {
+                            "sl_order_id": new_sl_id,
+                            "stop_loss_price": sl_price,
+                            "stop_loss_order": stop_loss_order,
+                        },
+                    )
                     if persisted_sl_id and persisted_sl_id != new_sl_id:
                         self.deregister_order(persisted_sl_id)
                     logger.info(
                         f"[SELF-HEAL] Placed missing SL for {symbol} at {sl_price} (order {new_sl_id})"
+                    )
+                else:
+                    logger.error(
+                        "[SELF-HEAL] Missing SL for %s could not be recreated",
+                        symbol,
                     )
 
             if (
@@ -342,13 +359,30 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
                 time.sleep(0.5)
                 if take_profit_order:
+                    take_profit_order = {
+                        **take_profit_order,
+                        "triggerPrice": take_profit_order.get("triggerPrice")
+                        or str(target_price),
+                    }
                     new_tp_id = str(take_profit_order.get("algoId", ""))
                     self.register_order(new_tp_id, trade_id)
-                    self.update_trade_fields(trade_id, {"tp_order_id": new_tp_id})
+                    self.update_trade_fields(
+                        trade_id,
+                        {
+                            "tp_order_id": new_tp_id,
+                            "target": target_price,
+                            "take_profit_order": take_profit_order,
+                        },
+                    )
                     if persisted_tp_id and persisted_tp_id != new_tp_id:
                         self.deregister_order(persisted_tp_id)
                     logger.info(
                         f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})"
+                    )
+                else:
+                    logger.error(
+                        "[SELF-HEAL] Missing TP for bracket trade %s could not be recreated",
+                        symbol,
                     )
 
             return stop_loss_order, take_profit_order
@@ -1476,6 +1510,18 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         stop_loss_order, take_profit_order = self.ensure_orders(
                             symbol, tradesFound[symbol], risk_management
                         )
+                        bracket_trade = (
+                            COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+                        )
+                        if stop_loss_order is None or (
+                            bracket_trade and take_profit_order is None
+                        ):
+                            logger.error(
+                                "[RECONCILIATION] Protective orders incomplete for %s; "
+                                "skipping trade-state refresh",
+                                symbol,
+                            )
+                            continue
                         field_params = self.update_trade_data(
                             symbol,
                             tradesFound[symbol],
