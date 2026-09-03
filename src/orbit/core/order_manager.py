@@ -127,15 +127,16 @@ class OrderManager(AuthenticationManager, RedisManager):
         if not price_filter:
             return price
 
-        tick = float(price_filter["tickSize"])
-        min_price = float(price_filter["minPrice"])
+        tick = Decimal(str(price_filter["tickSize"]))
+        min_price = Decimal(str(price_filter["minPrice"]))
 
-        price = max(price, min_price)
+        price_decimal = max(Decimal(str(price)), min_price)
         if tick <= 0:
-            return price
+            return float(price_decimal)
 
-        corrected = price - (price % tick)
-        return round(corrected, 8)
+        tick_count = (price_decimal / tick).to_integral_value(rounding=ROUND_DOWN)
+        corrected = tick_count * tick
+        return round(float(corrected), 8)
 
     def adjust_quantity_step(self, symbol: str, qty: float) -> float:
         """Round *qty* down to the nearest valid step size for *symbol*."""
