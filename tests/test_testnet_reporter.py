@@ -3,7 +3,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from orbit.core.testnet_reporter import (
+    GITHUB_COMMENT_BODY_LIMIT,
     GitHubProjectClient,
+    SUMMARY_TRUNCATION_NOTICE,
     TestnetDailyReporter as DailyReporter,
     _split_report,
     build_report_body,
@@ -19,6 +21,7 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("trade-attempt-to-fill funnel", prompt)
         self.assertIn("intentional safety rejection", prompt)
         self.assertIn("do not invent facts", prompt)
+        self.assertIn("under\n65,000 characters", prompt)
         self.assertIn("# daily report", prompt)
 
     def test_includes_every_trade_attempt_and_exact_rejection(self):
@@ -191,6 +194,18 @@ class TestReportRendering(unittest.TestCase):
 
 
 class TestDailyReporter(unittest.TestCase):
+    def test_summary_comment_is_bounded_to_github_limit(self):
+        reporter = DailyReporter(
+            MagicMock(), MagicMock(), summary_generator=lambda _: "x" * 70_000
+        )
+
+        comment = reporter._summary_comment("report")
+
+        self.assertIsNotNone(comment)
+        assert comment is not None
+        self.assertEqual(len(comment), GITHUB_COMMENT_BODY_LIMIT)
+        self.assertTrue(comment.endswith(SUMMARY_TRUNCATION_NOTICE))
+
     @patch("orbit.core.testnet_reporter.time_module.sleep")
     @patch("orbit.core.testnet_reporter.datetime")
     def test_weekly_report_is_repaired_after_monday(self, datetime_mock, sleep_mock):
@@ -276,6 +291,53 @@ class TestDailyReporter(unittest.TestCase):
 
 
 class TestGitHubProjectClient(unittest.TestCase):
+    def test_summary_lookup_finds_marker_after_first_comment_page(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        issue = {
+            "title": "daily",
+            "number": 7,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/7",
+            "labels": [{"name": "testnet-report"}],
+        }
+        first_page = [
+            {"body": f"discussion {index}", "url": f"comments/{index}"}
+            for index in range(100)
+        ]
+        summary = {
+            "body": "<!-- orbit-testnet-llm-summary -->\nold",
+            "url": "https://api.github.test/comments/summary",
+        }
+        client._call = MagicMock(
+            side_effect=[
+                [issue],
+                issue,
+                {},
+                first_page,
+                [summary],
+                {},
+                first_page,
+                [summary],
+            ]
+        )
+
+        client.publish(
+            "daily", "body", autonomous=False, summary_comment="updated summary"
+        )
+
+        client._call.assert_any_call(
+            "PATCH", summary["url"], json={"body": "updated summary"}
+        )
+        self.assertFalse(
+            any(
+                call.args[0] == "POST" and call.args[1].endswith("/comments")
+                for call in client._call.call_args_list
+            )
+        )
+
     def test_summary_comment_is_created_idempotently(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
         client.repository = "ipankaj18/Orbit"
