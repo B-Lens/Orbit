@@ -416,10 +416,16 @@ class OrderManager(AuthenticationManager, RedisManager):
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
             quantity = self.adjust_quantity_step(symbol, quantity)
+            normalized_price = self.adjust_price_tick(symbol, float(price))
+            if normalized_price <= 0:
+                raise ValueError(
+                    f"{label} price for {symbol} is invalid after tick normalization: "
+                    f"{price} -> {normalized_price}"
+                )
             request = {
                 "symbol": symbol,
                 "side": side,
-                price_field: price,
+                price_field: normalized_price,
                 "quantity": quantity,
             }
             notify(
@@ -431,7 +437,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 symbol=symbol,
                 side=side,
                 order_type=order_type,
-                stop_price=round(price, 1),
+                stop_price=normalized_price,
                 quantity=quantity,
                 trade_id=trade_id or symbol,
             )

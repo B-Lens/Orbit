@@ -171,7 +171,28 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(calls[1].kwargs["order_type"], "TAKE_PROFIT_MARKET")
         self.assertEqual([call.kwargs["quantity"] for call in calls], [0.006, 0.006])
         self.assertEqual(
-            [call.kwargs["stop_price"] for call in calls], [41000.0, 45000.1]
+            [call.kwargs["stop_price"] for call in calls], [41000.0, 45000.0]
+        )
+
+    def test_sky_target_uses_exchange_tick_instead_of_one_decimal_rounding(self):
+        self.manager.config["trading_pairs_precision"]["SKYUSDT"] = 0
+        self.manager.get_symbol_filters.return_value = {
+            "PRICE_FILTER": {"tickSize": "0.0001", "minPrice": "0.0001"},
+            "LOT_SIZE": {"stepSize": "1", "minQty": "1"},
+            "MIN_NOTIONAL": {"notional": "5"},
+        }
+        self.manager.place_algo_conditional_order = MagicMock(
+            return_value={"algoId": 202}
+        )
+
+        response = self.manager.place_target_order(
+            "SKYUSDT", "BUY", 0.06789, 1000, "sky-trade"
+        )
+
+        self.assertEqual(response, {"algoId": 202})
+        self.assertEqual(
+            self.manager.place_algo_conditional_order.call_args.kwargs["stop_price"],
+            0.0678,
         )
 
     def test_algo_order_registers_parent_trade(self):
@@ -572,6 +593,82 @@ class TestTradeChecker(unittest.TestCase):
 
         checker._mark_exit_pending.assert_called_once_with("ETHUSDT", "ETHUSDT")
         checker._exit_trade.assert_not_called()
+
+    @patch("orbit.core.trade_checker.time.sleep", return_value=None)
+    def test_missing_sky_target_is_recreated_with_canonical_trigger_price(self, _sleep):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "101",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+                "triggerPrice": "105.0",
+            }
+        ]
+        checker.order_manager.place_target_order.return_value = {"algoId": "202"}
+        checker.register_order = MagicMock()
+        checker.update_trade_fields = MagicMock()
+        checker.load_trade = MagicMock(return_value={})
+
+        _, target_order = checker.ensure_orders(
+            "SKYUSDT",
+            {
+                "trade_id": "sky-trade",
+                "positionSide": "SELL",
+                "price": 100.0,
+                "quantity": 1.0,
+            },
+            {"target_percent": 2},
+        )
+
+        self.assertEqual(target_order["triggerPrice"], "98.0")
+        checker.update_trade_fields.assert_any_call(
+            "sky-trade",
+            {
+                "tp_order_id": "202",
+                "target": 98.0,
+                "take_profit_order": {
+                    "algoId": "202",
+                    "triggerPrice": "98.0",
+                },
+            },
+        )
+
+    @patch("orbit.core.trade_checker.time.sleep", return_value=None)
+    def test_failed_sky_target_recreation_is_logged_as_error(self, _sleep):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "101",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+                "triggerPrice": "105.0",
+            }
+        ]
+        checker.order_manager.place_target_order.return_value = None
+        checker.register_order = MagicMock()
+        checker.update_trade_fields = MagicMock()
+        checker.load_trade = MagicMock(return_value={})
+
+        with self.assertLogs("Orbit", level="ERROR") as logs:
+            _, target_order = checker.ensure_orders(
+                "SKYUSDT",
+                {
+                    "trade_id": "sky-trade",
+                    "positionSide": "SELL",
+                    "price": 100.0,
+                    "quantity": 1.0,
+                },
+                {"target_percent": 2},
+            )
+
+        self.assertIsNone(target_order)
+        self.assertIn(
+            "Missing TP for bracket trade SKYUSDT could not be recreated",
+            "\n".join(logs.output),
+        )
 
     def test_exit_attempts_sibling_cancellation_when_filled_order_is_terminal(self):
         checker = TradeChecker.__new__(TradeChecker)
