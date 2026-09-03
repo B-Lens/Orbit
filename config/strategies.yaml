@@ -3,7 +3,6 @@ monitored_assets:
   MKRUSDT: testnet
   LTCUSDT: testnet
   SOLUSDT: testnet
-  ATOMUSDT: testnet
   XRPUSDT: testnet
 
 strategies:
@@ -25,4 +24,8 @@ strategies:
 
   SKYUSDT:
     strategy: orbit.strategies.skyusdt_strategy.SKYUSDTStrategy
+    execution_mode: testnet
+
+  ATOMUSDT:
+    strategy: orbit.strategies.atomusdt_strategy.ATOMUSDTStrategy
     execution_mode: testnet
