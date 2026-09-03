@@ -58,6 +58,13 @@ class TestOrderManager(unittest.TestCase):
         self.assertTrue(self.manager.validate_notional("BTCUSDT", 1000, 0.005))
         self.assertFalse(self.manager.validate_notional("BTCUSDT", 999, 0.005))
 
+    def test_price_already_on_tick_is_not_rounded_down(self):
+        self.manager.get_symbol_filters.return_value["PRICE_FILTER"][
+            "tickSize"
+        ] = "0.01"
+
+        self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 2402.99), 2402.99)
+
     def test_get_order_uses_endpoint_that_includes_terminal_state(self):
         self.manager.future_client.query_order.return_value = {
             "orderId": 123,
