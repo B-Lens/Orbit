@@ -18,7 +18,7 @@ through the constructor for easier testing and looser coupling.
 import time
 import logging
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Any, Dict, List, Optional, Tuple
 
 from binance.error import ClientError
@@ -181,6 +181,53 @@ class OrderManager(AuthenticationManager, RedisManager):
     def get_future_symbol_price(self, symbol: str) -> float:
         """Backwards-compatible alias for :meth:`get_symbol_price`."""
         return self.get_symbol_price(symbol)
+
+    def get_mark_price(self, symbol: str) -> float:
+        """Return the Futures mark price used by conditional orders."""
+        response = self.future_client_for(symbol).mark_price(symbol=symbol)
+        return float(response["markPrice"])
+
+    def adjust_conditional_trigger(
+        self, symbol: str, side: str, order_type: str, trigger_price: float
+    ) -> float:
+        """Move an already-crossed trigger one tick beyond the current mark."""
+        mark_price = self.get_mark_price(symbol)
+        side = side.upper()
+        order_type = order_type.upper()
+        triggers_below = (side == "SELL" and order_type == "STOP_MARKET") or (
+            side == "BUY" and order_type == "TAKE_PROFIT_MARKET"
+        )
+        immediately_triggers = (
+            mark_price <= trigger_price
+            if triggers_below
+            else mark_price >= trigger_price
+        )
+        if not immediately_triggers:
+            return trigger_price
+
+        price_filter = self.get_symbol_filters(symbol).get("PRICE_FILTER")
+        if not price_filter:
+            raise RuntimeError(
+                f"Cannot safely adjust crossed conditional trigger for {symbol}"
+            )
+        tick = Decimal(str(price_filter["tickSize"]))
+        mark = Decimal(str(mark_price))
+        rounding = ROUND_DOWN if triggers_below else ROUND_UP
+        tick_count = (mark / tick).to_integral_value(rounding=rounding)
+        adjusted = tick_count * tick
+        if adjusted == mark:
+            adjusted = adjusted - tick if triggers_below else adjusted + tick
+        logger.warning(
+            "[CONDITIONAL TRIGGER] Adjusting crossed %s %s trigger for %s "
+            "from %s to %s (mark price %s)",
+            side,
+            order_type,
+            symbol,
+            trigger_price,
+            adjusted,
+            mark_price,
+        )
+        return float(adjusted)
 
     def get_usdt_balance(self, symbol: Optional[str] = None) -> float:
         """Return the total USDT wallet balance on the Futures account."""
@@ -427,11 +474,14 @@ class OrderManager(AuthenticationManager, RedisManager):
                 description=f"{label} Order Request for {symbol}",
                 fields=request,
             )
+            trigger_price = self.adjust_conditional_trigger(
+                symbol, side, order_type, round(price, 1)
+            )
             response = self.place_algo_conditional_order(
                 symbol=symbol,
                 side=side,
                 order_type=order_type,
-                stop_price=round(price, 1),
+                stop_price=trigger_price,
                 quantity=quantity,
                 trade_id=trade_id or symbol,
             )

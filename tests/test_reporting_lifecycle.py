@@ -120,6 +120,7 @@ class TestReportingLifecycle(unittest.TestCase):
         manager.config = {"trading_pairs_precision": {"ETHUSDT": 3}}
         manager.mongo_handler = MagicMock()
         manager.adjust_quantity_step = MagicMock(return_value=0.5)
+        manager.adjust_conditional_trigger = MagicMock(return_value=98.0)
         manager.place_algo_conditional_order = MagicMock(return_value={"algoId": 456})
         notify = MagicMock()
 

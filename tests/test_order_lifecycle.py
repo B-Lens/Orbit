@@ -28,6 +28,7 @@ def _order_manager():
     manager.send_sl_update_notifier = MagicMock()
     manager.send_signal_updates = MagicMock()
     manager.get_available_usdt_balance = MagicMock(return_value=5000)
+    manager.future_client.mark_price.return_value = {"markPrice": "43000"}
     return manager
 
 
@@ -172,6 +173,32 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual([call.kwargs["quantity"] for call in calls], [0.006, 0.006])
         self.assertEqual(
             [call.kwargs["stop_price"] for call in calls], [41000.0, 45000.1]
+        )
+
+    def test_crossed_sell_stop_is_moved_below_mark_price(self):
+        self.manager.future_client.mark_price.return_value = {"markPrice": "4476.5"}
+        self.manager.place_algo_conditional_order = MagicMock(
+            return_value={"algoId": 1}
+        )
+
+        self.manager.place_sl_order("BTCUSDT", "SELL", 4476.5, 0.01)
+
+        self.assertEqual(
+            self.manager.place_algo_conditional_order.call_args.kwargs["stop_price"],
+            4476.4,
+        )
+
+    def test_crossed_buy_stop_is_moved_above_mark_price(self):
+        self.manager.future_client.mark_price.return_value = {"markPrice": "4476.5"}
+        self.manager.place_algo_conditional_order = MagicMock(
+            return_value={"algoId": 1}
+        )
+
+        self.manager.place_sl_order("BTCUSDT", "BUY", 4476.5, 0.01)
+
+        self.assertEqual(
+            self.manager.place_algo_conditional_order.call_args.kwargs["stop_price"],
+            4476.6,
         )
 
     def test_algo_order_registers_parent_trade(self):
