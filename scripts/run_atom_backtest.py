@@ -83,7 +83,10 @@ def generate_atom_synthetic_data(
     base_vol = rng.uniform(50_000, 150_000, n_bars)
 
     # Hour of day spikes (UTC): 8-10h, 13-15h (EU/US overlaps)
-    hour_of_day = (index.hour * 60 + index.minute) / 60
+    # Use integer seconds since epoch to derive hour/minute without pylint no-member issues
+    seconds_per_day = 86_400
+    seconds_in_day = (index.asi8 // 10**9) % seconds_per_day
+    hour_of_day = seconds_in_day / 3600
     session_mult = 1.0 + 0.8 * np.exp(-((hour_of_day - 9) ** 2) / 4) + \
                    0.6 * np.exp(-((hour_of_day - 14) ** 2) / 4)
 
