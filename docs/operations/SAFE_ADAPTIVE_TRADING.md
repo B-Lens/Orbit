@@ -71,6 +71,13 @@ start of the reporting window. Income rows are tagged by execution mode, and the
 report queries only `testnet` rows so mixed live/Testnet deployments cannot blend
 account performance.
 
+When an LLM provider is configured, both daily and weekly report issues receive a
+plain-language explanation comment generated from the completed report. The prompt
+asks the model to explain the signal-to-fill funnel, rejection reasons, fee-aware
+net P&L, and protective-order failures without treating policy rejections as a
+reason to weaken safeguards. Republishing updates the marker-owned comment, and a
+post-write reconciliation removes duplicates created by overlapping publishers.
+
 The publisher then applies `ai-autonomous`. The existing Codex workflow analyzes
 the evidence and may create a reviewed pull request only for a demonstrated code
 defect. Its task explicitly forbids weakening risk limits, bypassing sentiment, or

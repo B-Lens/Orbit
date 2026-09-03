@@ -3,15 +3,27 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from orbit.core.testnet_reporter import (
+    GITHUB_COMMENT_BODY_LIMIT,
     GitHubProjectClient,
+    SUMMARY_TRUNCATION_NOTICE,
     TestnetDailyReporter as DailyReporter,
     _split_report,
     build_report_body,
+    build_summary_prompt,
     build_weekly_report_body,
 )
 
 
 class TestReportRendering(unittest.TestCase):
+    def test_summary_prompt_requests_a_safe_explanation_of_the_report(self):
+        prompt = build_summary_prompt("# daily report\n- Orders filled: **2**")
+
+        self.assertIn("trade-attempt-to-fill funnel", prompt)
+        self.assertIn("intentional safety rejection", prompt)
+        self.assertIn("do not invent facts", prompt)
+        self.assertIn("under\n65,000 characters", prompt)
+        self.assertIn("# daily report", prompt)
+
     def test_includes_every_trade_attempt_and_exact_rejection(self):
         decisions = [
             {
@@ -182,6 +194,18 @@ class TestReportRendering(unittest.TestCase):
 
 
 class TestDailyReporter(unittest.TestCase):
+    def test_summary_comment_is_bounded_to_github_limit(self):
+        reporter = DailyReporter(
+            MagicMock(), MagicMock(), summary_generator=lambda _: "x" * 70_000
+        )
+
+        comment = reporter._summary_comment("report")
+
+        self.assertIsNotNone(comment)
+        assert comment is not None
+        self.assertEqual(len(comment), GITHUB_COMMENT_BODY_LIMIT)
+        self.assertTrue(comment.endswith(SUMMARY_TRUNCATION_NOTICE))
+
     @patch("orbit.core.testnet_reporter.time_module.sleep")
     @patch("orbit.core.testnet_reporter.datetime")
     def test_weekly_report_is_repaired_after_monday(self, datetime_mock, sleep_mock):
@@ -204,7 +228,8 @@ class TestDailyReporter(unittest.TestCase):
         github.publish.return_value = "https://github.test/report/1"
         futures = MagicMock()
         futures.get_income_history.return_value = []
-        reporter = DailyReporter(mongo, github, futures)
+        summary_generator = MagicMock(return_value="Two orders filled.")
+        reporter = DailyReporter(mongo, github, futures, summary_generator)
 
         url = reporter.publish_date(date(2026, 8, 21))
 
@@ -229,6 +254,12 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet daily report: 2026-08-21"
         )
+        self.assertIn(
+            "## LLM report explanation",
+            github.publish.call_args.kwargs["summary_comment"],
+        )
+        summary_prompt = summary_generator.call_args.args[0]
+        self.assertIn("Orbit Testnet daily report", summary_prompt)
 
     def test_weekly_report_reads_exact_completed_utc_week(self):
         mongo = MagicMock()
@@ -236,7 +267,8 @@ class TestDailyReporter(unittest.TestCase):
         mongo.get_income_records.return_value = []
         github = MagicMock()
         github.publish.return_value = "https://github.test/report/week"
-        reporter = DailyReporter(mongo, github)
+        summary_generator = MagicMock(return_value="No trades were attempted.")
+        reporter = DailyReporter(mongo, github, summary_generator=summary_generator)
 
         url = reporter.publish_week(date(2026, 8, 17))
 
@@ -252,9 +284,119 @@ class TestDailyReporter(unittest.TestCase):
             github.publish.call_args.args[0], "Orbit Testnet weekly report: 2026-08-17"
         )
         self.assertFalse(github.publish.call_args.kwargs["autonomous"])
+        self.assertIn(
+            "## LLM report explanation",
+            github.publish.call_args.kwargs["summary_comment"],
+        )
 
 
 class TestGitHubProjectClient(unittest.TestCase):
+    def test_summary_lookup_finds_marker_after_first_comment_page(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        issue = {
+            "title": "daily",
+            "number": 7,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/7",
+            "labels": [{"name": "testnet-report"}],
+        }
+        first_page = [
+            {"body": f"discussion {index}", "url": f"comments/{index}"}
+            for index in range(100)
+        ]
+        summary = {
+            "body": "<!-- orbit-testnet-llm-summary -->\nold",
+            "url": "https://api.github.test/comments/summary",
+        }
+        client._call = MagicMock(
+            side_effect=[
+                [issue],
+                issue,
+                {},
+                first_page,
+                [summary],
+                {},
+                first_page,
+                [summary],
+            ]
+        )
+
+        client.publish(
+            "daily", "body", autonomous=False, summary_comment="updated summary"
+        )
+
+        client._call.assert_any_call(
+            "PATCH", summary["url"], json={"body": "updated summary"}
+        )
+        self.assertFalse(
+            any(
+                call.args[0] == "POST" and call.args[1].endswith("/comments")
+                for call in client._call.call_args_list
+            )
+        )
+
+    def test_summary_comment_is_created_idempotently(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        existing = {
+            "title": "weekly",
+            "number": 8,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/8",
+            "labels": [{"name": "testnet-report"}],
+        }
+        client._call = MagicMock(side_effect=[[existing], existing, {}, [], {}, []])
+
+        client.publish("weekly", "body", autonomous=False, summary_comment="summary")
+
+        comment_call = client._call.call_args_list[4]
+        self.assertEqual(comment_call.args[0], "POST")
+        self.assertTrue(comment_call.args[1].endswith("/issues/8/comments"))
+        self.assertEqual(comment_call.kwargs["json"], {"body": "summary"})
+
+    def test_duplicate_summary_comments_are_reconciled(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        issue = {
+            "title": "daily",
+            "number": 7,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/7",
+            "labels": [{"name": "testnet-report"}],
+        }
+        first = {
+            "body": "<!-- orbit-testnet-llm-summary -->\nfirst",
+            "url": "https://api.github.test/comments/1",
+        }
+        duplicate = {
+            "body": "<!-- orbit-testnet-llm-summary -->\nsecond",
+            "url": "https://api.github.test/comments/2",
+        }
+        client._call = MagicMock(
+            side_effect=[
+                [issue],
+                issue,
+                {},
+                [first],
+                {},
+                [first, duplicate],
+                {},
+            ]
+        )
+
+        client.publish(
+            "daily", "body", autonomous=False, summary_comment="updated summary"
+        )
+
+        client._call.assert_any_call("DELETE", duplicate["url"])
+
     def test_non_autonomous_report_does_not_add_agent_label(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
         client.repository = "ipankaj18/Orbit"
