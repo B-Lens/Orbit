@@ -24,17 +24,44 @@ class SOLUSDTStrategy(Strategy):
     def __post_init__(self) -> None:
         super().__init__(self.data)
 
-    def _hourly_data(self) -> pd.DataFrame:
-        """Return hourly candles, excluding incomplete 15-minute groups."""
+    @staticmethod
+    def _current_hour() -> pd.Timestamp:
+        """Return the current UTC hour boundary for freshness checks."""
+        return pd.Timestamp.now(tz="UTC").floor("1h")
+
+    def _is_latest_completed_hour(self, timestamp: pd.Timestamp) -> bool:
+        """Reject aligned but stale cached candles before they can trade."""
+        candle_hour = pd.Timestamp(timestamp)
+        current_hour = self._current_hour()
+        if candle_hour.tzinfo is None:
+            current_hour = current_hour.tz_localize(None)
+        else:
+            current_hour = current_hour.tz_convert(candle_hour.tzinfo)
+        return candle_hour == current_hour - pd.Timedelta(hours=1)
+
+    @staticmethod
+    def _has_contiguous_hours(data: pd.DataFrame) -> bool:
+        """Return whether every strategy bar is exactly one hour apart."""
+        if len(data) < 2:
+            return True
+        differences = data.index.to_series().diff().dropna()
+        return bool((differences == pd.Timedelta(hours=1)).all())
+
+    def _hourly_data(self) -> tuple[pd.DataFrame, bool]:
+        """Return hourly candles and whether the last bar is the freshly completed hour."""
         if self.data.empty or not isinstance(self.data.index, pd.DatetimeIndex):
-            return self.data.copy()
+            return self.data.copy(), False
 
         differences = self.data.index.to_series().diff().dropna()
         interval = (
             differences.median() if not differences.empty else pd.Timedelta(hours=1)
         )
         if interval >= pd.Timedelta(hours=1):
-            return self.data.copy()
+            hourly = self.data.copy()
+            valid = self._has_contiguous_hours(
+                hourly
+            ) and self._is_latest_completed_hour(hourly.index[-1])
+            return hourly, valid
 
         grouped = self.data.resample("1h")
         hourly = grouped.agg(
@@ -47,7 +74,13 @@ class SOLUSDTStrategy(Strategy):
             }
         )
         expected_bars = round(pd.Timedelta(hours=1) / interval)
-        return hourly[grouped.size() == expected_bars].dropna()
+        hourly = hourly[grouped.size() == expected_bars].dropna()
+        if hourly.empty:
+            return hourly, False
+        latest_closed = self._has_contiguous_hours(
+            hourly
+        ) and self._is_latest_completed_hour(hourly.index[-1])
+        return hourly, latest_closed
 
     def _indicators(self, data: pd.DataFrame) -> pd.DataFrame:
         frame = data.copy()
@@ -77,7 +110,7 @@ class SOLUSDTStrategy(Strategy):
         self, symbol: Optional[str] = None, position_side: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         del symbol
-        hourly = self._hourly_data()
+        hourly, latest_closed = self._hourly_data()
         minimum_bars = (
             max(
                 self.breakout_period,
@@ -87,7 +120,7 @@ class SOLUSDTStrategy(Strategy):
             )
             + 1
         )
-        if position_side or len(hourly) < minimum_bars:
+        if position_side or not latest_closed or len(hourly) < minimum_bars:
             return None
 
         current = self._indicators(hourly).iloc[-1]
