@@ -6,12 +6,50 @@ from orbit.core.testnet_reporter import (
     GitHubProjectClient,
     TestnetDailyReporter as DailyReporter,
     _split_report,
+    build_plain_language_summary,
     build_report_body,
     build_weekly_report_body,
 )
 
 
 class TestReportRendering(unittest.TestCase):
+    def test_plain_language_summary_explains_funnel_and_execution_warning(self):
+        start = datetime(2026, 8, 21, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 22, tzinfo=timezone.utc)
+        decisions = [
+            {
+                "timestamp": start,
+                "outcome": "accepted",
+                "execution_events": [
+                    {"status": "order_submitted", "timestamp": start},
+                    {"status": "order_filled", "timestamp": start},
+                    {"status": "protective_order_failed", "timestamp": start},
+                ],
+            },
+            {
+                "timestamp": start,
+                "outcome": "rejected",
+                "reason": "sentiment_conflict",
+            },
+        ]
+        income = [
+            {"incomeType": "REALIZED_PNL", "income": "-3"},
+            {"incomeType": "COMMISSION", "income": "-1"},
+        ]
+
+        summary = build_plain_language_summary(
+            "the test period", decisions, income, start, end
+        )
+
+        self.assertTrue(
+            summary.startswith("<!-- orbit-testnet-plain-language-summary -->")
+        )
+        self.assertIn("**2 trade attempts**", summary)
+        self.assertIn("`sentiment_conflict` (1)", summary)
+        self.assertIn("**-4.00000000 USDT net P&L**", summary)
+        self.assertIn("**1 protective-order failure(s)**", summary)
+        self.assertIn("`Errors` count is zero", summary)
+
     def test_includes_every_trade_attempt_and_exact_rejection(self):
         decisions = [
             {
@@ -229,6 +267,10 @@ class TestDailyReporter(unittest.TestCase):
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet daily report: 2026-08-21"
         )
+        self.assertIn(
+            "## Plain-language summary",
+            github.publish.call_args.kwargs["summary_comment"],
+        )
 
     def test_weekly_report_reads_exact_completed_utc_week(self):
         mongo = MagicMock()
@@ -252,9 +294,34 @@ class TestDailyReporter(unittest.TestCase):
             github.publish.call_args.args[0], "Orbit Testnet weekly report: 2026-08-17"
         )
         self.assertFalse(github.publish.call_args.kwargs["autonomous"])
+        self.assertIn(
+            "## Plain-language summary",
+            github.publish.call_args.kwargs["summary_comment"],
+        )
 
 
 class TestGitHubProjectClient(unittest.TestCase):
+    def test_summary_comment_is_created_idempotently(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "ipankaj18/Orbit"
+        client.project_id = "project-1"
+        client._ensure_label = MagicMock()
+        existing = {
+            "title": "weekly",
+            "number": 8,
+            "node_id": "issue-node",
+            "html_url": "https://github.test/issues/8",
+            "labels": [{"name": "testnet-report"}],
+        }
+        client._call = MagicMock(side_effect=[[existing], existing, {}, [], {}])
+
+        client.publish("weekly", "body", autonomous=False, summary_comment="summary")
+
+        comment_call = client._call.call_args_list[-1]
+        self.assertEqual(comment_call.args[0], "POST")
+        self.assertTrue(comment_call.args[1].endswith("/issues/8/comments"))
+        self.assertEqual(comment_call.kwargs["json"], {"body": "summary"})
+
     def test_non_autonomous_report_does_not_add_agent_label(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
         client.repository = "ipankaj18/Orbit"

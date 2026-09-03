@@ -20,6 +20,7 @@ REPORT_LABEL = "testnet-report"
 AGENT_LABEL = "ai-autonomous"
 REPORTABLE_OUTCOMES = {"accepted", "rejected", "error"}
 WEEKLY_TITLE_PREFIX = "Orbit Testnet weekly report: "
+SUMMARY_COMMENT_MARKER = "<!-- orbit-testnet-plain-language-summary -->"
 
 
 def _in_window(value: Any, start: datetime, end: datetime) -> bool:
@@ -78,6 +79,96 @@ def _format_value(value: Any) -> str:
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc).isoformat(timespec="seconds")
     return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def build_plain_language_summary(
+    period: str,
+    decisions: Iterable[Mapping[str, Any]],
+    income_records: Iterable[Mapping[str, Any]],
+    start: datetime,
+    end: datetime,
+) -> str:
+    """Explain a report's execution funnel and noteworthy safety events."""
+    all_decisions = list(decisions)
+    attempts = [
+        row
+        for row in all_decisions
+        if _in_window(row.get("timestamp"), start, end)
+        and str(row.get("outcome")) in REPORTABLE_OUTCOMES
+    ]
+    outcomes = Counter(str(row.get("outcome", "unknown")) for row in attempts)
+    events = _event_counts(all_decisions, start, end)
+    performance = PerformanceTracker.summarize(dict(row) for row in income_records)
+    decision_reasons = Counter(
+        str(row.get("reason", "unknown"))
+        for row in attempts
+        if row.get("outcome") != "accepted"
+    )
+    order_reasons = Counter(
+        str(event.get("reason", "unknown"))
+        for row in all_decisions
+        for event in row.get("execution_events", [])
+        if event.get("status") == "order_rejected"
+        and _in_window(event.get("timestamp"), start, end)
+    )
+
+    blocked = outcomes["rejected"] + events["order_rejected"]
+    lines = [
+        SUMMARY_COMMENT_MARKER,
+        "## Plain-language summary",
+        "",
+        f"During {period}, Orbit evaluated **{len(attempts)} trade attempts**. "
+        f"**{outcomes['accepted']}** passed the strategy-level checks, "
+        f"**{events['order_submitted']}** reached the exchange, and "
+        f"**{events['order_filled']}** filled. The safety layers blocked "
+        f"**{blocked}** attempts: **{outcomes['rejected']}** before order handling "
+        f"and **{events['order_rejected']}** at the order stage.",
+        "",
+    ]
+    if decision_reasons or order_reasons:
+        descriptions = [
+            f"`{reason}` ({count})"
+            for reason, count in sorted((decision_reasons + order_reasons).items())
+        ]
+        lines.extend(
+            [
+                "The recorded rejection reasons were "
+                + ", ".join(descriptions)
+                + ". These are evidence that configured safeguards ran; repeated "
+                "rejections do not by themselves justify weakening a limit.",
+                "",
+            ]
+        )
+    lines.append(
+        f"The ledger result was **{performance.net_pnl:.8f} USDT net P&L** "
+        f"(**{performance.realized_pnl:.8f}** realized, "
+        f"**{performance.commission:.8f}** commission, "
+        f"**{performance.funding:.8f}** funding, and "
+        f"**{performance.other_income:.8f}** other income)."
+    )
+    if events["protective_order_failed"]:
+        lines.extend(
+            [
+                "",
+                f"The main operational warning is **{events['protective_order_failed']} "
+                "protective-order failure(s)**. A failed stop-loss or take-profit can "
+                "leave a filled position only partially protected and should be investigated.",
+            ]
+        )
+        if not outcomes["error"]:
+            lines.append(
+                "The report's `Errors` count is zero because it counts decision outcomes, "
+                "not execution-event failures; the protective-order warning above remains "
+                "actionable."
+            )
+    else:
+        lines.extend(
+            [
+                "",
+                "No protective-order failures were recorded for this period.",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def build_report_body(
@@ -368,7 +459,14 @@ class GitHubProjectClient:
         )
         return list(issues)
 
-    def publish(self, title: str, body: str, *, autonomous: bool = True) -> str:
+    def publish(
+        self,
+        title: str,
+        body: str,
+        *,
+        autonomous: bool = True,
+        summary_comment: Optional[str] = None,
+    ) -> str:
         """Create or update a report issue and add it to the Project."""
         parts = _split_report(body)
         issue_body = parts[0]
@@ -427,6 +525,23 @@ class GitHubProjectClient:
             f"{issue['number']}/comments"
         )
         existing_comments = self._call("GET", comments_url, params={"per_page": 100})
+        existing_summary = next(
+            (
+                comment
+                for comment in existing_comments
+                if str(comment.get("body", "")).startswith(SUMMARY_COMMENT_MARKER)
+            ),
+            None,
+        )
+        if summary_comment:
+            if existing_summary:
+                self._call(
+                    "PATCH",
+                    str(existing_summary["url"]),
+                    json={"body": summary_comment},
+                )
+            else:
+                self._call("POST", comments_url, json={"body": summary_comment})
         report_comments = {
             str(comment.get("body", "")).splitlines()[0]: comment
             for comment in existing_comments
@@ -490,7 +605,15 @@ class TestnetDailyReporter:
         )
         title = f"Orbit Testnet daily report: {report_date.isoformat()}"
         return self.github.publish(
-            title, build_report_body(report_date, decisions, income)
+            title,
+            build_report_body(report_date, decisions, income),
+            summary_comment=build_plain_language_summary(
+                f"the UTC day {report_date.isoformat()}",
+                decisions,
+                income,
+                start,
+                end,
+            ),
         )
 
     def publish_week(self, week_start: date) -> str:
@@ -512,6 +635,14 @@ class TestnetDailyReporter:
             title,
             build_weekly_report_body(week_start, decisions, income),
             autonomous=False,
+            summary_comment=build_plain_language_summary(
+                f"the UTC week {week_start.isoformat()} to "
+                f"{(week_start + timedelta(days=6)).isoformat()}",
+                decisions,
+                income,
+                start,
+                end,
+            ),
         )
 
     def run_forever(self, interval_seconds: int = 3600) -> None:
