@@ -241,8 +241,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
         symbol: str,
         trade: Dict[str, Any],
         risk_management: Dict[str, Any],
+        current_price: float,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        """Guarantee that exactly one SL (and optionally one TP) exists."""
+        """Guarantee that exactly one SL (and optionally one TP) exists.
+
+        A missing TP whose trigger has already been crossed is treated as fired so
+        reconciliation can confirm the broker position closed. Re-submitting that
+        stale trigger would be rejected by Binance with error ``-2021``.
+        """
         try:
             trade_id = trade.get("trade_id") or symbol
 
@@ -331,25 +337,40 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 take_profit_order is None
                 and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
             ):
-                target_price = persisted.get("target") or self.calculate_target_price(
-                    trade, risk_management
+                target_price = float(
+                    persisted.get("target")
+                    or self.calculate_target_price(trade, risk_management)
                 )
-                take_profit_order = self.order_manager.place_target_order(
-                    symbol=symbol,
-                    side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
-                    target_price=target_price,
-                    quantity=trade["quantity"],
+                target_hit = (
+                    trade["positionSide"] == "BUY" and current_price >= target_price
+                ) or (
+                    trade["positionSide"] != "BUY" and current_price <= target_price
                 )
-                time.sleep(0.5)
-                if take_profit_order:
-                    new_tp_id = str(take_profit_order.get("algoId", ""))
-                    self.register_order(new_tp_id, trade_id)
-                    self.update_trade_fields(trade_id, {"tp_order_id": new_tp_id})
-                    if persisted_tp_id and persisted_tp_id != new_tp_id:
-                        self.deregister_order(persisted_tp_id)
+                if target_hit:
                     logger.info(
-                        f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})"
+                        "[SELF-HEAL] Target already hit for %s at %s; "
+                        "skipping stale TP recreation",
+                        symbol,
+                        target_price,
                     )
+                    self._mark_exit_pending(symbol, trade_id)
+                else:
+                    take_profit_order = self.order_manager.place_target_order(
+                        symbol=symbol,
+                        side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
+                        target_price=target_price,
+                        quantity=trade["quantity"],
+                    )
+                    time.sleep(0.5)
+                    if take_profit_order:
+                        new_tp_id = str(take_profit_order.get("algoId", ""))
+                        self.register_order(new_tp_id, trade_id)
+                        self.update_trade_fields(trade_id, {"tp_order_id": new_tp_id})
+                        if persisted_tp_id and persisted_tp_id != new_tp_id:
+                            self.deregister_order(persisted_tp_id)
+                        logger.info(
+                            f"[SELF-HEAL] Placed missing TP for {symbol} at {target_price} (order {new_tp_id})"
+                        )
 
             return stop_loss_order, take_profit_order
 
@@ -1474,7 +1495,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                             continue
 
                         stop_loss_order, take_profit_order = self.ensure_orders(
-                            symbol, tradesFound[symbol], risk_management
+                            symbol,
+                            tradesFound[symbol],
+                            risk_management,
+                            current_price,
                         )
                         field_params = self.update_trade_data(
                             symbol,

@@ -289,6 +289,44 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
+    def test_missing_crossed_target_enters_exit_flow_without_recreation(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "101",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+            }
+        ]
+        checker.load_trade = MagicMock(
+            return_value={
+                "sl_order_id": "101",
+                "tp_order_id": "202",
+                "target": "4486.6",
+            }
+        )
+        checker.register_order = MagicMock()
+        checker.update_trade_fields = MagicMock()
+        checker.deregister_order = MagicMock()
+        checker._mark_exit_pending = MagicMock()
+
+        _, take_profit = checker.ensure_orders(
+            "PAXGUSDT",
+            {
+                "trade_id": "decision-1",
+                "positionSide": "BUY",
+                "quantity": 0.27,
+                "price": 4400.0,
+            },
+            {"stop_loss_percent": 1, "target_percent": 2},
+            current_price=4490.0,
+        )
+
+        self.assertIsNone(take_profit)
+        checker.order_manager.place_target_order.assert_not_called()
+        checker._mark_exit_pending.assert_called_once_with("PAXGUSDT", "decision-1")
+
     def test_position_discovery_ignores_stale_entry_price_without_exposure(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
