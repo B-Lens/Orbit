@@ -256,6 +256,58 @@ def test_codex_oauth_client_rejects_repeated_premature_streams(tmp_path) -> None
     assert urlopen.call_count == 2
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.URLError("connection reset"),
+        TimeoutError(),
+        ConnectionResetError(),
+        urllib.error.HTTPError("https://example.invalid", 503, "error", {}, None),
+    ],
+)
+def test_codex_oauth_client_retries_transient_failures(tmp_path, error) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+
+    class StreamingResponse:
+        def __enter__(self):
+            return iter(
+                [
+                    b'data: {"type":"response.output_text.delta","delta":"result"}\n',
+                    b'data: {"type":"response.completed"}\n',
+                ]
+            )
+
+        def __exit__(self, *_args):
+            return False
+
+    urlopen = MagicMock(side_effect=[error, StreamingResponse()])
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    assert client.invoke_web_search("Assess markets") == "result"
+    assert urlopen.call_count == 2
+
+
+def test_codex_oauth_client_does_not_retry_or_expose_auth_error(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    error = urllib.error.HTTPError("https://example.invalid", 401, "error", {}, None)
+    error.read = MagicMock(return_value=b"sensitive response")
+    urlopen = MagicMock(side_effect=error)
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    with pytest.raises(RuntimeError, match="codex login") as raised:
+        client.invoke_web_search("Assess markets")
+
+    assert "sensitive" not in str(raised.value)
+    error.read.assert_not_called()
+    urlopen.assert_called_once()
+
+
 def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> None:
     token_file = tmp_path / "token.json"
     token_file.write_text(
