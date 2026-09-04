@@ -18,7 +18,7 @@ through the constructor for easier testing and looser coupling.
 import time
 import logging
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_CEILING, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
 
 from binance.error import ClientError
@@ -120,8 +120,10 @@ class OrderManager(AuthenticationManager, RedisManager):
 
         raise Exception(f"Symbol {symbol} not found in exchange info")
 
-    def adjust_price_tick(self, symbol: str, price: float) -> float:
-        """Round *price* down to the nearest valid tick for *symbol*."""
+    def adjust_price_tick(
+        self, symbol: str, price: float, *, round_up: bool = False
+    ) -> float:
+        """Round *price* to a valid symbol tick in the requested direction."""
         filters = self.get_symbol_filters(symbol)
         price_filter = filters.get("PRICE_FILTER")
         if not price_filter:
@@ -134,9 +136,21 @@ class OrderManager(AuthenticationManager, RedisManager):
         if tick <= 0:
             return float(price_decimal)
 
-        tick_count = (price_decimal / tick).to_integral_value(rounding=ROUND_DOWN)
+        rounding = ROUND_CEILING if round_up else ROUND_DOWN
+        tick_count = (price_decimal / tick).to_integral_value(rounding=rounding)
         corrected = tick_count * tick
         return round(float(corrected), 8)
+
+    def adjust_trigger_price(
+        self, symbol: str, price: float, side: str, order_type: str
+    ) -> float:
+        """Normalize a protective trigger without moving it across its intent."""
+        side = side.upper()
+        order_type = order_type.upper()
+        round_up = (side == "SELL" and order_type == "TAKE_PROFIT_MARKET") or (
+            side == "BUY" and order_type == "STOP_MARKET"
+        )
+        return self.adjust_price_tick(symbol, price, round_up=round_up)
 
     def adjust_quantity_step(self, symbol: str, qty: float) -> float:
         """Round *qty* down to the nearest valid step size for *symbol*."""
@@ -427,7 +441,9 @@ class OrderManager(AuthenticationManager, RedisManager):
                 description=f"{label} Order Request for {symbol}",
                 fields=request,
             )
-            trigger_price = self.adjust_price_tick(symbol, price)
+            trigger_price = self.adjust_trigger_price(
+                symbol, price, side, order_type
+            )
             response = self.place_algo_conditional_order(
                 symbol=symbol,
                 side=side,
@@ -595,6 +611,21 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             effective_trade_id = trade_id or symbol
 
+            adjusted_price = self.adjust_price_tick(symbol, price)
+            if adjusted_price != price:
+                logger.warning(
+                    f"[{symbol}] Price adjusted for tickSize: {price} -> {adjusted_price}"
+                )
+            price = adjusted_price
+
+            exit_side = self._get_opposite_side(side)
+            if sl is not None:
+                sl = self.adjust_trigger_price(symbol, sl, exit_side, "STOP_MARKET")
+            if target is not None:
+                target = self.adjust_trigger_price(
+                    symbol, target, exit_side, "TAKE_PROFIT_MARKET"
+                )
+
             balance_available = self.get_usdt_balance(symbol)
             available_margin = self.get_available_usdt_balance(symbol)
             qty_from_alloc: float = 0.0
@@ -652,13 +683,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                     trade_id, "quantity_non_positive", quantity=quantity
                 )
                 return None, None, None
-
-            adjusted_price = self.adjust_price_tick(symbol, price)
-            if adjusted_price != price:
-                logger.warning(
-                    f"[{symbol}] Price adjusted for tickSize: {price} -> {adjusted_price}"
-                )
-            price = adjusted_price
 
             qty_valid = self.adjust_quantity_step(symbol, quantity)
             if qty_valid != quantity:
@@ -800,7 +824,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 else:
                     stoploss_price = round(price * ((100.0 + sl_percent) / 100.0), 1)
 
-            sl_target_side = self._get_opposite_side(side)
+            sl_target_side = exit_side
             self.place_sl_order(
                 symbol,
                 sl_target_side,

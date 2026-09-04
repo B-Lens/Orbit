@@ -65,6 +65,32 @@ class TestOrderManager(unittest.TestCase):
 
         self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 2402.99), 2402.99)
 
+    def test_protective_trigger_rounding_follows_trigger_direction(self):
+        self.assertEqual(
+            self.manager.adjust_trigger_price(
+                "BTCUSDT", 100.04, "SELL", "TAKE_PROFIT_MARKET"
+            ),
+            100.1,
+        )
+        self.assertEqual(
+            self.manager.adjust_trigger_price(
+                "BTCUSDT", 100.04, "BUY", "STOP_MARKET"
+            ),
+            100.1,
+        )
+        self.assertEqual(
+            self.manager.adjust_trigger_price(
+                "BTCUSDT", 100.06, "SELL", "STOP_MARKET"
+            ),
+            100.0,
+        )
+        self.assertEqual(
+            self.manager.adjust_trigger_price(
+                "BTCUSDT", 100.06, "BUY", "TAKE_PROFIT_MARKET"
+            ),
+            100.0,
+        )
+
     def test_get_order_uses_endpoint_that_includes_terminal_state(self):
         self.manager.future_client.query_order.return_value = {
             "orderId": 123,
@@ -171,7 +197,7 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(calls[1].kwargs["order_type"], "TAKE_PROFIT_MARKET")
         self.assertEqual([call.kwargs["quantity"] for call in calls], [0.006, 0.006])
         self.assertEqual(
-            [call.kwargs["stop_price"] for call in calls], [41000.0, 45000.0]
+            [call.kwargs["stop_price"] for call in calls], [41000.0, 45000.1]
         )
 
     def test_target_trigger_uses_symbol_tick_size_instead_of_one_decimal(self):
@@ -222,6 +248,29 @@ class TestOrderManager(unittest.TestCase):
         )
         self.assertEqual(decision_id, "decision-1")
         self.assertEqual(event["reason"], "minimum_notional")
+
+    def test_risk_guard_evaluates_normalized_protective_prices(self):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
+        self.manager.risk_guard.evaluate = MagicMock(
+            return_value=MagicMock(allowed=False, reason="test_rejection", metrics={})
+        )
+
+        self.manager.place_order(
+            {},
+            "BTCUSDT",
+            "BUY",
+            price=100.01,
+            sl=99.96,
+            target=100.04,
+            quantity=1,
+            trade_id="decision-1",
+        )
+
+        risk_inputs = self.manager.risk_guard.evaluate.call_args.kwargs
+        self.assertEqual(risk_inputs["entry_price"], 100.0)
+        self.assertEqual(risk_inputs["stop_loss"], 99.9)
+        self.assertEqual(risk_inputs["take_profit"], 100.1)
 
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
     def test_configured_quantity_obeys_margin_and_precision(self, _sleep):
