@@ -62,6 +62,8 @@ langsmith = "*"
 pycryptodome = "^3.23.0"
 json-repair = "^0.59.9"
 langfuse = "^4.6.1"
+fastapi = "^0.141.1"
+uvicorn = "^0.52.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
