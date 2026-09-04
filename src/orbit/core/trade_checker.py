@@ -875,7 +875,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         risk_management: Dict[str, Any],
         symbol: str,
         stop_loss: float,
-        target: float,
+        target: Optional[float],
         current_price: float,
         stop_loss_order: Dict[str, Any],
         quantity: float,
@@ -906,6 +906,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             if (
                 COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+                and target is not None
                 and current_price >= target
             ):
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
@@ -974,7 +975,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         risk_management: Dict[str, Any],
         symbol: str,
         stop_loss: float,
-        target: float,
+        target: Optional[float],
         current_price: float,
         stop_loss_order: Dict[str, Any],
         quantity: float,
@@ -1005,6 +1006,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             if (
                 COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+                and target is not None
                 and current_price <= target
             ):
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
@@ -1077,7 +1079,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         risk_management: Dict[str, Any],
         symbol: str,
         stop_loss: float,
-        target: float,
+        target: Optional[float],
         current_price: float,
         stop_loss_order: Dict[str, Any],
         quantity: Optional[float] = None,

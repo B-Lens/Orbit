@@ -171,7 +171,25 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(calls[1].kwargs["order_type"], "TAKE_PROFIT_MARKET")
         self.assertEqual([call.kwargs["quantity"] for call in calls], [0.006, 0.006])
         self.assertEqual(
-            [call.kwargs["stop_price"] for call in calls], [41000.0, 45000.1]
+            [call.kwargs["stop_price"] for call in calls], [41000.0, 45000.0]
+        )
+
+    def test_target_trigger_uses_symbol_tick_size_instead_of_one_decimal(self):
+        self.manager.get_symbol_filters.return_value["PRICE_FILTER"] = {
+            "tickSize": "0.001",
+            "minPrice": "0.001",
+        }
+        self.manager.place_algo_conditional_order = MagicMock(
+            return_value={"algoId": 2}
+        )
+
+        self.manager.place_target_order(
+            "BTCUSDT", "SELL", 1.543, 0.0056, "trade-1"
+        )
+
+        self.assertEqual(
+            self.manager.place_algo_conditional_order.call_args.kwargs["stop_price"],
+            1.543,
         )
 
     def test_algo_order_registers_parent_trade(self):
@@ -572,6 +590,27 @@ class TestTradeChecker(unittest.TestCase):
 
         checker._mark_exit_pending.assert_called_once_with("ETHUSDT", "ETHUSDT")
         checker._exit_trade.assert_not_called()
+
+    def test_long_trade_check_skips_missing_target(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"ETHUSDT": {"trade_id": "ETHUSDT", "price": 100.0}}
+        checker.send_true_alarm = MagicMock()
+        checker._mark_exit_pending = MagicMock()
+        checker.handle_exception = MagicMock()
+
+        checker.long_check_trade(
+            risk_management={},
+            symbol="ETHUSDT",
+            stop_loss=99.0,
+            target=None,
+            current_price=105.0,
+            stop_loss_order={"algoId": "101"},
+            quantity=1.0,
+        )
+
+        checker.send_true_alarm.assert_not_called()
+        checker._mark_exit_pending.assert_not_called()
+        checker.handle_exception.assert_not_called()
 
     def test_exit_attempts_sibling_cancellation_when_filled_order_is_terminal(self):
         checker = TradeChecker.__new__(TradeChecker)

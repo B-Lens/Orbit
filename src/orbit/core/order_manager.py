@@ -427,11 +427,12 @@ class OrderManager(AuthenticationManager, RedisManager):
                 description=f"{label} Order Request for {symbol}",
                 fields=request,
             )
+            trigger_price = self.adjust_price_tick(symbol, price)
             response = self.place_algo_conditional_order(
                 symbol=symbol,
                 side=side,
                 order_type=order_type,
-                stop_price=round(price, 1),
+                stop_price=trigger_price,
                 quantity=quantity,
                 trade_id=trade_id or symbol,
             )
