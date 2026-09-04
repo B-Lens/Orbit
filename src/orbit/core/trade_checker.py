@@ -48,6 +48,7 @@ logger = logging.getLogger("Orbit")
 _POSITION_RISK_MAX_ATTEMPTS = 3
 _POSITION_RISK_RETRY_DELAY = 1.0
 _INCOME_SETTLEMENT_GRACE_MS = 60_000
+_PRICE_STALE_THRESHOLD_MULTIPLIER = 2.0
 
 
 def _order_types(order: Optional[Dict[str, Any]]) -> Tuple[str, str]:
@@ -128,6 +129,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.mongo_handler: MongoHandler = mongo_handler or MongoHandler()
         self.live_prices: Dict[str, Tuple[float, float]] = {}
         self._ws_stale_threshold = ws_stale_threshold
+        # Give the WebSocket watchdog time to detect and recover a stalled
+        # connection before using the rate-limited REST fallback.
+        self._price_stale_threshold = (
+            ws_stale_threshold * _PRICE_STALE_THRESHOLD_MULTIPLIER
+        )
         self._ws_manager: Optional[BinanceWSManager] = None
         self._trade_reasoner = trade_reasoner
 
@@ -212,10 +218,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
         """Return a fresh price for *symbol*, falling back to the REST API."""
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
-            if time.time() - last_updated > 2:
+            now = time.time()
+            age = now - last_updated
+            if age > self._price_stale_threshold:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
-                    f"({time.time() - last_updated:.2f}s old) — falling back to REST."
+                    f"({age:.2f}s old) — falling back to REST."
                 )
                 try:
                     current_price = self.get_future_symbol_price(symbol=symbol)

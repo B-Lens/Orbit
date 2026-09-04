@@ -60,3 +60,8 @@ orders: entry reasoning gates the handoff to `OrderManager`, while exit reasonin
 runs only after Binance confirms the position is flat. Entry, execution, and exit
 events remain linked by the decision identifier so daily Testnet reports can
 publish auditable lifecycle evidence to the configured GitHub Project.
+
+`TradeChecker` caches prices received from the Binance WebSocket. It allows two
+WebSocket stale-threshold windows for the connection watchdog to recover before
+falling back to the REST price endpoint, which avoids unnecessary requests for
+quiet symbols while retaining a bounded source of fresh prices.
