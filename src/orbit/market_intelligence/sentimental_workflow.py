@@ -2,7 +2,7 @@
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -46,8 +46,16 @@ class SentimentWorkflow(ExceptionManager):
 
     def __init__(self, llm: LLM) -> None:
         self.llm = llm
-        self.mongodb = MongoDBManager()
+        # Connect lazily inside the guarded analysis cycle.  MongoDB may be
+        # temporarily unavailable while Orbit starts, and that must not abort
+        # the entire service before the scheduler has a chance to retry.
+        self.mongodb: Optional[MongoDBManager] = None
         self.prompt_manager = PromptManager()
+
+    def _get_mongodb(self) -> MongoDBManager:
+        if self.mongodb is None:
+            self.mongodb = MongoDBManager()
+        return self.mongodb
 
     async def run_web_search_analysis(self) -> Dict[str, Any]:
         """Run a sourced market assessment and identify its provider."""
@@ -80,7 +88,7 @@ class SentimentWorkflow(ExceptionManager):
                 twitter_sentiment={"source": "removed"},
                 processing_time_ms=processing_time,
             )
-            record_id = self.mongodb.save_sentiment(record)
+            record_id = self._get_mongodb().save_sentiment(record)
             return {
                 "success": True,
                 "timestamp": get_indian_time().isoformat(),

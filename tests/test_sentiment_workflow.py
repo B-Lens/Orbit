@@ -25,9 +25,9 @@ def test_web_search_analysis_is_validated_and_persisted():
         ),
         provider="Codex",
     )
-    with patch("orbit.market_intelligence.sentimental_workflow.MongoDBManager"):
-        workflow = SentimentWorkflow(llm=mock_llm)
+    workflow = SentimentWorkflow(llm=mock_llm)
     save_sentiment = MagicMock(return_value="record-id")
+    workflow.mongodb = MagicMock()
     workflow.mongodb.save_sentiment = save_sentiment
 
     result = asyncio.run(workflow.run_web_search_analysis())
@@ -55,13 +55,41 @@ def test_web_search_analysis_rejects_missing_sources():
         ),
         provider="Antigravity",
     )
-    with patch("orbit.market_intelligence.sentimental_workflow.MongoDBManager"):
-        workflow = SentimentWorkflow(llm=mock_llm)
+    workflow = SentimentWorkflow(llm=mock_llm)
     workflow.handle_exception = MagicMock()
     save_sentiment = MagicMock()
+    workflow.mongodb = MagicMock()
     workflow.mongodb.save_sentiment = save_sentiment
 
     result = asyncio.run(workflow.run_web_search_analysis())
 
     assert result["success"] is False
     save_sentiment.assert_not_called()
+
+
+def test_mongodb_connection_failure_does_not_escape_analysis_cycle():
+    mock_llm = MagicMock()
+    mock_llm.invoke_web_search_with_provider.return_value = WebSearchInvocation(
+        content=json.dumps(
+            {
+                "sentiment": "NEUTRAL",
+                "confidence": 0.5,
+                "explanation": "Markets are mixed.",
+                "sources": ["https://example.com/market-update"],
+            }
+        ),
+        provider="Codex",
+    )
+    workflow = SentimentWorkflow(llm=mock_llm)
+    workflow.handle_exception = MagicMock()
+
+    with patch(
+        "orbit.market_intelligence.sentimental_workflow.MongoDBManager",
+        side_effect=ConnectionError("Connection refused"),
+    ):
+        result = asyncio.run(workflow.run_web_search_analysis())
+
+    assert result["success"] is False
+    assert result["error"] == "Connection refused"
+    assert workflow.mongodb is None
+    workflow.handle_exception.assert_called_once()
