@@ -186,7 +186,7 @@ function App() {
   const data = useMemo(() => {
     const byChannels = (channels: Set<string>) =>
       notifications.filter((item) => channels.has(item.channel));
-    const trades = byChannels(TRADE_CHANNELS).slice(0, 4);
+    const tradeEvents = byChannels(TRADE_CHANNELS).slice(0, 4);
     const prices = byChannels(PRICE_CHANNELS).slice(0, 5);
     const signals = byChannels(SIGNAL_CHANNELS).slice(0, 4);
     const sentiment = notifications
@@ -198,7 +198,7 @@ function App() {
         (item) => notificationText(item).match(/\b[A-Z]{2,10}USDT\b/g) ?? [],
       ),
     ).size;
-    return { trades, prices, signals, sentiment, alerts, symbolCount };
+    return { tradeEvents, prices, signals, sentiment, alerts, symbolCount };
   }, [notifications]);
 
   const isConnected = lastUpdated !== null && !error;
@@ -353,15 +353,15 @@ function App() {
                 </span>
               </div>
             )}
-            <section className="stat-strip" aria-label="Current trading status">
+            <section className="stat-strip" aria-label="Recent operations summary">
               <article>
                 <span className="stat-icon purple">
                   <WalletCards size={17} />
                 </span>
                 <div>
-                  <small>ACTIVE TRADES</small>
-                  <strong>{data.trades.length}</strong>
-                  <p>Current feed</p>
+                  <small>RECENT TRADE EVENTS</small>
+                  <strong>{data.tradeEvents.length}</strong>
+                  <p>Latest buffered updates</p>
                 </div>
               </article>
               <article>
@@ -403,8 +403,8 @@ function App() {
                       <WalletCards size={16} />
                     </span>
                     <div>
-                      <h2>Active trades</h2>
-                      <p>Open positions & stop updates</p>
+                      <h2>Recent trade activity</h2>
+                      <p>Latest trade & stop notifications</p>
                     </div>
                   </div>
                   <span className="live-label">
@@ -412,9 +412,9 @@ function App() {
                     LIVE
                   </span>
                 </div>
-                {data.trades.length ? (
+                {data.tradeEvents.length ? (
                   <div className="data-list">
-                    {data.trades.map((item) => {
+                    {data.tradeEvents.map((item) => {
                       const tone = toneForText(notificationText(item));
                       return (
                         <div className="trade-row" key={item.id}>
@@ -445,7 +445,7 @@ function App() {
                     })}
                   </div>
                 ) : (
-                  <EmptyPanel message="Open positions will appear here." />
+                  <EmptyPanel message="Trade and stop notifications will appear here." />
                 )}
               </article>
               <article className="panel prices-panel">
