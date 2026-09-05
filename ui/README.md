@@ -1,8 +1,10 @@
-# Orbit notification dashboard
+# Orbit operations dashboard
 
-The React dashboard displays the bounded Redis feed of notifications that were
-successfully delivered to Discord. It refreshes every 15 seconds and supports
-free-text and webhook-channel filtering.
+The React dashboard provides a realtime operations view over the bounded Redis
+feed of notifications that were successfully delivered to Discord. It includes
+runtime health, bounded-buffer signal and alert summaries, channel activity, active
+symbol detection, and a searchable event stream. Discord integration remains
+unchanged, and successful webhook responses are mirrored to the dashboard.
 
 Run the FastAPI service on port 8000, then start the Vite development server:
 
