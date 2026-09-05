@@ -18,6 +18,59 @@ def _ohlcv_frame(timestamp: pd.Timestamp) -> pd.DataFrame:
     )
 
 
+def test_decision_event_identity_prevents_duplicate_append() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.decision_collection = MagicMock()
+
+    handler.append_decision_event(
+        "decision-1",
+        {"event_id": "order_submitted:BTCUSDT:123", "status": "order_submitted"},
+    )
+
+    query = handler.decision_collection.update_one.call_args.args[0]
+    assert query["decision_id"] == "decision-1"
+    assert query["execution_events.event_id"] == {
+        "$ne": "order_submitted:BTCUSDT:123"
+    }
+
+
+def test_data_collector_converts_binance_klines() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.get_binance_klines = MagicMock(
+        side_effect=[
+            [
+                [
+                    1_700_000_000_000,
+                    "100",
+                    "105",
+                    "99",
+                    "103",
+                    "42",
+                    1_700_000_899_999,
+                    "0",
+                    1,
+                    "0",
+                    "0",
+                    "0",
+                ]
+            ],
+            [],
+        ]
+    )
+
+    frame = handler.data_collector("BTCUSDT", start_time=1_700_000_000_000)
+
+    assert isinstance(frame, pd.DataFrame)
+    assert frame.iloc[0][["open", "high", "low", "close", "volume"]].tolist() == [
+        100,
+        105,
+        99,
+        103,
+        42,
+    ]
+    assert frame.index.name == "timestamp"
+
+
 def test_handle_mongo_data_normalizes_legacy_microsecond_timestamp() -> None:
     handler = MongoHandler.__new__(MongoHandler)
     handler.get_mongo_historical_data = MagicMock(
