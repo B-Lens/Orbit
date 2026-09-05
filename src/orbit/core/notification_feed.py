@@ -3,6 +3,8 @@
 import json
 import logging
 import os
+import queue
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
@@ -14,6 +16,13 @@ logger = logging.getLogger("Orbit")
 NOTIFICATION_FEED_KEY = "orbit:notifications"
 DEFAULT_FEED_LIMIT = 250
 MAX_FEED_LIMIT = 500
+WRITE_QUEUE_LIMIT = 1_000
+
+_notification_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue(
+    maxsize=WRITE_QUEUE_LIMIT
+)
+_worker_lock = threading.Lock()
+_worker_started = False
 
 
 def create_redis_client() -> redis.Redis:
@@ -39,21 +48,8 @@ def create_redis_client() -> redis.Redis:
     )
 
 
-def record_notification(
-    channel: str,
-    content: str,
-    description: Optional[str],
-    fields: List[Dict[str, Any]],
-) -> None:
-    """Append a successful Discord delivery without disrupting trading on failure."""
-    event = {
-        "id": uuid4().hex,
-        "channel": channel,
-        "content": content,
-        "description": description or "",
-        "fields": fields,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+def _write_notification(event: Dict[str, Any]) -> None:
+    """Persist one queued event from the background writer."""
     try:
         client = create_redis_client()
         try:
@@ -65,6 +61,57 @@ def record_notification(
             client.close()
     except redis.RedisError as exc:
         logger.warning("Unable to mirror Discord notification to the UI feed: %s", exc)
+
+
+def _notification_writer() -> None:
+    """Drain notification events without blocking the calling trading thread."""
+    while True:
+        event = _notification_queue.get()
+        try:
+            _write_notification(event)
+        except Exception:
+            logger.exception("Unexpected error while writing the notification feed")
+        finally:
+            _notification_queue.task_done()
+
+
+def _ensure_writer_started() -> None:
+    global _worker_started
+    if _worker_started:
+        return
+    with _worker_lock:
+        if _worker_started:
+            return
+        worker = threading.Thread(
+            target=_notification_writer,
+            name="orbit-notification-feed",
+            daemon=True,
+        )
+        worker.start()
+        _worker_started = True
+
+
+def record_notification(
+    channel: str,
+    content: str,
+    description: Optional[str],
+    fields: List[Dict[str, Any]],
+) -> None:
+    """Queue a Discord delivery for persistence without blocking trading."""
+    event = {
+        "id": uuid4().hex,
+        "channel": channel,
+        "content": content,
+        "description": description or "",
+        "fields": fields,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        _notification_queue.put_nowait(event)
+    except queue.Full:
+        logger.warning("Notification feed queue is full; dropping mirrored event")
+        return
+    _ensure_writer_started()
 
 
 def list_notifications(limit: int = 100) -> List[Dict[str, Any]]:
