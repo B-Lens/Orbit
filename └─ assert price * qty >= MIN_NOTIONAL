@@ -1,0 +1,12 @@
+
+---
+
+## Contradict Trade Simulation
+
+When `SignalAnalyzer._should_skip_due_to_sentiment()` decides to skip a signal, it:
+
+1. Stores a record in `contradict_trades` MongoDB collection.
+2. Spawns a `ContradictSimulator` daemon thread.
+
+The simulator polls `https://fapi.binance.com/fapi/v1/ticker/price` every 30 seconds for up to 24 hours, then writes the outcome (`SL`, `Target`, or `Timeout`) to the `simulated_trades` collection. This allows offline analysis of how often the sentiment filter prevented profitable trades.
+
