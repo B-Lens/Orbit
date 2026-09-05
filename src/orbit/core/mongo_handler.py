@@ -673,15 +673,15 @@ class MongoHandler(ExceptionManager):
         try:
             records = []
             for _, row in df.iterrows():
-                timestamp_seconds = _epoch_to_seconds(row["timestamp"])
-                expire_at = datetime.fromtimestamp(
-                    timestamp_seconds, tz=timezone.utc
-                ) + timedelta(days=60)
+                ts_sec = _epoch_to_seconds(row["timestamp"])
+                expire_at = datetime.fromtimestamp(ts_sec, tz=timezone.utc) + timedelta(
+                    days=60
+                )
                 records.append(
                     {
                         "symbol": symbol,
                         "interval": interval,
-                        "timestamp": timestamp_seconds,
+                        "timestamp": ts_sec,
                         "open": float(row["open"]),
                         "high": float(row["high"]),
                         "low": float(row["low"]),
