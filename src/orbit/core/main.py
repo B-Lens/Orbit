@@ -518,9 +518,9 @@ class BinanceAutomation(ExceptionManager):
                 logger.info(f"Worker {worker.name} is alive.")
             time.sleep(check_interval)
 
-    def publish_runtime_heartbeat(self, running: threading.Event) -> None:
+    def publish_runtime_heartbeat(self, stop_event: threading.Event) -> None:
         """Publish readiness while the runtime and its workers remain active."""
-        while running.is_set():
+        while not stop_event.is_set():
             if all(worker.is_alive() for worker in self.workers_to_monitor):
                 self.order_manager.redis_client.setex(
                     REDIS_KEY_RUNTIME_HEARTBEAT,
@@ -529,7 +529,7 @@ class BinanceAutomation(ExceptionManager):
                 )
             else:
                 self.order_manager.redis_client.delete(REDIS_KEY_RUNTIME_HEARTBEAT)
-            running.wait(RUNTIME_HEARTBEAT_INTERVAL)
+            stop_event.wait(RUNTIME_HEARTBEAT_INTERVAL)
 
     def report_performance(self, interval_seconds: int = 86400) -> None:
         """Sync Binance income and emit a fee-aware report once per day."""
@@ -598,11 +598,10 @@ class BinanceAutomation(ExceptionManager):
             performance_thread.start()
             self.workers_to_monitor.append(performance_thread)
 
-        runtime_running = threading.Event()
-        runtime_running.set()
+        heartbeat_stop = threading.Event()
         heartbeat_thread = threading.Thread(
             target=self.publish_runtime_heartbeat,
-            args=(runtime_running,),
+            args=(heartbeat_stop,),
             daemon=True,
             name="RuntimeHeartbeatThread",
         )
@@ -612,7 +611,7 @@ class BinanceAutomation(ExceptionManager):
         try:
             self.start_signal_analysis()
         finally:
-            runtime_running.clear()
+            heartbeat_stop.set()
             self.order_manager.redis_client.delete(REDIS_KEY_RUNTIME_HEARTBEAT)
 
 
