@@ -1,11 +1,12 @@
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import redis
 
 from orbit.core.main import (
     BinanceAutomation,
+    CRON_INITIALIZATION_RETRY_SECONDS,
     RUNTIME_HEARTBEAT_INTERVAL,
     RUNTIME_HEARTBEAT_TTL,
 )
@@ -24,6 +25,27 @@ def heartbeat_automation() -> BinanceAutomation:
     }
     automation._runtime_progress_lock = threading.Lock()
     return automation
+
+
+def test_sentiment_cron_retries_initialization_after_connection_failure() -> None:
+    automation = BinanceAutomation.__new__(BinanceAutomation)
+    automation._croner = None
+    automation.handle_exception = MagicMock()
+    croner = MagicMock()
+
+    with (
+        patch(
+            "orbit.core.main.Croner",
+            side_effect=[ConnectionError("refused"), croner],
+        ) as croner_class,
+        patch("orbit.core.main.time.sleep") as sleep,
+    ):
+        automation.run_sentiment_cron()
+
+    assert croner_class.call_count == 2
+    automation.handle_exception.assert_called_once()
+    sleep.assert_called_once_with(CRON_INITIALIZATION_RETRY_SECONDS)
+    croner.news_croner.assert_called_once_with()
 
 
 def test_runtime_heartbeat_is_published_when_workers_are_alive() -> None:

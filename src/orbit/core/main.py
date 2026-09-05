@@ -52,6 +52,7 @@ from orbit.utils.utils import get_indian_time
 
 # Constants
 SIGNAL_ANALYSIS_SLEEP: int = 900  # 15 minutes in seconds
+CRON_INITIALIZATION_RETRY_SECONDS: int = 60
 RUNTIME_HEARTBEAT_INTERVAL: int = 10
 RUNTIME_HEARTBEAT_TTL: int = 30
 TRADE_CHECKER_STALE_AFTER: int = 60
@@ -490,18 +491,22 @@ class BinanceAutomation(ExceptionManager):
                 e, context_description="Exception in trade checker thread"
             )
 
-    def handle_crons(self) -> None:
-        """Start the sentiment cron in a background daemon thread."""
-        croner: Croner = self._croner or Croner()
-
-        def cron_runner() -> None:
+    def run_sentiment_cron(self) -> None:
+        """Run the sentiment scheduler, retrying unavailable dependencies."""
+        while True:
             try:
+                croner: Croner = self._croner or Croner()
                 croner.news_croner()
+                return
             except Exception as e:
                 self.handle_exception(e, context_description="Exception in cron thread")
+                time.sleep(CRON_INITIALIZATION_RETRY_SECONDS)
+
+    def handle_crons(self) -> None:
+        """Start the sentiment cron in a background daemon thread."""
 
         cron_thread = threading.Thread(
-            target=cron_runner, daemon=True, name="CronThread"
+            target=self.run_sentiment_cron, daemon=True, name="CronThread"
         )
         cron_thread.start()
         self.workers_to_monitor.append(cron_thread)
