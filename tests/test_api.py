@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from orbit.api import get_status
+from orbit.api import get_notifications, get_status
 from orbit.core.redis_manager import runtime_heartbeat_key
 
 
@@ -42,3 +42,25 @@ def test_status_requires_every_expected_runtime(redis_cls: MagicMock) -> None:
 
     assert exc_info.value.status_code == 503
     assert "green" in str(exc_info.value.detail)
+
+
+@patch("orbit.api.list_notifications")
+def test_notifications_returns_mirrored_discord_events(list_feed: MagicMock) -> None:
+    list_feed.return_value = [
+        {"id": "incomplete-record"},
+        {
+            "id": "event-1",
+            "channel": "signal",
+            "content": "BTCUSDT",
+            "description": "Order placed successfully",
+            "fields": [{"name": "Price", "value": "62000", "inline": True}],
+            "created_at": "2026-09-05T09:00:00+00:00",
+        },
+    ]
+
+    response = get_notifications(limit=25)
+
+    assert response.notifications[0].channel == "signal"
+    assert response.notifications[0].description == "Order placed successfully"
+    assert len(response.notifications) == 1
+    list_feed.assert_called_once_with(25)
