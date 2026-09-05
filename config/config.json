@@ -28,7 +28,7 @@
       "max_daily_loss_pct": 0.02,
       "min_reward_risk_ratio": 1.5
     },
-    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "PAXGUSDT", "SKYUSDT", "ATOMUSDT", "SOLUSDT"],
+    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "PAXGUSDT", "SKYUSDT", "ATOMUSDT"],
     "trade_checker_pair": [ "BCHUSDT", "BTCUSDT", "BNBUSDT", "ETHUSDT", "MKRUSDT", "SKYUSDT", "LTCUSDT", "SOLUSDT", "ATOMUSDT", "XRPUSDT", "PAXGUSDT"],
     "trading_pairs_precision":{
       "BTCUSDT": 3,
