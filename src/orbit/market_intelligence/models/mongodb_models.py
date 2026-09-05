@@ -143,11 +143,14 @@ class MongoDBManager:
             raise
 
     def _update_returns(self, current_time: datetime, current_prices: Dict[str, float]):
-
+        """
+        For each return window (e.g., 1h, 4h, 1d), find the sentiment record closest to the window's
+        target time and update its returns field with the calculated return for each symbol.
+        """
         for window_name, delta in RETURN_WINDOWS.items():
-
             target_time = current_time - delta
 
+            # Find the record closest to the target_time within a 2-minute window
             past_record = self.sentiment_history.find_one(
                 {
                     "timestamp": {
@@ -164,13 +167,11 @@ class MongoDBManager:
             updates = {}
 
             for symbol, current_price in current_prices.items():
-
                 past_price = past_prices.get(symbol)
                 if not past_price:
                     continue
 
                 ret = (current_price - past_price) / past_price * 100
-
                 updates[f"returns.{symbol}.{window_name}"] = ret
 
             if updates:
@@ -178,6 +179,37 @@ class MongoDBManager:
                     {"_id": past_record["_id"]},
                     {"$set": updates}
                 )
+
+        # Additionally, update the current record with 1d return if possible
+        # This ensures the current record stores its own 1d return as well
+        window_name = "1d"
+        delta = RETURN_WINDOWS.get(window_name)
+        if delta:
+            target_time = current_time - delta
+            # Find the record closest to the target_time within a 2-minute window
+            past_record = self.sentiment_history.find_one(
+                {
+                    "timestamp": {
+                        "$gte": target_time - timedelta(minutes=2),
+                        "$lte": target_time + timedelta(minutes=2)
+                    }
+                }
+            )
+            if past_record:
+                past_prices = past_record.get("prices", {})
+                updates = {}
+                for symbol, current_price in current_prices.items():
+                    past_price = past_prices.get(symbol)
+                    if not past_price:
+                        continue
+                    ret = (current_price - past_price) / past_price * 100
+                    updates[f"returns.{symbol}.{window_name}"] = ret
+                if updates:
+                    # Update the current record (not the past one)
+                    self.sentiment_history.update_one(
+                        {"timestamp": {"$gte": current_time - timedelta(minutes=2), "$lte": current_time + timedelta(minutes=2)}},
+                        {"$set": updates}
+                    )
     
     def get_recent_sentiments(
         self, 
