@@ -29,8 +29,6 @@ binance-futures-connector = "*"
 
 pandas = "*"
 numpy = "1.26.4"
-scipy = "*"
-scikit-learn = "*"
 
 schedule = "*"
 jsonschema = "*"
@@ -47,7 +45,6 @@ gym = "*"
 anthropic = "*"
 groq = "*"
 openai = "*"
-google-generativeai = "*"
 
 python-dotenv = "*"
 requests = "*"
@@ -55,10 +52,6 @@ websocket-client = "*"
 pillow = "*"
 
 backtrader = "*"
-boto3 = "*"
-yfinance = "*"
-
-wandb = "*"
 langchain = "*"
 langchain-openai = "*"
 langchain-groq = "*"
