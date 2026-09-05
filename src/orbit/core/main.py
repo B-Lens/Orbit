@@ -492,7 +492,13 @@ class BinanceAutomation(ExceptionManager):
 
     def handle_crons(self) -> None:
         """Start the sentiment cron in a background daemon thread."""
-        croner: Croner = self._croner or Croner()
+        try:
+            croner: Croner = self._croner or Croner()
+        except Exception as exc:
+            self.handle_exception(
+                exc, context_description="Sentiment cron disabled during startup"
+            )
+            return
 
         def cron_runner() -> None:
             try:

@@ -7,6 +7,22 @@ from orbit.core.signal_analyzer import SignalAnalyzer
 
 
 class TestReportingLifecycle(unittest.TestCase):
+    @patch("orbit.core.main.Croner", side_effect=ConnectionError("connection refused"))
+    def test_mongodb_failure_does_not_interrupt_service_startup(self, _croner):
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation._croner = None
+        automation.workers_to_monitor = []
+        automation.handle_exception = MagicMock()
+
+        automation.handle_crons()
+
+        self.assertEqual(automation.workers_to_monitor, [])
+        automation.handle_exception.assert_called_once()
+        self.assertEqual(
+            automation.handle_exception.call_args.kwargs["context_description"],
+            "Sentiment cron disabled during startup",
+        )
+
     def test_active_position_is_rejected_before_market_data_or_strategy_work(self):
         analyzer = SignalAnalyzer.__new__(SignalAnalyzer)
         analyzer.trading_pairs = ["ETHUSDT"]
