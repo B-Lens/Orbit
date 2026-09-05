@@ -50,6 +50,8 @@ python-dotenv = "*"
 requests = "*"
 websocket-client = "*"
 pillow = "*"
+matplotlib = "*"
+mplfinance = "*"
 
 backtrader = "*"
 langchain = "*"
@@ -73,8 +75,6 @@ types-requests = "*"
 types-PyYAML = "*"
 
 [tool.poetry.group.viz.dependencies]
-matplotlib = "*"
-mplfinance = "*"
 graphviz = "*"
 
 [build-system]
