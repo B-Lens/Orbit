@@ -50,6 +50,7 @@ REDIS_KEY_PENDING_SENTIMENT_BASE: str = "sentiment:pending_base"
 REDIS_KEY_PENDING_SENTIMENT_COUNT: str = "sentiment:pending_count"
 REDIS_KEY_SENTIMENT_LAST_RUN_SLOT: str = "sentiment:last_run_slot"
 REDIS_KEY_SENTIMENT_RUN_SLOT_LEASE: str = "sentiment:run_slot_lease"
+REDIS_KEY_RUNTIME_HEARTBEAT: str = "orbit:runtime:heartbeat"
 
 # Pending observations must remain recent across half-hour confirmation windows.
 _PENDING_SENTIMENT_TTL: int = 7_200

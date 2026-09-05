@@ -11,6 +11,7 @@ app = FastAPI(
 import redis
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from orbit.core.redis_manager import REDIS_KEY_RUNTIME_HEARTBEAT
 
 # Configure CORS for the UI
 app.add_middleware(
@@ -26,7 +27,7 @@ class StatusResponse(BaseModel):
     version: str
 
 @app.get("/api/status", response_model=StatusResponse)
-def get_status():
+def get_status() -> StatusResponse:
     host = os.environ.get("REDIS_HOST", "localhost")
     port = int(os.environ.get("REDIS_PORT", 6379))
     db = int(os.environ.get("REDIS_DB", 0))
@@ -39,6 +40,11 @@ def get_status():
             socket_timeout=1
         )
         r.ping()
+        if r.get(REDIS_KEY_RUNTIME_HEARTBEAT) is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Service Unavailable: trading runtime heartbeat is missing",
+            )
         return StatusResponse(status="online", version="1.0.0")
     except (redis.ConnectionError, redis.TimeoutError):
         raise HTTPException(status_code=503, detail="Service Unavailable: Redis disconnected or timed out")

@@ -37,6 +37,7 @@ load_dotenv()
 from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
 from orbit.core.trade_checker import TradeChecker
+from orbit.core.redis_manager import REDIS_KEY_RUNTIME_HEARTBEAT
 from orbit.core.order_manager import OrderManager
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
@@ -49,6 +50,8 @@ from orbit.utils.utils import get_indian_time
 
 # Constants
 SIGNAL_ANALYSIS_SLEEP: int = 900  # 15 minutes in seconds
+RUNTIME_HEARTBEAT_INTERVAL: int = 10
+RUNTIME_HEARTBEAT_TTL: int = 30
 
 logger = logging.getLogger("Orbit")
 
@@ -515,6 +518,19 @@ class BinanceAutomation(ExceptionManager):
                 logger.info(f"Worker {worker.name} is alive.")
             time.sleep(check_interval)
 
+    def publish_runtime_heartbeat(self, running: threading.Event) -> None:
+        """Publish readiness while the runtime and its workers remain active."""
+        while running.is_set():
+            if all(worker.is_alive() for worker in self.workers_to_monitor):
+                self.order_manager.redis_client.setex(
+                    REDIS_KEY_RUNTIME_HEARTBEAT,
+                    RUNTIME_HEARTBEAT_TTL,
+                    datetime.now(timezone.utc).isoformat(),
+                )
+            else:
+                self.order_manager.redis_client.delete(REDIS_KEY_RUNTIME_HEARTBEAT)
+            running.wait(RUNTIME_HEARTBEAT_INTERVAL)
+
     def report_performance(self, interval_seconds: int = 86400) -> None:
         """Sync Binance income and emit a fee-aware report once per day."""
         reporters = [
@@ -582,8 +598,22 @@ class BinanceAutomation(ExceptionManager):
             performance_thread.start()
             self.workers_to_monitor.append(performance_thread)
 
+        runtime_running = threading.Event()
+        runtime_running.set()
+        heartbeat_thread = threading.Thread(
+            target=self.publish_runtime_heartbeat,
+            args=(runtime_running,),
+            daemon=True,
+            name="RuntimeHeartbeatThread",
+        )
+        heartbeat_thread.start()
+
         logger.info("All automation threads started successfully")
-        self.start_signal_analysis()
+        try:
+            self.start_signal_analysis()
+        finally:
+            runtime_running.clear()
+            self.order_manager.redis_client.delete(REDIS_KEY_RUNTIME_HEARTBEAT)
 
 
 # =============================================================================
