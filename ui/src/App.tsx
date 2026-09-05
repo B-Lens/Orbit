@@ -102,6 +102,18 @@ const toneForText = (value: string) =>
       ? "positive"
       : "neutral";
 
+const preferredTheme = (): Theme => {
+  try {
+    const saved = localStorage.getItem("orbit-theme");
+    if (saved === "light" || saved === "dark") return saved;
+  } catch {
+    // Theme persistence is optional when browser storage is unavailable.
+  }
+  return window.matchMedia("(prefers-color-scheme: light)").matches
+    ? "light"
+    : "dark";
+};
+
 function timeAgo(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "recently";
@@ -130,13 +142,7 @@ function App() {
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [view, setView] = useState<View>("dashboard");
-  const [theme, setTheme] = useState<Theme>(() => {
-    const saved = localStorage.getItem("orbit-theme");
-    if (saved === "light" || saved === "dark") return saved;
-    return window.matchMedia("(prefers-color-scheme: light)").matches
-      ? "light"
-      : "dark";
-  });
+  const [theme, setTheme] = useState<Theme>(preferredTheme);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -171,7 +177,11 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("orbit-theme", theme);
+    try {
+      localStorage.setItem("orbit-theme", theme);
+    } catch {
+      // Continue with the in-memory theme when persistence is unavailable.
+    }
   }, [theme]);
 
   useEffect(() => {
@@ -495,7 +505,7 @@ function App() {
                     </span>
                     <div>
                       <h2>Signal analysis</h2>
-                      <p>Strategy decisions & confidence</p>
+                      <p>Strategy decisions & outcomes</p>
                     </div>
                   </div>
                   <Gauge size={16} />
@@ -514,14 +524,6 @@ function App() {
                             <time>{timeAgo(item.created_at)}</time>
                           </div>
                           <p>{summaryText(item)}</p>
-                          <div className="confidence-track">
-                            <span
-                              className={tone}
-                              style={{
-                                width: `${Math.min(92, 45 + item.fields.length * 9)}%`,
-                              }}
-                            />
-                          </div>
                         </div>
                       );
                     })}
