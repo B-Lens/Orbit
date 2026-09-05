@@ -2,10 +2,21 @@ import os
 import pandas as pd
 import unittest
 import datetime
+from pathlib import Path
 from orbit.utils.utils import get_indian_time, generate_chart
 
 
 class TestUtil(unittest.TestCase):
+    def test_chart_dependencies_are_installed_with_runtime(self):
+        pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        pyproject = pyproject_path.read_text(encoding="utf-8")
+        runtime_dependencies = pyproject.split(
+            "[tool.poetry.dependencies]", maxsplit=1
+        )[1].split("[", maxsplit=1)[0]
+
+        self.assertIn('matplotlib = "*"', runtime_dependencies)
+        self.assertIn('mplfinance = "*"', runtime_dependencies)
+
     def test_indian_time(self):
         indian_time = get_indian_time()
 
