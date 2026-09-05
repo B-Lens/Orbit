@@ -47,6 +47,10 @@ from orbit.core.performance_reporter import PerformanceReporter
 from orbit.core.testnet_reporter import TestnetDailyReporter
 from orbit.core.execution import ExecutionMode
 from orbit.core.trade_reasoner import TradeReasoner
+from orbit.core.command_center import (
+    install_command_center_log_handler,
+    record_runtime_activity,
+)
 from orbit.llm.llm_endpoint import LLM
 from orbit.utils.utils import get_indian_time
 
@@ -67,6 +71,10 @@ def install_global_exception_handler(manager):
 
         traceback_str = "".join(
             traceback.format_exception(exc_type, exc_value, exc_traceback)
+        )
+
+        manager._record_command_center_exception(
+            exc_value, "Uncaught global exception", traceback_str
         )
 
         manager.exception_trigger(
@@ -299,6 +307,11 @@ class BinanceAutomation(ExceptionManager):
         target = signal["take_profit"]
         meta_info = signal.get("Other Info", "")
         decision_id = signal.get("decision_id")
+        record_runtime_activity(
+            self.order_manager.redis_client,
+            "evaluating_signal",
+            f"{symbol} {action}",
+        )
 
         try:
             if self._trade_reasoner is None:
@@ -351,6 +364,11 @@ class BinanceAutomation(ExceptionManager):
         leverage = 5 if symbol == "BTCUSDT" else self.future_leverage
 
         logger.info(f"Placing {action} order for {symbol}...")
+        record_runtime_activity(
+            self.order_manager.redis_client,
+            "submitting_order",
+            f"{symbol} {action}",
+        )
 
         order_response, quantity, order_request = self.order_manager.place_order(
             self.risk_management,
@@ -453,6 +471,11 @@ class BinanceAutomation(ExceptionManager):
 
         while True:
             try:
+                record_runtime_activity(
+                    self.order_manager.redis_client,
+                    "waiting_for_candle",
+                    "Waiting for the next 15-minute candle",
+                )
                 self.candlestick_aligner(15)
 
                 # Active broker positions are always unavailable for entry.
@@ -460,10 +483,21 @@ class BinanceAutomation(ExceptionManager):
                 # safeguard against immediate re-entry after an exit.
                 cooldown_list = self.refresh_active_positions()
 
+                record_runtime_activity(
+                    self.order_manager.redis_client,
+                    "analyzing_signals",
+                    f"Scanning {len(self.trading_pairs)} configured markets",
+                )
+
                 for signal in self.signal_analyzer.analyze_market(cooldown_list):
                     self.process_signal(signal)
 
                 self.mark_runtime_progress("signal_analysis")
+                record_runtime_activity(
+                    self.order_manager.redis_client,
+                    "waiting_for_next_scan",
+                    "Signal analysis cycle complete",
+                )
                 time.sleep(
                     SIGNAL_ANALYSIS_SLEEP - (time.time() % SIGNAL_ANALYSIS_SLEEP)
                 )
@@ -478,6 +512,11 @@ class BinanceAutomation(ExceptionManager):
         """Background trade-monitor thread entry-point."""
         self.send_logs(data=None, description="Starting trade checker thread")
         try:
+            record_runtime_activity(
+                self.order_manager.redis_client,
+                "monitoring_positions",
+                "Refreshing broker positions and protective orders",
+            )
             self.trades = self.trade_checker.activePosition_coolMaker()
             time.sleep(3)
             self.trade_checker.monitor_trades(
@@ -586,6 +625,12 @@ class BinanceAutomation(ExceptionManager):
 
     def run(self) -> None:
         """Start all trading threads and enter the signal-analysis loop."""
+        install_command_center_log_handler(self.order_manager.redis_client)
+        record_runtime_activity(
+            self.order_manager.redis_client,
+            "starting",
+            "Starting Orbit runtime workers",
+        )
         logger.info("Starting Binance automation (thread-based)")
         self.mark_runtime_progress("signal_analysis")
         self.mark_runtime_progress("trade_checker")
@@ -647,6 +692,11 @@ class BinanceAutomation(ExceptionManager):
         try:
             self.start_signal_analysis()
         finally:
+            record_runtime_activity(
+                self.order_manager.redis_client,
+                "stopping",
+                "Orbit runtime is shutting down",
+            )
             heartbeat_stop.set()
             heartbeat_thread.join(RUNTIME_HEARTBEAT_INTERVAL + 2)
             if heartbeat_thread.is_alive():

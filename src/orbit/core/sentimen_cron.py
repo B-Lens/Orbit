@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 import redis
 
 from orbit.market_intelligence.sentimental_workflow import SentimentWorkflow
+from orbit.core.command_center import record_sentiment_snapshot
 from orbit.llm.llm_endpoint import LLM
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.redis_manager import RedisManager
@@ -165,6 +166,8 @@ class Croner(ExceptionManager, RedisManager):
         result["effective_sentiment"] = effective_sentiment
         result["signal_action"] = signal_action
         result["confirmation_count"] = confirmation_count
+
+        record_sentiment_snapshot(self.redis_client, result)
 
         self.send_market_sentiment(
             data=(

@@ -1438,6 +1438,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     if current_price is None:
                         continue
 
+                    trade_id = self.trades[symbol].get("trade_id") or symbol
+                    self.trades[symbol]["current_price"] = current_price
+                    self.update_trade_fields(
+                        trade_id, {"current_price": current_price}
+                    )
+
                     if (
                         "stop_loss_price" not in self.trades[symbol]
                         or "target" not in self.trades[symbol]

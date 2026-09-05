@@ -21,6 +21,7 @@ import redis
 from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import RedisManager
+from orbit.core.command_center import record_runtime_activity
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 from orbit.utils.utils import get_indian_time
 
@@ -103,6 +104,12 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
         """
         try:
             for symbol in self.trading_pairs:
+
+                record_runtime_activity(
+                    self.redis_client,
+                    "analyzing_signal",
+                    f"Running strategy for {symbol}",
+                )
 
                 self.send_logs(
                     data=None, description=f"Analyzing market for {symbol}", fields=None

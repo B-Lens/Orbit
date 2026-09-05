@@ -14,6 +14,7 @@ import logging
 from typing import Any, Dict, Optional, Union
 
 from orbit.core.discord_manager import DiscordManager
+from orbit.core.command_center import record_exception
 from orbit.utils.utils import get_commit_id
 
 logger = logging.getLogger("Orbit")
@@ -32,6 +33,16 @@ class ExceptionManager(DiscordManager):
     def __init__(self, custom_logger: Optional[logging.Logger] = None) -> None:
         super().__init__()
         self.logger = custom_logger
+
+    def _record_command_center_exception(
+        self, exception: BaseException, context: str, traceback_text: str
+    ) -> None:
+        client = getattr(self, "redis_client", None)
+        if client is None:
+            order_manager = getattr(self, "order_manager", None)
+            client = getattr(order_manager, "redis_client", None)
+        if client is not None:
+            record_exception(client, exception, context, traceback_text)
 
     def clientExceptionHandler(
         self,
@@ -53,6 +64,9 @@ class ExceptionManager(DiscordManager):
         """
         traceback_str = "".join(
             traceback.format_exception(type(error), error, error.__traceback__)
+        )
+        self._record_command_center_exception(
+            error, Location or "Binance client", traceback_str
         )
 
         commit_id: str = get_commit_id()
@@ -104,6 +118,9 @@ class ExceptionManager(DiscordManager):
 
         traceback_str = "".join(
             traceback.format_exception(type(exception), exception, exception.__traceback__)
+        )
+        self._record_command_center_exception(
+            exception, context_description, traceback_str
         )
 
         # logger.error(

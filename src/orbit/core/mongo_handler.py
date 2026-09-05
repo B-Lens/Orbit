@@ -59,6 +59,8 @@ class MongoHandler(ExceptionManager):
         db_name: Target database name.
         mongo_client: An optional pre-built :class:`pymongo.MongoClient`.
             When provided, *uri* is ignored and this client is used directly.
+        read_only: Bind collections without creating or migrating indexes. Used
+            by read-only API consumers that must not mutate MongoDB metadata.
     """
 
     def __init__(
@@ -66,8 +68,10 @@ class MongoHandler(ExceptionManager):
         uri: Optional[str] = None,
         db_name: str = "orbit",
         mongo_client: Any = None,
+        read_only: bool = False,
     ) -> None:
         super().__init__()
+        self.read_only = read_only
 
         if MongoClient is None:
             logger.warning("pymongo is not installed; MongoDB features are disabled.")
@@ -81,6 +85,12 @@ class MongoHandler(ExceptionManager):
             )
             self.db = self._mongo_client[db_name]
             self.collection = self.db[OHLCV_COLLECTION_NAME]
+            self.decision_collection = self.db["trade_decisions"]
+            self.trade_lifecycle_collection = self.db["trade_lifecycle"]
+            self.trade_metrics_collection = self.db["trade_metrics"]
+            self.income_collection = self.db["futures_income"]
+            if read_only:
+                return
             self.collection.create_index(
                 [
                     ("symbol", ASCENDING),
@@ -89,19 +99,15 @@ class MongoHandler(ExceptionManager):
                 ],
                 unique=True,
             )
-            self.decision_collection = self.db["trade_decisions"]
             self.decision_collection.create_index("decision_id", unique=True)
             self.decision_collection.create_index(
                 [("symbol", ASCENDING), ("timestamp", ASCENDING)]
             )
-            self.trade_lifecycle_collection = self.db["trade_lifecycle"]
             self.trade_lifecycle_collection.create_index("trade_id", unique=True)
             self.trade_lifecycle_collection.create_index(
                 [("execution_mode", ASCENDING), ("closed_at", ASCENDING)]
             )
-            self.trade_metrics_collection = self.db["trade_metrics"]
             self.trade_metrics_collection.create_index("execution_mode", unique=True)
-            self.income_collection = self.db["futures_income"]
             legacy_income_index = "tranId_1_incomeType_1"
             if legacy_income_index in self.income_collection.index_information():
                 self.income_collection.drop_index(legacy_income_index)
@@ -592,6 +598,24 @@ class MongoHandler(ExceptionManager):
             return list(collection.find(query, {"_id": 0}).sort("timestamp", ASCENDING))
         except Exception as exc:
             self.handle_exception(exc, "Error reading trade decisions")
+            return []
+
+    def get_recent_trade_decisions(self, limit: int = 25) -> List[Dict[str, Any]]:
+        """Return the newest strategy decisions for the command-center UI."""
+        collection = getattr(self, "decision_collection", None)
+        if collection is None:
+            return []
+        try:
+            return list(
+                collection.find({}, {"_id": 0})
+                .sort("timestamp", -1)
+                .limit(max(0, limit))
+            )
+        except Exception as exc:
+            if getattr(self, "read_only", False):
+                logger.warning("Error reading recent trade decisions: %s", exc)
+            else:
+                self.handle_exception(exc, "Error reading recent trade decisions")
             return []
 
     def get_income_records(
