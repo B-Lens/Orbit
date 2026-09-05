@@ -1,6 +1,6 @@
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import redis
 
@@ -24,6 +24,27 @@ def heartbeat_automation() -> BinanceAutomation:
     }
     automation._runtime_progress_lock = threading.Lock()
     return automation
+
+
+def test_sentiment_cron_initialization_failure_does_not_stop_startup() -> None:
+    automation = BinanceAutomation.__new__(BinanceAutomation)
+    automation._croner = None
+    automation.workers_to_monitor = []
+    automation.handle_exception = MagicMock()
+
+    with (
+        patch("orbit.core.main.Croner", side_effect=ConnectionError("refused")),
+        patch("orbit.core.main.threading.Thread") as thread,
+    ):
+        automation.handle_crons()
+
+    automation.handle_exception.assert_called_once()
+    assert (
+        automation.handle_exception.call_args.kwargs["context_description"]
+        == "Sentiment cron disabled because initialization failed"
+    )
+    thread.assert_not_called()
+    assert automation.workers_to_monitor == []
 
 
 def test_runtime_heartbeat_is_published_when_workers_are_alive() -> None:
