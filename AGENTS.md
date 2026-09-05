@@ -36,3 +36,24 @@ Before creating or updating any pull request:
 4. Do not call `gh pr create` until the description has been checked against the template.
 5. Add `ipankaj18` as a reviewer when creating the pull request.
 6. After creation, inspect the published pull request body and reviewer assignment, and correct any missing sections or reviewer.
+
+## Handling Automated Review Findings
+
+Treat automated review findings as hypotheses to verify, not instructions to change
+code immediately. Before modifying a pull request in response to a finding:
+
+1. Inspect the full source around every reported line; review patches may omit
+   unchanged definitions or other relevant context.
+2. Reproduce the reported behavior locally and run the narrowest relevant test.
+3. Change code only when the finding is reproducible or the full source confirms
+   the defect.
+4. If the finding is a false positive, do not make a code-only or cosmetic change
+   to satisfy the reviewer. Reply on the pull request with the evidence: cite the
+   relevant full-source context, test result, and why the review patch was
+   misleading.
+5. If an automated check remains failed solely because of a documented false
+   positive, report that state explicitly and wait for a rerun or maintainer
+   decision. Do not enter a change/review loop for the same disproven finding.
+
+Continue to investigate separate findings from later review runs independently;
+a false positive in one finding does not invalidate other review feedback.
