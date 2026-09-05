@@ -18,7 +18,6 @@ import {
   Server,
   ShieldCheck,
   Sun,
-  TrendingUp,
   WalletCards,
   Wifi,
   Zap,
@@ -255,7 +254,7 @@ function App() {
           <div>
             <small>Execution engine</small>
             <strong>
-              {isRuntimeOnline ? "Protected & live" : "Status unknown"}
+              {isRuntimeOnline ? "Runtime online" : "Status unknown"}
             </strong>
           </div>
         </div>
@@ -473,25 +472,32 @@ function App() {
                 </div>
                 {data.prices.length ? (
                   <div className="data-list">
-                    {data.prices.map((item) => (
-                      <div className="price-row" key={item.id}>
-                        <div>
-                          <strong>{extractSymbol(item)}</strong>
-                          <small>{timeAgo(item.created_at)}</small>
+                    {data.prices.map((item) => {
+                      const tone = toneForText(notificationText(item));
+                      return (
+                        <div className="price-row" key={item.id}>
+                          <div>
+                            <strong>{extractSymbol(item)}</strong>
+                            <small>{timeAgo(item.created_at)}</small>
+                          </div>
+                          <p>
+                            {extractNumber(
+                              fieldValue(item, /price|level|mark|current/i) ??
+                                summaryText(item),
+                            )}
+                          </p>
+                          <span className={`mini-trend ${tone}`}>
+                            {tone === "negative" ? (
+                              <ArrowDownRight size={14} />
+                            ) : tone === "positive" ? (
+                              <ArrowUpRight size={14} />
+                            ) : (
+                              <Activity size={14} />
+                            )}
+                          </span>
                         </div>
-                        <p>
-                          {extractNumber(
-                            fieldValue(item, /price|level|mark|current/i) ??
-                              summaryText(item),
-                          )}
-                        </p>
-                        <span
-                          className={`mini-trend ${toneForText(notificationText(item))}`}
-                        >
-                          <TrendingUp size={14} />
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <EmptyPanel message="Live price updates will appear here." />
