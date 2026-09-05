@@ -50,6 +50,12 @@ REDIS_KEY_PENDING_SENTIMENT_BASE: str = "sentiment:pending_base"
 REDIS_KEY_PENDING_SENTIMENT_COUNT: str = "sentiment:pending_count"
 REDIS_KEY_SENTIMENT_LAST_RUN_SLOT: str = "sentiment:last_run_slot"
 REDIS_KEY_SENTIMENT_RUN_SLOT_LEASE: str = "sentiment:run_slot_lease"
+REDIS_KEY_RUNTIME_HEARTBEAT_PREFIX: str = "orbit:runtime:heartbeat"
+
+
+def runtime_heartbeat_key(runtime_id: str) -> str:
+    """Return the heartbeat key for one configured runtime instance."""
+    return f"{REDIS_KEY_RUNTIME_HEARTBEAT_PREFIX}:{runtime_id}"
 
 # Pending observations must remain recent across half-hour confirmation windows.
 _PENDING_SENTIMENT_TTL: int = 7_200
@@ -87,12 +93,32 @@ class RedisManager:
         self,
         redis_client: Optional[redis.StrictRedis] = None,
     ) -> None:
-        self.redis_client: redis.StrictRedis = redis_client or redis.StrictRedis(
-            host=os.getenv("REDIS_HOST", "localhost"),
-            port=int(os.getenv("REDIS_PORT", "6379")),
-            db=int(os.getenv("REDIS_DB", "0")),
-            decode_responses=True,
-        )
+        redis_url = os.getenv("REDIS_URL")
+        if redis_client is not None:
+            self.redis_client = redis_client
+        elif redis_url:
+            self.redis_client = redis.StrictRedis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=float(
+                    os.getenv("REDIS_CONNECT_TIMEOUT", "2")
+                ),
+                socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "2")),
+            )
+        else:
+            self.redis_client = redis.StrictRedis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", "6379")),
+                db=int(os.getenv("REDIS_DB", "0")),
+                username=os.getenv("REDIS_USERNAME"),
+                password=os.getenv("REDIS_PASSWORD"),
+                ssl=os.getenv("REDIS_SSL", "false").lower() == "true",
+                socket_connect_timeout=float(
+                    os.getenv("REDIS_CONNECT_TIMEOUT", "2")
+                ),
+                socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "2")),
+                decode_responses=True,
+            )
 
     # ------------------------------------------------------------------
     # Generic primitives

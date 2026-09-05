@@ -22,6 +22,7 @@ trading systems.
 Author: Pankaj Kumar
 """
 
+import os
 import sys
 import time
 import logging
@@ -31,12 +32,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
+import redis
 
 load_dotenv()
 
 from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
 from orbit.core.trade_checker import TradeChecker
+from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.order_manager import OrderManager
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
@@ -49,6 +52,10 @@ from orbit.utils.utils import get_indian_time
 
 # Constants
 SIGNAL_ANALYSIS_SLEEP: int = 900  # 15 minutes in seconds
+RUNTIME_HEARTBEAT_INTERVAL: int = 10
+RUNTIME_HEARTBEAT_TTL: int = 30
+TRADE_CHECKER_STALE_AFTER: int = 60
+SIGNAL_ANALYSIS_STALE_AFTER: int = SIGNAL_ANALYSIS_SLEEP + 300
 
 logger = logging.getLogger("Orbit")
 
@@ -134,6 +141,8 @@ class BinanceAutomation(ExceptionManager):
 
         # Track all running worker threads for health monitoring
         self.workers_to_monitor: List[threading.Thread] = []
+        self._runtime_progress: Dict[str, float] = {}
+        self._runtime_progress_lock = threading.Lock()
 
         logger.info("BinanceAutomation initialized")
 
@@ -454,6 +463,7 @@ class BinanceAutomation(ExceptionManager):
                 for signal in self.signal_analyzer.analyze_market(cooldown_list):
                     self.process_signal(signal)
 
+                self.mark_runtime_progress("signal_analysis")
                 time.sleep(
                     SIGNAL_ANALYSIS_SLEEP - (time.time() % SIGNAL_ANALYSIS_SLEEP)
                 )
@@ -473,6 +483,7 @@ class BinanceAutomation(ExceptionManager):
             self.trade_checker.monitor_trades(
                 self.trade_checker_pair,
                 self.risk_management,
+                lambda: self.mark_runtime_progress("trade_checker"),
             )
         except Exception as e:
             self.handle_exception(
@@ -499,6 +510,22 @@ class BinanceAutomation(ExceptionManager):
     # Worker health monitor
     # ------------------------------------------------------------------
 
+    def mark_runtime_progress(self, worker_name: str) -> None:
+        """Record monotonic progress for a critical runtime loop."""
+        with self._runtime_progress_lock:
+            self._runtime_progress[worker_name] = time.monotonic()
+
+    def critical_workers_are_fresh(self) -> bool:
+        """Return whether critical loops have demonstrated recent progress."""
+        now = time.monotonic()
+        with self._runtime_progress_lock:
+            return (
+                now - self._runtime_progress.get("trade_checker", 0)
+                <= TRADE_CHECKER_STALE_AFTER
+                and now - self._runtime_progress.get("signal_analysis", 0)
+                <= SIGNAL_ANALYSIS_STALE_AFTER
+            )
+
     def monitor_workers(self, check_interval: int = 300) -> None:
         """Periodically check worker threads and alert on failure.
 
@@ -514,6 +541,26 @@ class BinanceAutomation(ExceptionManager):
                     logger.error(f"Worker {worker.name} has stopped.")
                 logger.info(f"Worker {worker.name} is alive.")
             time.sleep(check_interval)
+
+    def publish_runtime_heartbeat(
+        self, stop_event: threading.Event, heartbeat_key: str
+    ) -> None:
+        """Publish readiness while the runtime and its workers remain active."""
+        while not stop_event.is_set():
+            try:
+                if all(
+                    worker.is_alive() for worker in self.workers_to_monitor
+                ) and self.critical_workers_are_fresh():
+                    self.order_manager.redis_client.setex(
+                        heartbeat_key,
+                        RUNTIME_HEARTBEAT_TTL,
+                        datetime.now(timezone.utc).isoformat(),
+                    )
+                else:
+                    self.order_manager.redis_client.delete(heartbeat_key)
+            except redis.RedisError as exc:
+                logger.warning("Unable to update runtime heartbeat: %s", exc)
+            stop_event.wait(RUNTIME_HEARTBEAT_INTERVAL)
 
     def report_performance(self, interval_seconds: int = 86400) -> None:
         """Sync Binance income and emit a fee-aware report once per day."""
@@ -540,6 +587,8 @@ class BinanceAutomation(ExceptionManager):
     def run(self) -> None:
         """Start all trading threads and enter the signal-analysis loop."""
         logger.info("Starting Binance automation (thread-based)")
+        self.mark_runtime_progress("signal_analysis")
+        self.mark_runtime_progress("trade_checker")
 
         monitor_thread = threading.Thread(
             target=self.monitor_workers, daemon=True, name="MonitorThread"
@@ -582,8 +631,31 @@ class BinanceAutomation(ExceptionManager):
             performance_thread.start()
             self.workers_to_monitor.append(performance_thread)
 
+        heartbeat_stop = threading.Event()
+        heartbeat_key = runtime_heartbeat_key(
+            os.environ.get("ORBIT_RUNTIME_ID", "default")
+        )
+        heartbeat_thread = threading.Thread(
+            target=self.publish_runtime_heartbeat,
+            args=(heartbeat_stop, heartbeat_key),
+            daemon=True,
+            name="RuntimeHeartbeatThread",
+        )
+        heartbeat_thread.start()
+
         logger.info("All automation threads started successfully")
-        self.start_signal_analysis()
+        try:
+            self.start_signal_analysis()
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(RUNTIME_HEARTBEAT_INTERVAL + 2)
+            if heartbeat_thread.is_alive():
+                logger.warning("Heartbeat thread did not stop before shutdown")
+            else:
+                try:
+                    self.order_manager.redis_client.delete(heartbeat_key)
+                except redis.RedisError as exc:
+                    logger.warning("Unable to remove runtime heartbeat: %s", exc)
 
 
 # =============================================================================
