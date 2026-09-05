@@ -6,6 +6,7 @@ import yaml
 import logging
 from orbit.utils.utils import get_indian_time
 from dotenv import load_dotenv
+from orbit.core.notification_feed import record_notification
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -186,6 +187,8 @@ class DiscordManager:
                     logger.exception(
                         f"Failed webhook | Status: {response.status_code} | Response: {response.text} | key: {key}"
                     )
+            else:
+                record_notification(key, data, description, processed_fields)
 
             return response.status_code
 

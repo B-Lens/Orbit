@@ -1,5 +1,6 @@
 import os
 from contextlib import closing
+from typing import Any, Dict, List
 
 import redis
 from fastapi import FastAPI
@@ -8,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from orbit.core.redis_manager import runtime_heartbeat_key
+from orbit.core.notification_feed import list_notifications
 
 app = FastAPI(
     title="Orbit API",
@@ -27,6 +29,20 @@ app.add_middleware(
 class StatusResponse(BaseModel):
     status: str
     version: str
+
+
+class NotificationResponse(BaseModel):
+    id: str
+    channel: str
+    content: str
+    description: str
+    fields: List[Dict[str, Any]]
+    created_at: str
+
+
+class NotificationFeedResponse(BaseModel):
+    notifications: List[NotificationResponse]
+
 
 @app.get("/api/status", response_model=StatusResponse)
 def get_status() -> StatusResponse:
@@ -71,6 +87,23 @@ def get_status() -> StatusResponse:
         raise HTTPException(
             status_code=503, detail="Service Unavailable: Redis unavailable"
         ) from exc
+
+
+@app.get("/api/notifications", response_model=NotificationFeedResponse)
+def get_notifications(limit: int = 100) -> NotificationFeedResponse:
+    """Return the same successful events most recently delivered to Discord."""
+    try:
+        notifications = [
+            NotificationResponse.model_validate(item)
+            for item in list_notifications(limit)
+        ]
+        return NotificationFeedResponse(notifications=notifications)
+    except redis.RedisError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Service Unavailable: notification feed unavailable",
+        ) from exc
+
 
 if __name__ == "__main__":
     import uvicorn
