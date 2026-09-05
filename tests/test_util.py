@@ -7,7 +7,12 @@ from orbit.utils.utils import get_indian_time, generate_chart
 
 class TestUtil(unittest.TestCase):
     def test_indian_time(self):
-        self.assertIsInstance(get_indian_time(), datetime.datetime)
+        indian_time = get_indian_time()
+
+        self.assertIsInstance(indian_time, datetime.datetime)
+        self.assertEqual(
+            indian_time.utcoffset(), datetime.timedelta(hours=5, minutes=30)
+        )
 
     def test_generate_chart_creates_file(self):
         # Create dummy OHLCV DataFrame
