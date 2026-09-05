@@ -4,7 +4,6 @@ import json
 from json_repair import repair_json
 import requests
 import datetime
-import pytz
 import tempfile
 import mplfinance as mpf
 from zoneinfo import ZoneInfo
@@ -25,10 +24,7 @@ def to_ist(dt: datetime) -> datetime:
     return dt.replace(tzinfo=IST) if dt.tzinfo is None else dt.astimezone(IST)
 
 def get_indian_time() -> datetime.datetime:
-    utc_now = datetime.datetime.utcnow()
-    india_timezone = pytz.timezone("Asia/Kolkata")
-    india_time = utc_now.replace(tzinfo=pytz.utc).astimezone(india_timezone)
-    return india_time
+    return datetime.datetime.now(tz=IST)
 
 def extract_json(text: str) -> dict:
     match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -114,4 +110,3 @@ def generate_chart(df, support=None, resistance=None):
 
 def oc(df, index):
     return df['open'].iloc[index], df['close'].iloc[index]
-
