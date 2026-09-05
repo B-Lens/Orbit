@@ -139,6 +139,28 @@ class TestOrderManager(unittest.TestCase):
 
         self.manager.redis_client.delete.assert_not_called()
 
+    def test_algo_cancellation_treats_unknown_order_as_already_absent(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Unknown order sent")
+        error.error_code = -2011
+        self.manager.future_client.sign_request.side_effect = error
+
+        response = self.manager.cancel_algo_conditional_order("BTCUSDT", "101")
+
+        self.assertEqual(response["algoStatus"], "ABSENT")
+        self.manager.redis_client.delete.assert_called_once_with("order:101")
+
+    def test_algo_cancellation_propagates_other_exchange_errors(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Invalid symbol")
+        error.error_code = -1121
+        self.manager.future_client.sign_request.side_effect = error
+
+        with self.assertRaises(ClientError):
+            self.manager.cancel_algo_conditional_order("BTCUSDT", "101")
+
+        self.manager.redis_client.delete.assert_not_called()
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 
@@ -363,6 +385,28 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
+    @patch("orbit.core.trade_checker.time.time", return_value=104.0)
+    def test_price_within_websocket_stale_threshold_avoids_rest(self, _time):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"BTCUSDT": (100.0, 100.0)}
+        checker._ws_stale_threshold = 5.0
+        checker.get_future_symbol_price = MagicMock()
+
+        self.assertEqual(checker.check_price_freshness("BTCUSDT"), 100.0)
+        checker.get_future_symbol_price.assert_not_called()
+
+    @patch("orbit.core.trade_checker.time.time", return_value=106.0)
+    def test_stale_price_returns_none_when_rest_fallback_fails(self, _time):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"BTCUSDT": (100.0, 100.0)}
+        checker._ws_stale_threshold = 5.0
+        checker.get_future_symbol_price = MagicMock(
+            side_effect=RuntimeError("REST unavailable")
+        )
+
+        self.assertIsNone(checker.check_price_freshness("BTCUSDT"))
+        self.assertEqual(checker.live_prices["BTCUSDT"], (100.0, 100.0))
+
     def test_position_discovery_ignores_stale_entry_price_without_exposure(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()

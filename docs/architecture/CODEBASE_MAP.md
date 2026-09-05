@@ -39,6 +39,10 @@ credentials.
 - The only execution modes are testnet and live; every asset must select one.
 - Testnet and live modes require credentials for their selected exchange environment.
 - `OrderManager` is the only exchange-order gateway.
+- Protective-order cancellation is idempotent when Binance confirms an order is
+  already absent; other exchange errors remain failures. Price checks use the
+  configured WebSocket stale threshold and stop the check if the REST fallback
+  cannot provide a fresh price.
 - Missing, failed, or malformed pre-trade LLM reviews fail closed.
 - Entry and exit LLM reasoning, execution rejections, and other trade blocks are
   appended to the MongoDB decision ledger. Active-position and post-exit cooldown
