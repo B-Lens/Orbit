@@ -22,6 +22,7 @@ trading systems.
 Author: Pankaj Kumar
 """
 
+import os
 import sys
 import time
 import logging
@@ -31,13 +32,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
+import redis
 
 load_dotenv()
 
 from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
 from orbit.core.trade_checker import TradeChecker
-from orbit.core.redis_manager import REDIS_KEY_RUNTIME_HEARTBEAT
+from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.order_manager import OrderManager
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
@@ -518,17 +520,22 @@ class BinanceAutomation(ExceptionManager):
                 logger.info(f"Worker {worker.name} is alive.")
             time.sleep(check_interval)
 
-    def publish_runtime_heartbeat(self, stop_event: threading.Event) -> None:
+    def publish_runtime_heartbeat(
+        self, stop_event: threading.Event, heartbeat_key: str
+    ) -> None:
         """Publish readiness while the runtime and its workers remain active."""
         while not stop_event.is_set():
-            if all(worker.is_alive() for worker in self.workers_to_monitor):
-                self.order_manager.redis_client.setex(
-                    REDIS_KEY_RUNTIME_HEARTBEAT,
-                    RUNTIME_HEARTBEAT_TTL,
-                    datetime.now(timezone.utc).isoformat(),
-                )
-            else:
-                self.order_manager.redis_client.delete(REDIS_KEY_RUNTIME_HEARTBEAT)
+            try:
+                if all(worker.is_alive() for worker in self.workers_to_monitor):
+                    self.order_manager.redis_client.setex(
+                        heartbeat_key,
+                        RUNTIME_HEARTBEAT_TTL,
+                        datetime.now(timezone.utc).isoformat(),
+                    )
+                else:
+                    self.order_manager.redis_client.delete(heartbeat_key)
+            except redis.RedisError as exc:
+                logger.warning("Unable to update runtime heartbeat: %s", exc)
             stop_event.wait(RUNTIME_HEARTBEAT_INTERVAL)
 
     def report_performance(self, interval_seconds: int = 86400) -> None:
@@ -599,9 +606,12 @@ class BinanceAutomation(ExceptionManager):
             self.workers_to_monitor.append(performance_thread)
 
         heartbeat_stop = threading.Event()
+        heartbeat_key = runtime_heartbeat_key(
+            os.environ.get("ORBIT_RUNTIME_ID", "default")
+        )
         heartbeat_thread = threading.Thread(
             target=self.publish_runtime_heartbeat,
-            args=(heartbeat_stop,),
+            args=(heartbeat_stop, heartbeat_key),
             daemon=True,
             name="RuntimeHeartbeatThread",
         )
@@ -612,7 +622,11 @@ class BinanceAutomation(ExceptionManager):
             self.start_signal_analysis()
         finally:
             heartbeat_stop.set()
-            self.order_manager.redis_client.delete(REDIS_KEY_RUNTIME_HEARTBEAT)
+            heartbeat_thread.join()
+            try:
+                self.order_manager.redis_client.delete(heartbeat_key)
+            except redis.RedisError as exc:
+                logger.warning("Unable to remove runtime heartbeat: %s", exc)
 
 
 # =============================================================================
