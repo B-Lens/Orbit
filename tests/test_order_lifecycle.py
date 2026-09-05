@@ -363,6 +363,31 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
+    def test_price_freshness_allows_websocket_recovery_window(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"SKYUSDT": (0.067, 100.0)}
+        checker._price_stale_threshold = 10.0
+        checker.get_future_symbol_price = MagicMock()
+
+        with patch("orbit.core.trade_checker.time.time", return_value=108.0):
+            price = checker.check_price_freshness("SKYUSDT")
+
+        self.assertEqual(price, 0.067)
+        checker.get_future_symbol_price.assert_not_called()
+
+    def test_price_freshness_falls_back_after_websocket_recovery_window(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"SKYUSDT": (0.067, 100.0)}
+        checker._price_stale_threshold = 10.0
+        checker.get_future_symbol_price = MagicMock(return_value=0.068)
+
+        with patch("orbit.core.trade_checker.time.time", return_value=111.0):
+            price = checker.check_price_freshness("SKYUSDT")
+
+        self.assertEqual(price, 0.068)
+        self.assertEqual(checker.live_prices["SKYUSDT"], (0.068, 111.0))
+        checker.get_future_symbol_price.assert_called_once_with(symbol="SKYUSDT")
+
     def test_position_discovery_ignores_stale_entry_price_without_exposure(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
