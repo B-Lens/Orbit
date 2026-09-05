@@ -367,7 +367,7 @@ class MongoHandler(ExceptionManager):
         required_start_time = None
         if not existing_data.empty:
             existing_data["timestamp"] = pd.to_datetime(
-                existing_data["timestamp"], unit="s"
+                existing_data["timestamp"].map(_epoch_to_seconds), unit="s"
             )
             existing_data = existing_data.set_index("timestamp")
             required_start_time = existing_data.index.max() + timedelta(minutes=15)
@@ -394,7 +394,7 @@ class MongoHandler(ExceptionManager):
 
         historical_data_db = new_data.copy().reset_index()
         historical_data_db["timestamp"] = (
-            historical_data_db["timestamp"].astype("int64") // 1000
+            historical_data_db["timestamp"].astype("int64") // 1_000_000_000
         )
 
         self.store_historical_data(symbol, historical_data_db)
