@@ -635,7 +635,7 @@ class TestnetDailyReporter:
         if os.getenv("ORBIT_GITHUB_REPORTING_ENABLED", "false").lower() != "true":
             return None
         token = os.getenv("ORBIT_GITHUB_TOKEN", "").strip()
-        repository = os.getenv("ORBIT_GITHUB_REPOSITORY", "ipankaj18/Orbit").strip()
+        repository = os.getenv("ORBIT_GITHUB_REPOSITORY", "B-Lens/Orbit").strip()
         project_id = os.getenv("ORBIT_GITHUB_PROJECT_ID", "").strip()
         if not token or not project_id:
             raise RuntimeError(

@@ -293,7 +293,7 @@ class TestDailyReporter(unittest.TestCase):
 class TestGitHubProjectClient(unittest.TestCase):
     def test_summary_lookup_finds_marker_after_first_comment_page(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
-        client.repository = "ipankaj18/Orbit"
+        client.repository = "B-Lens/Orbit"
         client.project_id = "project-1"
         client._ensure_label = MagicMock()
         issue = {
@@ -340,7 +340,7 @@ class TestGitHubProjectClient(unittest.TestCase):
 
     def test_summary_comment_is_created_idempotently(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
-        client.repository = "ipankaj18/Orbit"
+        client.repository = "B-Lens/Orbit"
         client.project_id = "project-1"
         client._ensure_label = MagicMock()
         existing = {
@@ -361,7 +361,7 @@ class TestGitHubProjectClient(unittest.TestCase):
 
     def test_duplicate_summary_comments_are_reconciled(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
-        client.repository = "ipankaj18/Orbit"
+        client.repository = "B-Lens/Orbit"
         client.project_id = "project-1"
         client._ensure_label = MagicMock()
         issue = {
@@ -399,7 +399,7 @@ class TestGitHubProjectClient(unittest.TestCase):
 
     def test_non_autonomous_report_does_not_add_agent_label(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
-        client.repository = "ipankaj18/Orbit"
+        client.repository = "B-Lens/Orbit"
         client.project_id = "project-1"
         client._ensure_label = MagicMock()
         created = {
@@ -425,7 +425,7 @@ class TestGitHubProjectClient(unittest.TestCase):
 
     def test_existing_issue_is_retried_into_project(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
-        client.repository = "ipankaj18/Orbit"
+        client.repository = "B-Lens/Orbit"
         client.project_id = "project-1"
         client._ensure_label = MagicMock()
         existing = {
@@ -448,7 +448,7 @@ class TestGitHubProjectClient(unittest.TestCase):
 
     def test_obsolete_generated_report_comments_are_removed(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
-        client.repository = "ipankaj18/Orbit"
+        client.repository = "B-Lens/Orbit"
         client.project_id = "project-1"
         client._ensure_label = MagicMock()
         existing = {

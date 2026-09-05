@@ -15,7 +15,7 @@ jobs:
   codex:
     uses: b-lens/code-kit/.github/workflows/codex-automation.yml@main
     with:
-      reviewer: ipankaj18
+      reviewer: B-Lens
       extra_instructions: >-
         Preserve live/Testnet trading safety boundaries. Add or update focused
         tests and documentation when behavior changes.
