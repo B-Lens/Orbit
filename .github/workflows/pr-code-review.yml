@@ -12,7 +12,7 @@ permissions:
 jobs:
   review:
     # Pin the reusable workflow revision that loads policy from the PR base commit.
-    uses: b-lens/code-kit/.github/workflows/pr-code-review.yml@main
+    uses: b-lens/code-kit/.github/workflows/pr-code-review.yml@08ac4766f62e4e5a0ac8d11e7c996d713033d360
     with:
       review_prompt_path: .github/codex/prompt-review.md
     secrets:

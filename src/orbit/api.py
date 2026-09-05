@@ -8,10 +8,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
+import redis
+from fastapi import HTTPException
+
 # Configure CORS for the UI
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify the UI's URL
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # In production, specify the UI's URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -23,7 +26,12 @@ class StatusResponse(BaseModel):
 
 @app.get("/api/status", response_model=StatusResponse)
 async def get_status():
-    return StatusResponse(status="online", version="1.0.0")
+    try:
+        r = redis.Redis(host='localhost', port=6379, socket_connect_timeout=1)
+        r.ping()
+        return StatusResponse(status="online", version="1.0.0")
+    except redis.ConnectionError:
+        raise HTTPException(status_code=503, detail="Service Unavailable: Redis disconnected")
 
 if __name__ == "__main__":
     import uvicorn
