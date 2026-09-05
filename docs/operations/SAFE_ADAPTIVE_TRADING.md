@@ -84,12 +84,12 @@ defect. Its task explicitly forbids weakening risk limits, bypassing sentiment, 
 enabling live trading. Keep the `Codex-Automation` environment approval required.
 
 Configure the EC2 service with a fine-grained GitHub token limited to Issues
-(write) on `ipankaj18/Orbit` and Projects (write) on the private Project:
+(write) on `B-Lens/Orbit` and Projects (write) on the private Project:
 
 ```text
 ORBIT_GITHUB_REPORTING_ENABLED=true
 ORBIT_GITHUB_TOKEN=<secret supplied by the service manager>
-ORBIT_GITHUB_REPOSITORY=ipankaj18/Orbit
+ORBIT_GITHUB_REPOSITORY=B-Lens/Orbit
 ORBIT_GITHUB_PROJECT_ID=PVT_kwHOBPU1Qs4BhHzU
 ```
 

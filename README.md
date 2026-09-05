@@ -38,7 +38,7 @@ risk policy, rollout, accounting, and rollback procedures.
 Requirements: Python 3.10–3.12, Poetry, Redis, and MongoDB.
 
 ```bash
-git clone https://github.com/ipankaj18/Orbit.git
+git clone https://github.com/B-Lens/Orbit.git
 cd Orbit
 poetry install
 cp .env.example .env
