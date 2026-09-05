@@ -366,8 +366,13 @@ class MongoHandler(ExceptionManager):
 
         required_start_time = None
         if not existing_data.empty:
+            # Older versions persisted a nanosecond index after dividing it by
+            # 1,000, so Mongo may contain microseconds instead of seconds.
+            # Normalise each value before asking pandas to create ns timestamps;
+            # otherwise pandas interprets those legacy values as seconds and
+            # raises OutOfBoundsDatetime.
             existing_data["timestamp"] = pd.to_datetime(
-                existing_data["timestamp"], unit="s"
+                existing_data["timestamp"].map(_epoch_to_seconds), unit="s"
             )
             existing_data = existing_data.set_index("timestamp")
             required_start_time = existing_data.index.max() + timedelta(minutes=15)
@@ -392,12 +397,12 @@ class MongoHandler(ExceptionManager):
             logger.warning(f"No historical data found for {symbol}")
             return historical_data
 
-        historical_data_db = new_data.copy().reset_index()
-        historical_data_db["timestamp"] = (
-            historical_data_db["timestamp"].astype("int64") // 1000
-        )
-
-        self.store_historical_data(symbol, historical_data_db)
+        if not new_data.empty:
+            historical_data_db = new_data.copy().reset_index()
+            historical_data_db["timestamp"] = (
+                historical_data_db["timestamp"].astype("int64") // 1_000_000_000
+            )
+            self.store_historical_data(symbol, historical_data_db)
 
         return historical_data
 
@@ -676,7 +681,7 @@ class MongoHandler(ExceptionManager):
                     {
                         "symbol": symbol,
                         "interval": interval,
-                        "timestamp": int(row["timestamp"]),
+                        "timestamp": ts_sec,
                         "open": float(row["open"]),
                         "high": float(row["high"]),
                         "low": float(row["low"]),
