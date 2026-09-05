@@ -62,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     data = load_candles(args.csv)
     report = WalkForwardBacktester(
-        SOLUSDTStrategy,
+        lambda frame: SOLUSDTStrategy(frame, enforce_freshness=False),
         starting_equity=args.equity,
         risk_per_trade_pct=args.risk,
         fee_rate=0.0004,

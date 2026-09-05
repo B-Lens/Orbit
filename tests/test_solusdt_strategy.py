@@ -31,7 +31,7 @@ def _hourly_data(*, direction: str = "flat", bars: int = 240) -> pd.DataFrame:
 
 
 def _fresh_hour(data: pd.DataFrame) -> pd.Timestamp:
-    """Return the mock _current_hour value that makes data.index[-1] the latest closed hour."""
+    """Return a time in the first scan window after the last completed hour."""
     return data.index[-1].floor("h") + pd.Timedelta(hours=1)
 
 
@@ -98,7 +98,7 @@ class TestSOLUSDTStrategy(unittest.TestCase):
     def test_stale_completed_hour_suppresses_entry(self, _mock_discord):
         """Regression: same breakout candle must not fire again at :15/:30/:45."""
         data = _hourly_data(direction="up")
-        stale_hour = data.index[-1].floor("h") + pd.Timedelta(hours=2)
+        stale_hour = data.index[-1].floor("h") + pd.Timedelta(hours=1, minutes=15)
         with patch.object(SOLUSDTStrategy, "_current_hour", return_value=stale_hour):
             signal = SOLUSDTStrategy(data).generate_signals(symbol="SOLUSDT")
         self.assertIsNone(signal)
@@ -108,15 +108,11 @@ class TestSOLUSDTStrategy(unittest.TestCase):
         data = _hourly_data(direction="up")
         data.loc[data.index[-1] + pd.Timedelta(hours=1)] = [104, 130, 103, 125, 1000]
 
-        # The backtester evaluates strategies on historical slices; their last
-        # candle never matches real wall-clock time, so the freshness gate must
-        # be bypassed during simulation.
-        with patch.object(
-            SOLUSDTStrategy, "_is_latest_completed_hour", return_value=True
-        ):
-            report = WalkForwardBacktester(
-                SOLUSDTStrategy, fee_rate=0, slippage_bps=0
-            ).run(data, symbol="SOLUSDT", warmup_bars=200)
+        report = WalkForwardBacktester(
+            lambda frame: SOLUSDTStrategy(frame, enforce_freshness=False),
+            fee_rate=0,
+            slippage_bps=0,
+        ).run(data, symbol="SOLUSDT", warmup_bars=200)
         self.assertIsInstance(report, BacktestReport)
         self.assertEqual(report.trades, 1)
         self.assertEqual(report.results[0].outcome, "target")

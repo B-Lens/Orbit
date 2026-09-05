@@ -20,28 +20,34 @@ class SOLUSDTStrategy(Strategy):
     reward_risk: float = 4.0
     volume_period: int = 24
     volume_multiple: float = 1.2
+    enforce_freshness: bool = True
 
     def __post_init__(self) -> None:
         super().__init__(self.data)
 
     @staticmethod
     def _current_hour() -> pd.Timestamp:
-        """Return the current UTC hour boundary for freshness checks."""
-        return pd.Timestamp.now(tz="UTC").floor("1h")
+        """Return the current UTC time for freshness checks."""
+        return pd.Timestamp.now(tz="UTC")
 
     def _is_latest_completed_hour(self, timestamp: pd.Timestamp) -> bool:
         """Reject aligned but stale cached candles before they can trade."""
         candle_hour = pd.Timestamp(timestamp)
-        current_hour = self._current_hour()
+        current_time = self._current_hour()
         if candle_hour.tzinfo is None:
-            current_hour = current_hour.tz_localize(None)
+            current_time = current_time.tz_localize(None)
         else:
-            current_hour = current_hour.tz_convert(candle_hour.tzinfo)
-        return candle_hour == current_hour - pd.Timedelta(hours=1)
+            current_time = current_time.tz_convert(candle_hour.tzinfo)
+        available_at = candle_hour + pd.Timedelta(hours=1)
+        return bool(
+            available_at
+            <= current_time
+            < available_at + pd.Timedelta(minutes=15)
+        )
 
     @staticmethod
     def _has_contiguous_hours(data: pd.DataFrame) -> bool:
-        """Return whether every strategy bar is exactly one hour apart."""
+        """Return whether the indicator window contains consecutive hourly bars."""
         if len(data) < 2:
             return True
         differences = data.index.to_series().diff().dropna()
@@ -58,9 +64,19 @@ class SOLUSDTStrategy(Strategy):
         )
         if interval >= pd.Timedelta(hours=1):
             hourly = self.data.copy()
-            valid = self._has_contiguous_hours(
-                hourly
-            ) and self._is_latest_completed_hour(hourly.index[-1])
+            if self.enforce_freshness:
+                current_time = self._current_hour()
+                current_hour = current_time.floor("1h")
+                if hourly.index.tz is None:
+                    current_hour = current_hour.tz_localize(None)
+                else:
+                    current_hour = current_hour.tz_convert(hourly.index.tz)
+                hourly = hourly[hourly.index < current_hour]
+            if hourly.empty:
+                return hourly, False
+            valid = not self.enforce_freshness or self._is_latest_completed_hour(
+                hourly.index[-1]
+            )
             return hourly, valid
 
         grouped = self.data.resample("1h")
@@ -77,9 +93,9 @@ class SOLUSDTStrategy(Strategy):
         hourly = hourly[grouped.size() == expected_bars].dropna()
         if hourly.empty:
             return hourly, False
-        latest_closed = self._has_contiguous_hours(
-            hourly
-        ) and self._is_latest_completed_hour(hourly.index[-1])
+        latest_closed = not self.enforce_freshness or self._is_latest_completed_hour(
+            hourly.index[-1]
+        )
         return hourly, latest_closed
 
     def _indicators(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -106,7 +122,7 @@ class SOLUSDTStrategy(Strategy):
         )
         return frame
 
-    def generate_signals(
+    def generate_signals(  # type: ignore[override]
         self, symbol: Optional[str] = None, position_side: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         del symbol
@@ -120,7 +136,13 @@ class SOLUSDTStrategy(Strategy):
             )
             + 1
         )
-        if position_side or not latest_closed or len(hourly) < minimum_bars:
+        recent = hourly.tail(minimum_bars)
+        if (
+            position_side
+            or not latest_closed
+            or len(recent) < minimum_bars
+            or not self._has_contiguous_hours(recent)
+        ):
             return None
 
         current = self._indicators(hourly).iloc[-1]
