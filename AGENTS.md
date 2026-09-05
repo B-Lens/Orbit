@@ -34,5 +34,5 @@ Before creating or updating any pull request:
 2. Use every applicable section from the template in the pull request description.
 3. Fetch `origin` and rebase the pull request branch onto `origin/main` before creating the pull request to avoid merge conflicts.
 4. Do not call `gh pr create` until the description has been checked against the template.
-5. Add `B-Lens` as a reviewer when creating the pull request.
+5. Add `ipankaj18` as a reviewer when creating the pull request.
 6. After creation, inspect the published pull request body and reviewer assignment, and correct any missing sections or reviewer.
