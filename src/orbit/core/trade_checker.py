@@ -25,7 +25,7 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 import time
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import redis
@@ -1414,7 +1414,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # ------------------------------------------------------------------
 
     def monitor_trades(
-        self, trading_pairs: List[str], risk_management: Dict[str, Any]
+        self,
+        trading_pairs: List[str],
+        risk_management: Dict[str, Any],
+        progress_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         """Infinite loop that monitors all active positions."""
         last_minute_used = -1
@@ -1512,4 +1515,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     e, context_description="Exception in Monitor trade"
                 )
 
+            if progress_callback is not None:
+                progress_callback()
             time.sleep(10)

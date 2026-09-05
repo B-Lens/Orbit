@@ -98,7 +98,12 @@ class RedisManager:
             self.redis_client = redis_client
         elif redis_url:
             self.redis_client = redis.StrictRedis.from_url(
-                redis_url, decode_responses=True
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=float(
+                    os.getenv("REDIS_CONNECT_TIMEOUT", "2")
+                ),
+                socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "2")),
             )
         else:
             self.redis_client = redis.StrictRedis(
@@ -108,6 +113,10 @@ class RedisManager:
                 username=os.getenv("REDIS_USERNAME"),
                 password=os.getenv("REDIS_PASSWORD"),
                 ssl=os.getenv("REDIS_SSL", "false").lower() == "true",
+                socket_connect_timeout=float(
+                    os.getenv("REDIS_CONNECT_TIMEOUT", "2")
+                ),
+                socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "2")),
                 decode_responses=True,
             )
 
