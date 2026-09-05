@@ -2,9 +2,9 @@
 
 The React dashboard provides a realtime operations view over the bounded Redis
 feed of notifications that were successfully delivered to Discord. It includes
-runtime health, 24-hour signal and alert summaries, channel activity, active
-symbol detection, and a searchable event stream. Discord delivery remains active
-and is mirrored to the dashboard after each successful webhook response.
+runtime health, bounded-buffer signal and alert summaries, channel activity, active
+symbol detection, and a searchable event stream. Discord integration remains
+unchanged, and successful webhook responses are mirrored to the dashboard.
 
 Run the FastAPI service on port 8000, then start the Vite development server:
 

@@ -27,7 +27,6 @@ const CHANNEL_TONES: Record<string, string> = {
 }
 
 const formatChannel = (channel: string) => CHANNEL_LABELS[channel] ?? channel.split('_').join(' ')
-const isRecent = (value: string, hours: number) => Date.now() - new Date(value).getTime() <= hours * 3_600_000
 function formatTime(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
@@ -86,17 +85,16 @@ function App() {
     })
   }, [notifications, query, selectedChannel])
   const metrics = useMemo(() => {
-    const recent = notifications.filter((item) => isRecent(item.created_at, 24))
     return {
-      recent: recent.length,
-      signals: recent.filter((item) => SIGNAL_CHANNELS.has(item.channel)).length,
-      critical: recent.filter((item) => CRITICAL_CHANNELS.has(item.channel)).length,
-      tradeEvents: recent.filter((item) => ['active_trades', 'active_trade_prices', 'sl_update'].includes(item.channel)).length,
+      recent: notifications.length,
+      signals: notifications.filter((item) => SIGNAL_CHANNELS.has(item.channel)).length,
+      critical: notifications.filter((item) => CRITICAL_CHANNELS.has(item.channel)).length,
+      tradeEvents: notifications.filter((item) => ['active_trades', 'active_trade_prices', 'sl_update'].includes(item.channel)).length,
     }
   }, [notifications])
   const activity = useMemo(() => {
     const counts = new Map<string, number>()
-    notifications.filter((item) => isRecent(item.created_at, 24)).forEach((item) => counts.set(item.channel, (counts.get(item.channel) ?? 0) + 1))
+    notifications.forEach((item) => counts.set(item.channel, (counts.get(item.channel) ?? 0) + 1))
     return Array.from(counts, ([channel, count]) => ({ channel, count })).sort((a, b) => b.count - a.count).slice(0, 5)
   }, [notifications])
   const symbols = useMemo(() => {
@@ -109,7 +107,7 @@ function App() {
   }, [notifications])
   const maxActivity = Math.max(1, ...activity.map((item) => item.count))
   const latestEvent = notifications[0]
-  const isConnected = !error
+  const isConnected = lastUpdated !== null && !error
   const isRuntimeOnline = serviceStatus?.status === 'online'
 
   return <div className="app-shell">
@@ -122,7 +120,7 @@ function App() {
         <a className="nav-item" href="#systems"><Server size={17} /><span>Systems</span></a>
       </nav>
       <div className="sidebar-bottom">
-        <div className="environment-card"><span className="environment-icon"><ShieldCheck size={17} /></span><div><span>Execution</span><strong>Guardrails active</strong></div></div>
+        <div className={`environment-card ${isRuntimeOnline ? 'healthy' : 'unknown'}`}><span className="environment-icon"><ShieldCheck size={17} /></span><div><span>Execution safeguards</span><strong>{isRuntimeOnline ? 'Runtime verified' : 'Status unverified'}</strong></div></div>
         <p>Orbit signal operations<br />v{serviceStatus?.version ?? '1.0.0'}</p>
       </div>
     </aside>
@@ -138,16 +136,16 @@ function App() {
           <div className="sync-card"><span className="pulse-ring"><Radio size={17} /></span><div><span>Last synchronized</span><strong>{lastUpdated ? lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Connecting…'}</strong></div></div>
         </section>
         {error && <div className="error-banner" role="alert"><AlertTriangle size={17} /><div><strong>Live feed unavailable</strong><span>{error} Retrying automatically.</span></div></div>}
-        <section className="metrics-grid" aria-label="Last 24 hours overview">
-          <article className="metric-card accent-green"><div className="metric-top"><span>Events / 24h</span><Activity size={18} /></div><strong>{metrics.recent}</strong><p><TrendingUp size={13} /> Captured in the live buffer</p></article>
-          <article className="metric-card accent-blue"><div className="metric-top"><span>Signal events</span><Zap size={18} /></div><strong>{metrics.signals}</strong><p><CircleDot size={13} /> Analysis and confirmations</p></article>
-          <article className="metric-card accent-amber"><div className="metric-top"><span>Trade updates</span><BellRing size={18} /></div><strong>{metrics.tradeEvents}</strong><p><Clock3 size={13} /> Prices, positions and stops</p></article>
-          <article className="metric-card accent-red"><div className="metric-top"><span>Critical alerts</span><AlertTriangle size={18} /></div><strong>{metrics.critical}</strong><p className={metrics.critical ? 'attention' : ''}><ShieldCheck size={13} /> {metrics.critical ? 'Review recommended' : 'No action required'}</p></article>
+        <section className="metrics-grid" aria-label="Notification buffer overview">
+          <article className="metric-card accent-green"><div className="metric-top"><span>Buffered events</span><Activity size={18} /></div><strong>{metrics.recent}</strong><p><TrendingUp size={13} /> Latest 250 deliveries maximum</p></article>
+          <article className="metric-card accent-blue"><div className="metric-top"><span>Buffered signals</span><Zap size={18} /></div><strong>{metrics.signals}</strong><p><CircleDot size={13} /> Analysis and confirmations</p></article>
+          <article className="metric-card accent-amber"><div className="metric-top"><span>Buffered trade updates</span><BellRing size={18} /></div><strong>{metrics.tradeEvents}</strong><p><Clock3 size={13} /> Prices, positions and stops</p></article>
+          <article className="metric-card accent-red"><div className="metric-top"><span>Buffered critical alerts</span><AlertTriangle size={18} /></div><strong>{metrics.critical}</strong><p className={metrics.critical ? 'attention' : ''}><ShieldCheck size={13} /> {metrics.critical ? 'Present in current buffer' : 'None in current buffer'}</p></article>
         </section>
         <section className="insight-grid" id="signals">
-          <article className="panel activity-panel"><div className="panel-heading"><div><span className="section-kicker">24 hour pulse</span><h2>Activity by channel</h2></div><Activity size={18} /></div>{activity.length ? <div className="activity-list">{activity.map((item) => <div className="activity-row" key={item.channel}><div><span>{formatChannel(item.channel)}</span><strong>{item.count}</strong></div><div className="activity-track"><span className={CHANNEL_TONES[item.channel] ?? 'default'} style={{ width: `${Math.max(8, item.count / maxActivity * 100)}%` }} /></div></div>)}</div> : <div className="panel-empty">Activity will appear after the first event.</div>}</article>
+          <article className="panel activity-panel"><div className="panel-heading"><div><span className="section-kicker">Buffer composition</span><h2>Activity by channel</h2></div><Activity size={18} /></div>{activity.length ? <div className="activity-list">{activity.map((item) => <div className="activity-row" key={item.channel}><div><span>{formatChannel(item.channel)}</span><strong>{item.count}</strong></div><div className="activity-track"><span className={CHANNEL_TONES[item.channel] ?? 'default'} style={{ width: `${Math.max(8, item.count / maxActivity * 100)}%` }} /></div></div>)}</div> : <div className="panel-empty">Activity will appear after the first event.</div>}</article>
           <article className="panel watch-panel"><div className="panel-heading"><div><span className="section-kicker">Market radar</span><h2>Most active symbols</h2></div><Command size={18} /></div>{symbols.length ? <div className="symbol-list">{symbols.map((item, index) => <div className="symbol-row" key={item.symbol}><span className="symbol-rank">{String(index + 1).padStart(2, '0')}</span><div><strong>{item.symbol.replace('USDT', '')}<em>/USDT</em></strong><span>Last event {timeAgo(item.lastSeen)}</span></div><span className="symbol-events">{item.count} event{item.count === 1 ? '' : 's'}</span></div>)}</div> : <div className="panel-empty">Symbols are detected from incoming events.</div>}</article>
-          <article className="panel systems-panel" id="systems"><div className="panel-heading"><div><span className="section-kicker">Infrastructure</span><h2>System health</h2></div><Server size={18} /></div><div className="health-status"><span className={isRuntimeOnline ? 'health-orb online' : 'health-orb'}><Wifi size={22} /></span><div><span>Orbit runtime</span><strong>{isRuntimeOnline ? 'Operational' : 'Status unavailable'}</strong></div></div><div className="health-list"><div><span>Notification API</span><strong className={isConnected ? 'good' : 'bad'}>{isConnected ? 'Connected' : 'Disconnected'}</strong></div><div><span>Discord delivery</span><strong className="good">Preserved</strong></div><div><span>Refresh cadence</span><strong>15 seconds</strong></div></div></article>
+          <article className="panel systems-panel" id="systems"><div className="panel-heading"><div><span className="section-kicker">Infrastructure</span><h2>System health</h2></div><Server size={18} /></div><div className="health-status"><span className={isRuntimeOnline ? 'health-orb online' : 'health-orb'}><Wifi size={22} /></span><div><span>Orbit runtime</span><strong>{isRuntimeOnline ? 'Operational' : 'Status unavailable'}</strong></div></div><div className="health-list"><div><span>Notification API</span><strong className={isConnected ? 'good' : 'bad'}>{isConnected ? 'Connected' : 'Disconnected'}</strong></div><div><span>Discord webhook health</span><strong>Not reported</strong></div><div><span>Refresh cadence</span><strong>15 seconds</strong></div></div></article>
         </section>
         <section className="feed-section" id="activity">
           <div className="feed-title"><div><span className="section-kicker">Event stream</span><h2>Live activity</h2><p>Every successful Discord delivery, mirrored here in realtime.</p></div>{latestEvent && <div className="latest-badge"><span />Latest event {timeAgo(latestEvent.created_at)}</div>}</div>
@@ -155,7 +153,7 @@ function App() {
           <div className="feed" aria-live="polite" aria-busy={loading}><div className="feed-header"><span>Latest first</span><span>{loading ? 'Synchronizing…' : 'Auto-refresh enabled'}</span></div>{!loading && filtered.length === 0 ? <div className="empty-state"><span className="empty-orbit"><Bot size={28} /></span><h3>No events match this view</h3><p>{notifications.length ? 'Try another channel or search term.' : 'New Discord notifications will appear here automatically.'}</p></div> : filtered.map((notification) => <article className={`notification-card ${CHANNEL_TONES[notification.channel] ?? 'default'}`} key={notification.id}><div className="event-rail"><span className="event-dot" /></div><div className="event-body"><div className="event-meta"><span className="channel-pill">{formatChannel(notification.channel)}</span><time dateTime={notification.created_at}>{formatTime(notification.created_at)} · {timeAgo(notification.created_at)}</time></div>{notification.content && <p className="event-content">{notification.content}</p>}{notification.description && <h3>{notification.description}</h3>}{notification.fields.length > 0 && <dl className="fields-grid">{notification.fields.map((field, index) => <div key={`${field.name}-${index}`}><dt>{field.name}</dt><dd>{String(field.value)}</dd></div>)}</dl>}</div></article>)}</div>
         </section>
       </main>
-      <footer><span>ORBIT / SIGNAL OPERATIONS</span><span>Discord delivery remains active</span></footer>
+      <footer><span>ORBIT / SIGNAL OPERATIONS</span><span>Discord integration path unchanged</span></footer>
     </div>
   </div>
 }
