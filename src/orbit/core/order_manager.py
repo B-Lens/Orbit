@@ -281,7 +281,11 @@ class OrderManager(AuthenticationManager, RedisManager):
             "side": side,
             "type": order_type,
             "triggerPrice": str(stop_price),
-            "workingType": "MARK_PRICE",
+            # Trade monitoring and its REST fallback both use Binance's
+            # contract (last-traded) price.  Use the same source here so a
+            # stop that is valid according to the monitor is not immediately
+            # triggered by a divergent mark price.
+            "workingType": "CONTRACT_PRICE",
             "recvWindow": 60000,
         }
 
