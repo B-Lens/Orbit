@@ -196,9 +196,9 @@ function App() {
   const data = useMemo(() => {
     const byChannels = (channels: Set<string>) =>
       notifications.filter((item) => channels.has(item.channel));
-    const tradeEvents = byChannels(TRADE_CHANNELS).slice(0, 4);
+    const tradeEvents = byChannels(TRADE_CHANNELS);
     const prices = byChannels(PRICE_CHANNELS).slice(0, 5);
-    const signals = byChannels(SIGNAL_CHANNELS).slice(0, 4);
+    const signals = byChannels(SIGNAL_CHANNELS);
     const sentiment = notifications
       .filter((item) => item.channel === "market_sentiment")
       .slice(0, 3);
@@ -424,7 +424,7 @@ function App() {
                 </div>
                 {data.tradeEvents.length ? (
                   <div className="data-list">
-                    {data.tradeEvents.map((item) => {
+                    {data.tradeEvents.slice(0, 4).map((item) => {
                       const tone = toneForText(notificationText(item));
                       return (
                         <div className="trade-row" key={item.id}>
@@ -512,7 +512,7 @@ function App() {
                 </div>
                 {data.signals.length ? (
                   <div className="signal-list">
-                    {data.signals.map((item) => {
+                    {data.signals.slice(0, 4).map((item) => {
                       const tone = toneForText(notificationText(item));
                       return (
                         <div className="signal-row" key={item.id}>
@@ -583,9 +583,9 @@ function App() {
                     className={`health-score ${isRuntimeOnline && isConnected ? "healthy" : ""}`}
                   >
                     <strong>
-                      {isRuntimeOnline && isConnected ? "100" : "—"}
+                      {Number(isRuntimeOnline) + Number(isConnected)}/2
                     </strong>
-                    <small>HEALTH SCORE</small>
+                    <small>REPORTED CHECKS</small>
                   </div>
                   <div className="health-checks">
                     <div>
