@@ -2,10 +2,11 @@
 
 ## Decision and status
 
-SOLUSDT is registered for **testnet only** with an hourly trend-breakout strategy,
-but it is not enabled in the production signal loop. The shared runtime candle
-cache currently contains Binance Spot data; activation must wait until the loop
-can consume Binance Futures candles from the selected execution environment.
+SOLUSDT has an hourly trend-breakout strategy for research and backtesting, but
+it is not registered in the production signal loop. It remains a testnet
+monitor-only asset so existing positions can be reconciled. The shared runtime
+candle cache currently contains Binance Spot data; activation must wait until the
+loop can consume Binance Futures candles from the selected execution environment.
 The strategy rules are:
 
 - buy a close above the previous 48-hour high while above EMA(200)

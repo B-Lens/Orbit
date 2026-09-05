@@ -1,10 +1,7 @@
 {
     "cooldown_hours": {
       "BCHUSDT" : 0,
-      "BNBUSDT" : 0,
       "SKYUSDT" : 0,
-      "LTCUSDT" : 0,
-      "SOLUSDT" : 0,
       "ETHUSDT" : 0,
       "BTCUSDT" : 0,
       "PAXGUSDT" : 0,
@@ -17,7 +14,6 @@
       "PAXGUSDT": 0.01,
       "SKYUSDT": 0.01,
       "ATOMUSDT": 0.01,
-      "SOLUSDT": 0.03,
       "stop_loss_percent":1
     },
     "FUTURE_LEVERAGE": 2,

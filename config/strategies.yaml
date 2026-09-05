@@ -2,6 +2,7 @@ monitored_assets:
   BNBUSDT: testnet
   MKRUSDT: testnet
   LTCUSDT: testnet
+  SOLUSDT: testnet
   XRPUSDT: testnet
 
 strategies:
@@ -27,8 +28,4 @@ strategies:
 
   ATOMUSDT:
     strategy: orbit.strategies.atomusdt_strategy.ATOMUSDTStrategy
-    execution_mode: testnet
-
-  SOLUSDT:
-    strategy: orbit.strategies.solusdt_strategy.SOLUSDTStrategy
     execution_mode: testnet

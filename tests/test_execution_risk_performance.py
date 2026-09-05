@@ -1,7 +1,10 @@
+import json
 import os
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import yaml
 
 from orbit.core.authentication_manager import AuthenticationManager
 from orbit.core.execution import ExecutionMode, ExecutionSettings
@@ -10,6 +13,26 @@ from orbit.core.risk_manager import PreTradeRiskGuard
 
 
 class TestExecutionSettings(unittest.TestCase):
+    def test_strategy_config_matches_runtime_asset_roles(self):
+        project_root = Path(__file__).parents[1]
+        runtime_config = json.loads(
+            (project_root / "config" / "config.json").read_text(encoding="utf-8")
+        )
+        strategy_config = yaml.safe_load(
+            (project_root / "config" / "strategies.yaml").read_text(encoding="utf-8")
+        )
+
+        active_assets = set(runtime_config["trading_pairs"])
+        monitored_assets = set(runtime_config["trade_checker_pair"]) - active_assets
+
+        self.assertEqual(set(strategy_config["strategies"]), active_assets)
+        self.assertEqual(set(strategy_config["monitored_assets"]), monitored_assets)
+        self.assertEqual(set(runtime_config["cooldown_hours"]), active_assets)
+        self.assertEqual(
+            set(runtime_config["risk_management"]) - {"stop_loss_percent"},
+            active_assets,
+        )
+
     def test_only_testnet_and_live_modes_exist(self):
         self.assertEqual(
             set(ExecutionMode),

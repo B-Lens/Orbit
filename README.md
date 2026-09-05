@@ -46,11 +46,11 @@ poetry run orbit
 ```
 
 `config/strategies.yaml` is the single source of truth for strategy ownership and
-order mode. BTC, ETH, BCH, and PAXG are currently pinned to Futures Testnet;
-changing an asset to `live` routes that asset to Binance Futures production and
-requires production credentials. Missing, paper, and invalid modes fail startup.
-Symbols monitored for pre-existing positions are assigned an environment under
-`monitored_assets` in the same file.
+order mode. Its `strategies` map contains only assets enabled in the signal loop;
+symbols checked solely for pre-existing positions belong under `monitored_assets`.
+All checked-in assets are pinned to Futures Testnet. Changing an asset to `live`
+routes that asset to Binance Futures production and requires production
+credentials. Missing, paper, and invalid modes fail startup.
 
 Market intelligence uses `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
 CLI `auth.json`. To enable the backup, provision the Antigravity CLI token and

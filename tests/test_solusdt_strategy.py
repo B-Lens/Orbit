@@ -6,7 +6,6 @@ import pandas as pd
 
 from orbit.backtesting import BacktestReport, WalkForwardBacktester
 from orbit.strategies.solusdt_strategy import SOLUSDTStrategy
-from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 
 def _hourly_data(*, direction: str = "flat", bars: int = 240) -> pd.DataFrame:
@@ -36,10 +35,6 @@ def _fresh_hour(data: pd.DataFrame) -> pd.Timestamp:
 
 
 class TestSOLUSDTStrategy(unittest.TestCase):
-    @patch("orbit.core.discord_manager.DiscordManager.__init__", return_value=None)
-    def test_registry_resolves_testnet_strategy(self, _mock_discord):
-        self.assertIs(STRATEGY_REGISTRY["SOLUSDT"], SOLUSDTStrategy)
-
     @patch("orbit.core.discord_manager.DiscordManager.__init__", return_value=None)
     def test_incomplete_hour_is_excluded(self, _mock_discord):
         index = pd.date_range("2026-01-01", periods=10, freq="15min")
