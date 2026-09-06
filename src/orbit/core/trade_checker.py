@@ -1213,6 +1213,28 @@ class TradeChecker(AuthenticationManager, RedisManager):
             "closed_at": datetime.now(timezone.utc),
         }
         try:
+            protective_order_ids = {
+                str(persisted_trade.get(field))
+                for field in ("sl_order_id", "tp_order_id")
+                if persisted_trade.get(field)
+            }
+            open_order_ids = {
+                str(order.get("algoId"))
+                for order in self.order_manager.get_conditional_open_orders(
+                    symbol, raise_on_error=True
+                )
+                if order.get("algoId")
+            }
+            still_open = protective_order_ids & open_order_ids
+            if still_open:
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "protective orders remain open: %s",
+                    trade_id,
+                    symbol,
+                    sorted(still_open),
+                )
+                return False
             if not mongo_handler.store_trade_reconciliation_block(block):
                 logger.error(
                     "Preserving reconciliation-blocked trade %s for %s because "
@@ -1221,7 +1243,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     symbol,
                 )
                 return False
-            mongo_handler.append_decision_event(
+            if not mongo_handler.append_decision_event(
                 trade_id,
                 {
                     "event_id": f"reconciliation_blocked:{trade_id}",
@@ -1229,7 +1251,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "reason": error.reason,
                     "error": str(error),
                 },
-            )
+            ):
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "its decision event was not persisted",
+                    trade_id,
+                    symbol,
+                )
+                return False
         except Exception:
             logger.exception(
                 "Preserving reconciliation-blocked trade %s for %s because its "

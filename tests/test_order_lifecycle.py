@@ -487,6 +487,7 @@ class TestTradeChecker(unittest.TestCase):
         )
         checker.mongo_handler = MagicMock()
         checker.mongo_handler.store_trade_reconciliation_block.return_value = True
+        checker.mongo_handler.append_decision_event.return_value = True
         checker.delete_trade_with_orders = MagicMock()
 
         self.assertEqual(checker.activePosition_coolMaker(), {})
@@ -533,6 +534,52 @@ class TestTradeChecker(unittest.TestCase):
             checker.activePosition_coolMaker()
 
         checker._quarantine_flat_trade.assert_not_called()
+        checker.delete_trade_with_orders.assert_not_called()
+
+    def test_ambiguous_trade_is_retained_while_protective_order_is_open(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {}
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {"algoId": "101", "orderType": "STOP_MARKET"}
+        ]
+        checker.mongo_handler = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        error = TradeReconciliationError(
+            "Binance exit fills were ambiguous for SKYUSDT",
+            "ambiguous_exit_fills",
+        )
+
+        archived = checker._quarantine_flat_trade(
+            "SKYUSDT",
+            "decision-1",
+            {"trade_id": "decision-1", "sl_order_id": "101"},
+            error,
+        )
+
+        self.assertFalse(archived)
+        checker.mongo_handler.store_trade_reconciliation_block.assert_not_called()
+        checker.delete_trade_with_orders.assert_not_called()
+
+    def test_ambiguous_trade_is_retained_when_decision_event_is_not_durable(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {}
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker.mongo_handler = MagicMock()
+        checker.mongo_handler.store_trade_reconciliation_block.return_value = True
+        checker.mongo_handler.append_decision_event.return_value = False
+        checker.delete_trade_with_orders = MagicMock()
+        error = TradeReconciliationError(
+            "Binance exit fills were ambiguous for SKYUSDT",
+            "ambiguous_exit_fills",
+        )
+
+        archived = checker._quarantine_flat_trade(
+            "SKYUSDT", "decision-1", {"trade_id": "decision-1"}, error
+        )
+
+        self.assertFalse(archived)
         checker.delete_trade_with_orders.assert_not_called()
 
     def test_position_reconciliation_resolves_duplicate_records_by_open_order(self):
