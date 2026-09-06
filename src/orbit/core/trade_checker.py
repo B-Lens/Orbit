@@ -24,6 +24,7 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 
 import time
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -212,24 +213,32 @@ class TradeChecker(AuthenticationManager, RedisManager):
         """Return a fresh price for *symbol*, falling back to the REST API."""
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
-            if time.time() - last_updated > 2:
+            price_age = time.time() - last_updated
+            if price_age <= 2 and math.isfinite(current_price) and current_price > 0:
+                return current_price
+
+            if price_age > 2:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
-                    f"({time.time() - last_updated:.2f}s old) — falling back to REST."
+                    f"({price_age:.2f}s old) — falling back to REST."
                 )
-                try:
-                    current_price = self.get_future_symbol_price(symbol=symbol)
-                    self.live_prices[symbol] = (current_price, time.time())
-                except Exception:
-                    pass
-            return current_price
+            else:
+                logger.warning(
+                    f"[WARN] Live price for {symbol} is invalid — falling back to REST."
+                )
+        else:
+            logger.warning(
+                f"[WARN] Live price for {symbol} not found — fetching via REST."
+            )
 
-        logger.warning(f"[WARN] Live price for {symbol} not found — fetching via REST.")
         try:
             current_price = self.get_future_symbol_price(symbol=symbol)
+            if not math.isfinite(current_price) or current_price <= 0:
+                raise ValueError(f"Invalid REST price for {symbol}: {current_price!r}")
             self.live_prices[symbol] = (current_price, time.time())
             return current_price
-        except Exception:
+        except Exception as error:
+            logger.warning(f"[WARN] Could not fetch a valid price for {symbol}: {error}")
             return None
 
     # ------------------------------------------------------------------
@@ -1455,14 +1464,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         self._stop_ws()
 
                 for symbol in active_trade_symbols:
-                    current_price = self.check_price_freshness(symbol)
-                    if current_price is None:
-                        continue
-
-                    trade_id = self.trades[symbol].get("trade_id") or symbol
-                    self.trades[symbol]["current_price"] = current_price
-                    self._persist_current_price(trade_id, current_price)
-
                     if (
                         "stop_loss_price" not in self.trades[symbol]
                         or "target" not in self.trades[symbol]
@@ -1470,6 +1471,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     ):
                         flag = True
                         break
+
+                    current_price = self.check_price_freshness(symbol)
+                    if current_price is None:
+                        continue
+
+                    trade_id = self.trades[symbol].get("trade_id") or symbol
+                    self.trades[symbol]["current_price"] = current_price
+                    self._persist_current_price(trade_id, current_price)
 
                     self.check_trade(
                         risk_management,
@@ -1499,13 +1508,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
                             continue
 
                         any_trade_active = True
+                        stop_loss_order, take_profit_order = self.ensure_orders(
+                            symbol, tradesFound[symbol], risk_management
+                        )
                         current_price = self.check_price_freshness(symbol)
                         if current_price is None:
                             continue
 
-                        stop_loss_order, take_profit_order = self.ensure_orders(
-                            symbol, tradesFound[symbol], risk_management
-                        )
                         field_params = self.update_trade_data(
                             symbol,
                             tradesFound[symbol],
