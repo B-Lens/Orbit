@@ -1227,14 +1227,36 @@ class TradeChecker(AuthenticationManager, RedisManager):
             }
             still_open = protective_order_ids & open_order_ids
             if still_open:
-                logger.error(
-                    "Preserving reconciliation-blocked trade %s for %s because "
-                    "protective orders remain open: %s",
-                    trade_id,
-                    symbol,
-                    sorted(still_open),
-                )
-                return False
+                for order_id in still_open:
+                    try:
+                        self.order_manager.cancel_algo_conditional_order(
+                            symbol, order_id
+                        )
+                    except Exception as cancellation_error:
+                        logger.warning(
+                            "Could not cancel reconciliation-blocked protective "
+                            "order %s for %s: %s",
+                            order_id,
+                            symbol,
+                            cancellation_error,
+                        )
+                remaining_order_ids = {
+                    str(order.get("algoId"))
+                    for order in self.order_manager.get_conditional_open_orders(
+                        symbol, raise_on_error=True
+                    )
+                    if order.get("algoId")
+                }
+                still_open &= remaining_order_ids
+                if still_open:
+                    logger.error(
+                        "Preserving reconciliation-blocked trade %s for %s because "
+                        "protective orders remain open: %s",
+                        trade_id,
+                        symbol,
+                        sorted(still_open),
+                    )
+                    return False
             if not mongo_handler.store_trade_reconciliation_block(block):
                 logger.error(
                     "Preserving reconciliation-blocked trade %s for %s because "
@@ -1268,6 +1290,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             return False
 
+        self.set_cooldown(symbol)
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
         logger.error(
@@ -1521,9 +1544,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 try:
                     self._exit_trade(symbol, trade_id)
                 except TradeReconciliationError as error:
-                    self._quarantine_flat_trade(
+                    if not self._quarantine_flat_trade(
                         symbol, trade_id, persisted, error
-                    )
+                    ):
+                        raise
 
         return trades
 
@@ -1554,6 +1578,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         last_minute_used = -1
 
         while True:
+            iteration_succeeded = False
             try:
                 flag = False
                 active_trade_symbols = [s for s in trading_pairs if s in self.trades]
@@ -1639,6 +1664,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         )
                         self._stop_ws()
 
+                iteration_succeeded = True
+
             except ClientError as error:
                 self.clientExceptionHandler(
                     symbol=locals().get("symbol", None),
@@ -1650,6 +1677,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     e, context_description="Exception in Monitor trade"
                 )
 
-            if progress_callback is not None:
+            if iteration_succeeded and progress_callback is not None:
                 progress_callback()
             time.sleep(10)

@@ -489,6 +489,7 @@ class TestTradeChecker(unittest.TestCase):
         checker.mongo_handler.store_trade_reconciliation_block.return_value = True
         checker.mongo_handler.append_decision_event.return_value = True
         checker.delete_trade_with_orders = MagicMock()
+        checker.set_cooldown = MagicMock()
 
         self.assertEqual(checker.activePosition_coolMaker(), {})
 
@@ -506,6 +507,7 @@ class TestTradeChecker(unittest.TestCase):
             },
         )
         checker.delete_trade_with_orders.assert_called_once_with("SKYUSDT")
+        checker.set_cooldown.assert_called_once_with("SKYUSDT")
 
     def test_missing_flat_trade_fills_remain_in_redis_for_retry(self):
         checker = TradeChecker.__new__(TradeChecker)
@@ -558,6 +560,9 @@ class TestTradeChecker(unittest.TestCase):
         )
 
         self.assertFalse(archived)
+        checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
+            "SKYUSDT", "101"
+        )
         checker.mongo_handler.store_trade_reconciliation_block.assert_not_called()
         checker.delete_trade_with_orders.assert_not_called()
 
@@ -581,6 +586,41 @@ class TestTradeChecker(unittest.TestCase):
 
         self.assertFalse(archived)
         checker.delete_trade_with_orders.assert_not_called()
+
+    def test_failed_ambiguous_quarantine_remains_a_reconciliation_failure(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(return_value=[])
+        checker.scan_trade_keys = MagicMock(return_value=["trade:decision-1"])
+        checker.load_trade = MagicMock(
+            return_value={"trade_id": "decision-1", "symbol": "SKYUSDT"}
+        )
+        error = TradeReconciliationError(
+            "Binance exit fills were ambiguous for decision-1",
+            "ambiguous_exit_fills",
+        )
+        checker._exit_trade = MagicMock(side_effect=error)
+        checker._quarantine_flat_trade = MagicMock(return_value=False)
+
+        with self.assertRaises(TradeReconciliationError):
+            checker.activePosition_coolMaker()
+
+
+    @patch("orbit.core.trade_checker.time.sleep", side_effect=KeyboardInterrupt)
+    def test_failed_monitor_iteration_does_not_report_progress(self, _sleep):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"SKYUSDT": {"trade_id": "decision-1"}}
+        checker._ensure_ws = MagicMock(side_effect=RuntimeError("websocket failed"))
+        checker._ws_manager = None
+        checker.handle_exception = MagicMock()
+        progress = MagicMock()
+
+        with self.assertRaises(KeyboardInterrupt):
+            checker.monitor_trades(["SKYUSDT"], {}, progress)
+
+        progress.assert_not_called()
 
     def test_position_reconciliation_resolves_duplicate_records_by_open_order(self):
         checker = TradeChecker.__new__(TradeChecker)
