@@ -51,7 +51,7 @@ _INCOME_SETTLEMENT_GRACE_MS = 60_000
 
 
 class TradeReconciliationError(RuntimeError):
-    """A flat trade whose broker history cannot be assigned safely."""
+    """A structurally ambiguous flat trade that cannot become clear on retry."""
 
     def __init__(self, message: str, reason: str) -> None:
         super().__init__(message)
@@ -615,17 +615,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
             persisted_trade.get("positionSide") or persisted_trade.get("side") or ""
         ).upper()
         if position_direction not in {"BUY", "SELL"}:
-            raise TradeReconciliationError(
-                f"Trade direction was unavailable for {trade_id}",
-                "missing_trade_direction",
-            )
+            raise RuntimeError(f"Trade direction was unavailable for {trade_id}")
         closing_side = "SELL" if position_direction == "BUY" else "BUY"
         expected_quantity = float(persisted_trade.get("quantity", 0) or 0)
         if expected_quantity <= 0:
-            raise TradeReconciliationError(
-                f"Trade quantity was unavailable for {trade_id}",
-                "missing_trade_quantity",
-            )
+            raise RuntimeError(f"Trade quantity was unavailable for {trade_id}")
         entry_order_id = str(persisted_trade.get("orderId", ""))
         query_start_ms = None
         if entered_at_raw:
@@ -651,10 +645,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             else []
         )
         if entry_order_id and not entry_fills:
-            raise TradeReconciliationError(
-                f"Binance entry fills were unavailable for {trade_id}",
-                "missing_entry_fills",
-            )
+            raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
 
         # Consume exits chronologically from this entry.  Encountering another entry
         # first means the account history no longer provides an unambiguous lifecycle;
@@ -689,10 +680,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             if closing_quantity >= expected_quantity:
                 break
         if closing_quantity < expected_quantity:
-            raise TradeReconciliationError(
-                f"Binance exit fills were unavailable for {trade_id}",
-                "missing_exit_fills",
-            )
+            raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
         if entry_fills:
             entered_at = datetime.fromtimestamp(
                 min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,

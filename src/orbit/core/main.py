@@ -60,7 +60,7 @@ RUNTIME_HEARTBEAT_INTERVAL: int = 10
 RUNTIME_HEARTBEAT_TTL: int = 30
 TRADE_CHECKER_STALE_AFTER: int = 60
 SIGNAL_ANALYSIS_STALE_AFTER: int = SIGNAL_ANALYSIS_SLEEP + 300
-TRADE_CHECKER_RESTART_DELAY: int = 120
+TRADE_CHECKER_RESTART_DELAY: int = 10
 
 logger = logging.getLogger("Orbit")
 
@@ -527,6 +527,8 @@ class BinanceAutomation(ExceptionManager):
                 )
                 raise RuntimeError("Trade checker monitor exited unexpectedly")
             except Exception as e:
+                with self._runtime_progress_lock:
+                    self._runtime_progress["trade_checker"] = 0
                 self.handle_exception(
                     e, context_description="Exception in trade checker thread"
                 )

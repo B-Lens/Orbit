@@ -506,6 +506,35 @@ class TestTradeChecker(unittest.TestCase):
         )
         checker.delete_trade_with_orders.assert_called_once_with("SKYUSDT")
 
+    def test_missing_flat_trade_fills_remain_in_redis_for_retry(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(return_value=[])
+        checker.scan_trade_keys = MagicMock(return_value=["trade:decision-1"])
+        checker.load_trade = MagicMock(
+            return_value={
+                "trade_id": "decision-1",
+                "symbol": "ETHUSDT",
+                "positionSide": "BUY",
+                "quantity": 0.1,
+            }
+        )
+        checker._exit_trade = MagicMock(
+            side_effect=RuntimeError(
+                "Binance exit fills were unavailable for decision-1"
+            )
+        )
+        checker._quarantine_flat_trade = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+
+        with self.assertRaisesRegex(RuntimeError, "exit fills were unavailable"):
+            checker.activePosition_coolMaker()
+
+        checker._quarantine_flat_trade.assert_not_called()
+        checker.delete_trade_with_orders.assert_not_called()
+
     def test_position_reconciliation_resolves_duplicate_records_by_open_order(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
