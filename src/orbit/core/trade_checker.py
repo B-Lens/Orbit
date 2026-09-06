@@ -1275,19 +1275,15 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     symbol,
                 )
                 return False
-            protective_order_ids = {
-                str(persisted_trade.get(field))
-                for field in ("sl_order_id", "tp_order_id")
-                if persisted_trade.get(field)
-            }
-            open_order_ids = {
+            open_orders = self.order_manager.get_conditional_open_orders(
+                symbol, raise_on_error=True
+            )
+            still_open = {
                 str(order.get("algoId"))
-                for order in self.order_manager.get_conditional_open_orders(
-                    symbol, raise_on_error=True
-                )
+                for order in open_orders
                 if order.get("algoId")
+                and (is_stop_order(order) or is_take_profit_order(order))
             }
-            still_open = protective_order_ids & open_order_ids
             if still_open:
                 for order_id in still_open:
                     try:
@@ -1302,14 +1298,15 @@ class TradeChecker(AuthenticationManager, RedisManager):
                             symbol,
                             cancellation_error,
                         )
-                remaining_order_ids = {
+                remaining_protective_order_ids = {
                     str(order.get("algoId"))
                     for order in self.order_manager.get_conditional_open_orders(
                         symbol, raise_on_error=True
                     )
                     if order.get("algoId")
+                    and (is_stop_order(order) or is_take_profit_order(order))
                 }
-                still_open &= remaining_order_ids
+                still_open &= remaining_protective_order_ids
                 if still_open:
                     logger.error(
                         "Preserving reconciliation-blocked trade %s for %s because "

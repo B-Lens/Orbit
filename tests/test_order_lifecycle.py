@@ -673,6 +673,38 @@ class TestTradeChecker(unittest.TestCase):
         self.assertFalse(archived)
         checker.delete_trade_with_orders.assert_not_called()
 
+    def test_ambiguous_trade_cancels_protection_missing_from_redis_mapping(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {}
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.side_effect = [
+            [{"algoId": "replacement-202", "orderType": "STOP_MARKET"}],
+            [],
+        ]
+        checker.mongo_handler = MagicMock()
+        checker.mongo_handler.store_trade_reconciliation_block.return_value = True
+        checker.mongo_handler.append_decision_event.return_value = True
+        checker._symbol_has_broker_exposure = MagicMock(return_value=False)
+        checker.set_cooldown = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        error = TradeReconciliationError(
+            "Binance exit fills were ambiguous for SKYUSDT",
+            "ambiguous_exit_fills",
+        )
+
+        archived = checker._quarantine_flat_trade(
+            "SKYUSDT",
+            "decision-1",
+            {"trade_id": "decision-1", "sl_order_id": "stale-101"},
+            error,
+        )
+
+        self.assertTrue(archived)
+        checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
+            "SKYUSDT", "replacement-202"
+        )
+        checker.delete_trade_with_orders.assert_called_once_with("decision-1")
+
     def test_failed_ambiguous_quarantine_remains_a_reconciliation_failure(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
