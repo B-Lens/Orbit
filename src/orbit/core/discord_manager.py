@@ -67,6 +67,7 @@ class DiscordManager:
     MAX_FIELD_VALUE = 1024
     MAX_FIELDS = 25
     MAX_TITLE = 256
+    REQUEST_TIMEOUT_SECONDS = 10
 
     def __init__(self):
         pass
@@ -171,9 +172,16 @@ class DiscordManager:
                 with open(file_path, 'rb') as f:
                     files = {'file': (os.path.basename(file_path), f)}
                     multipart_data = {'payload_json': json.dumps(payload)}
-                    response = requests.post(url, data=multipart_data, files=files)
+                    response = requests.post(
+                        url,
+                        data=multipart_data,
+                        files=files,
+                        timeout=self.REQUEST_TIMEOUT_SECONDS,
+                    )
             else:
-                response = requests.post(url, json=payload)
+                response = requests.post(
+                    url, json=payload, timeout=self.REQUEST_TIMEOUT_SECONDS
+                )
 
             SUCCESS_CODES = {200, 204}
 

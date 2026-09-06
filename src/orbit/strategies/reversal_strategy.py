@@ -86,7 +86,6 @@ class BollingerAdaptiveReversalStrategyBCH(Strategy):
         """
         lookup = 168
         df_15min = self.data.iloc[-lookup:]
-        self.send_params(stock_df=df_15min, symbol=symbol, duration="15 MIN")
 
         close = df_15min['close']
         current_close = close.iloc[-1]
