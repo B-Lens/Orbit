@@ -38,7 +38,7 @@ load_dotenv()
 
 from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
-from orbit.core.trade_checker import TradeChecker
+from orbit.core.trade_checker import TradeChecker, position_lifecycle_lock
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.order_manager import OrderManager
 from orbit.core.exception_manager import ExceptionManager
@@ -60,6 +60,7 @@ RUNTIME_HEARTBEAT_INTERVAL: int = 10
 RUNTIME_HEARTBEAT_TTL: int = 30
 TRADE_CHECKER_STALE_AFTER: int = 60
 SIGNAL_ANALYSIS_STALE_AFTER: int = SIGNAL_ANALYSIS_SLEEP + 300
+TRADE_CHECKER_RESTART_DELAY: int = 10
 
 logger = logging.getLogger("Orbit")
 
@@ -368,16 +369,17 @@ class BinanceAutomation(ExceptionManager):
             f"{symbol} {action}",
         )
 
-        order_response, quantity, order_request = self.order_manager.place_order(
-            self.risk_management,
-            symbol,
-            action,
-            price_to_use,
-            stop_loss,
-            target,
-            self.future_leverage,
-            trade_id=decision_id,
-        )
+        with position_lifecycle_lock(symbol, self.order_manager.redis_client):
+            order_response, quantity, order_request = self.order_manager.place_order(
+                self.risk_management,
+                symbol,
+                action,
+                price_to_use,
+                stop_loss,
+                target,
+                self.future_leverage,
+                trade_id=decision_id,
+            )
 
         time.sleep(0.5)
 
@@ -509,23 +511,29 @@ class BinanceAutomation(ExceptionManager):
     def start_trade_checker(self) -> None:
         """Background trade-monitor thread entry-point."""
         self.send_logs(data=None, description="Starting trade checker thread")
-        try:
-            record_runtime_activity(
-                self.order_manager.redis_client,
-                "monitoring_positions",
-                "Refreshing broker positions and protective orders",
-            )
-            self.trades = self.trade_checker.activePosition_coolMaker()
-            time.sleep(3)
-            self.trade_checker.monitor_trades(
-                self.trade_checker_pair,
-                self.risk_management,
-                lambda: self.mark_runtime_progress("trade_checker"),
-            )
-        except Exception as e:
-            self.handle_exception(
-                e, context_description="Exception in trade checker thread"
-            )
+        while True:
+            try:
+                record_runtime_activity(
+                    self.order_manager.redis_client,
+                    "monitoring_positions",
+                    "Refreshing broker positions and protective orders",
+                )
+                self.trades = self.trade_checker.activePosition_coolMaker()
+                self.mark_runtime_progress("trade_checker")
+                time.sleep(3)
+                self.trade_checker.monitor_trades(
+                    self.trade_checker_pair,
+                    self.risk_management,
+                    lambda: self.mark_runtime_progress("trade_checker"),
+                )
+                raise RuntimeError("Trade checker monitor exited unexpectedly")
+            except Exception as e:
+                with self._runtime_progress_lock:
+                    self._runtime_progress["trade_checker"] = 0
+                self.handle_exception(
+                    e, context_description="Exception in trade checker thread"
+                )
+                time.sleep(TRADE_CHECKER_RESTART_DELAY)
 
     def handle_crons(self) -> None:
         """Start the sentiment cron in a background daemon thread."""
@@ -569,14 +577,21 @@ class BinanceAutomation(ExceptionManager):
         Args:
             check_interval: Seconds between health checks.
         """
+        stopped_workers: set[int] = set()
         while True:
             for worker in self.workers_to_monitor:
                 if not worker.is_alive():
-                    self.send_alerts(
-                        data=None, description=f"Worker {worker.name} has stopped!"
-                    )
-                    logger.error(f"Worker {worker.name} has stopped.")
-                logger.info(f"Worker {worker.name} is alive.")
+                    worker_id = id(worker)
+                    if worker_id not in stopped_workers:
+                        self.send_alerts(
+                            data=None,
+                            description=f"Worker {worker.name} has stopped!",
+                        )
+                        logger.error("Worker %s has stopped.", worker.name)
+                        stopped_workers.add(worker_id)
+                else:
+                    stopped_workers.discard(id(worker))
+                    logger.info("Worker %s is alive.", worker.name)
             time.sleep(check_interval)
 
     def publish_runtime_heartbeat(

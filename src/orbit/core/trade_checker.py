@@ -25,6 +25,8 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 import time
 import logging
 import math
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -49,6 +51,47 @@ logger = logging.getLogger("Orbit")
 _POSITION_RISK_MAX_ATTEMPTS = 3
 _POSITION_RISK_RETRY_DELAY = 1.0
 _INCOME_SETTLEMENT_GRACE_MS = 60_000
+_POSITION_LIFECYCLE_LOCKS: Dict[str, Any] = {}
+_POSITION_LIFECYCLE_LOCKS_GUARD = threading.Lock()
+_POSITION_LIFECYCLE_LOCK_TIMEOUT = 120
+_POSITION_LIFECYCLE_LOCK_WAIT = 10
+
+
+@contextmanager
+def position_lifecycle_lock(
+    symbol: str, redis_client: Optional[redis.StrictRedis] = None
+) -> Any:
+    """Serialize entry and cleanup for a symbol across threads and processes."""
+    with _POSITION_LIFECYCLE_LOCKS_GUARD:
+        local_lock = _POSITION_LIFECYCLE_LOCKS.setdefault(symbol, threading.RLock())
+
+    with local_lock:
+        if redis_client is None:
+            yield
+            return
+
+        distributed_lock = redis_client.lock(
+            f"orbit:position-lifecycle-lock:{symbol}",
+            timeout=_POSITION_LIFECYCLE_LOCK_TIMEOUT,
+            blocking_timeout=_POSITION_LIFECYCLE_LOCK_WAIT,
+        )
+        acquired = distributed_lock.acquire(blocking=True)
+        if not acquired:
+            raise RuntimeError(
+                f"Could not acquire the position lifecycle lock for {symbol}"
+            )
+        try:
+            yield
+        finally:
+            distributed_lock.release()
+
+
+class TradeReconciliationError(RuntimeError):
+    """A structurally ambiguous flat trade that cannot become clear on retry."""
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 def _order_types(order: Optional[Dict[str, Any]]) -> Tuple[str, str]:
@@ -715,7 +758,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 continue
             fill_side = str(fill.get("side", "")).upper()
             if fill_side == position_direction:
-                raise RuntimeError(f"Binance exit fills were ambiguous for {trade_id}")
+                raise TradeReconciliationError(
+                    f"Binance exit fills were ambiguous for {trade_id}",
+                    "ambiguous_exit_fills",
+                )
             if fill_side != closing_side:
                 continue
             closing_fills.append(fill)
@@ -1227,6 +1273,194 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
         raise RuntimeError("position-risk retry loop exited unexpectedly")
 
+    def _quarantine_flat_trade(
+        self,
+        symbol: str,
+        trade_id: str,
+        persisted_trade: Dict[str, Any],
+        error: TradeReconciliationError,
+    ) -> bool:
+        """Serialize quarantine against replacement-position creation."""
+        try:
+            with position_lifecycle_lock(
+                symbol, getattr(self, "redis_client", None)
+            ):
+                return self._quarantine_flat_trade_locked(
+                    symbol, trade_id, persisted_trade, error
+                )
+        except Exception:
+            logger.exception(
+                "Preserving reconciliation-blocked trade %s for %s because its "
+                "lifecycle lock could not be acquired or released",
+                trade_id,
+                symbol,
+            )
+            return False
+
+    def _quarantine_flat_trade_locked(
+        self,
+        symbol: str,
+        trade_id: str,
+        persisted_trade: Dict[str, Any],
+        error: TradeReconciliationError,
+    ) -> bool:
+        """Archive an unresolvable flat lifecycle before clearing Redis state."""
+        mongo_handler = getattr(self, "mongo_handler", None)
+        if mongo_handler is None:
+            logger.error(
+                "Preserving reconciliation-blocked trade %s for %s because MongoDB "
+                "is unavailable: %s",
+                trade_id,
+                symbol,
+                error,
+            )
+            return False
+
+        block = {
+            **persisted_trade,
+            "trade_id": trade_id,
+            "symbol": symbol,
+            "status": "reconciliation_blocked",
+            "reason": error.reason,
+            "reconciliation_error": str(error),
+            "closed_at": datetime.now(timezone.utc),
+        }
+        try:
+            if self._symbol_has_broker_exposure(symbol):
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "broker exposure reopened",
+                    trade_id,
+                    symbol,
+                )
+                return False
+            active_regular_orders = [
+                order
+                for order in self.order_manager.get_open_orders(
+                    symbol, raise_on_error=True
+                )
+                if str(order.get("status", "")).upper()
+                in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}
+            ]
+            if active_regular_orders:
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "regular orders are still active: %s",
+                    trade_id,
+                    symbol,
+                    sorted(
+                        str(order.get("orderId", "unknown"))
+                        for order in active_regular_orders
+                    ),
+                )
+                return False
+            open_orders = self.order_manager.get_conditional_open_orders(
+                symbol, raise_on_error=True
+            )
+            still_open = {
+                str(order.get("algoId"))
+                for order in open_orders
+                if order.get("algoId")
+                and (is_stop_order(order) or is_take_profit_order(order))
+            }
+            if still_open:
+                for order_id in still_open:
+                    try:
+                        self.order_manager.cancel_algo_conditional_order(
+                            symbol, order_id
+                        )
+                    except Exception as cancellation_error:
+                        logger.warning(
+                            "Could not cancel reconciliation-blocked protective "
+                            "order %s for %s: %s",
+                            order_id,
+                            symbol,
+                            cancellation_error,
+                        )
+                remaining_protective_order_ids = {
+                    str(order.get("algoId"))
+                    for order in self.order_manager.get_conditional_open_orders(
+                        symbol, raise_on_error=True
+                    )
+                    if order.get("algoId")
+                    and (is_stop_order(order) or is_take_profit_order(order))
+                }
+                still_open &= remaining_protective_order_ids
+                if still_open:
+                    logger.error(
+                        "Preserving reconciliation-blocked trade %s for %s because "
+                        "protective orders remain open: %s",
+                        trade_id,
+                        symbol,
+                        sorted(still_open),
+                    )
+                    return False
+            if not mongo_handler.store_trade_reconciliation_block(block):
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "its audit record was not persisted",
+                    trade_id,
+                    symbol,
+                )
+                return False
+            if not mongo_handler.append_decision_event(
+                trade_id,
+                {
+                    "event_id": f"reconciliation_blocked:{trade_id}",
+                    "status": "reconciliation_blocked",
+                    "reason": error.reason,
+                    "error": str(error),
+                },
+            ):
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "its decision event was not persisted",
+                    trade_id,
+                    symbol,
+                )
+                return False
+            if self._symbol_has_broker_exposure(symbol):
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "broker exposure reopened during quarantine",
+                    trade_id,
+                    symbol,
+                )
+                return False
+        except Exception:
+            logger.exception(
+                "Preserving reconciliation-blocked trade %s for %s because its "
+                "audit trail could not be completed",
+                trade_id,
+                symbol,
+            )
+            return False
+
+        self.set_cooldown(symbol)
+        self.delete_trade_with_orders(trade_id)
+        getattr(self, "trades", {}).pop(symbol, None)
+        logger.error(
+            "Archived reconciliation-blocked trade %s for %s: %s",
+            trade_id,
+            symbol,
+            error,
+        )
+        return True
+
+    def _symbol_has_broker_exposure(self, symbol: str) -> bool:
+        """Return whether any active execution environment has symbol exposure."""
+        clients = {
+            id(self.order_manager.futures_clients[mode]):
+            self.order_manager.futures_clients[mode]
+            for mode in self.order_manager.execution_settings.active_modes
+        }
+        return any(
+            str(position.get("symbol", "")) == symbol
+            and float(position.get("positionAmt", 0) or 0) != 0
+            for client in clients.values()
+            for position in self._get_position_risk(client)
+        )
+
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
         """Discover Futures positions with non-zero broker exposure."""
         clients = {
@@ -1467,7 +1701,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "[CLEANUP] Broker exposure is flat for "
                     f"symbol={symbol}, trade_id={trade_id}; starting cooldown"
                 )
-                self._exit_trade(symbol, trade_id)
+                try:
+                    self._exit_trade(symbol, trade_id)
+                except TradeReconciliationError as error:
+                    if not self._quarantine_flat_trade(
+                        symbol, trade_id, persisted, error
+                    ):
+                        raise
 
         return trades
 
@@ -1498,6 +1738,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         last_minute_used = -1
 
         while True:
+            iteration_succeeded = False
             try:
                 flag = False
                 active_trade_symbols = [s for s in trading_pairs if s in self.trades]
@@ -1589,6 +1830,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         )
                         self._stop_ws()
 
+                iteration_succeeded = True
+
             except ClientError as error:
                 self.clientExceptionHandler(
                     symbol=locals().get("symbol", None),
@@ -1600,6 +1843,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     e, context_description="Exception in Monitor trade"
                 )
 
-            if progress_callback is not None:
+            if iteration_succeeded and progress_callback is not None:
                 progress_callback()
             time.sleep(10)

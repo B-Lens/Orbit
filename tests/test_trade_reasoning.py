@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -74,6 +75,40 @@ def test_core_uses_configured_leverage_for_every_asset() -> None:
         automation.process_signal(signal)
 
     assert order_manager.place_order.call_args.args[6] == 5
+
+
+def test_entry_order_is_serialized_with_position_cleanup() -> None:
+    events = []
+
+    @contextmanager
+    def lifecycle_lock():
+        events.append("lock_entered")
+        yield
+        events.append("lock_released")
+
+    order_manager = MagicMock()
+    order_manager.place_order.side_effect = lambda *_args, **_kwargs: (
+        events.append("order_placed") or (None, None, None)
+    )
+    trade_reasoner = MagicMock()
+    trade_reasoner.review_entry.return_value = EntryReasoning(True, "aligned", 0.9)
+    automation = BinanceAutomation.__new__(BinanceAutomation)
+    automation.order_manager = order_manager
+    automation._trade_reasoner = trade_reasoner
+    automation.future_leverage = 5
+    automation.risk_management = {}
+    automation.send_logs = MagicMock()
+    automation.send_alerts = MagicMock()
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "orbit.core.main.position_lifecycle_lock",
+            lambda symbol, redis_client=None: lifecycle_lock(),
+        )
+        monkeypatch.setattr("orbit.core.main.time.sleep", lambda _seconds: None)
+        automation.process_signal(_signal())
+
+    assert events == ["lock_entered", "order_placed", "lock_released"]
 
 
 def test_distribution_calculates_requested_metrics() -> None:

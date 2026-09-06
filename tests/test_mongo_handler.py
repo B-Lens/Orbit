@@ -21,17 +21,65 @@ def _ohlcv_frame(timestamp: pd.Timestamp) -> pd.DataFrame:
 def test_decision_event_identity_prevents_duplicate_append() -> None:
     handler = MongoHandler.__new__(MongoHandler)
     handler.decision_collection = MagicMock()
+    handler.decision_collection.find_one.return_value = {"_id": "stored"}
 
-    handler.append_decision_event(
+    stored = handler.append_decision_event(
         "decision-1",
         {"event_id": "order_submitted:BTCUSDT:123", "status": "order_submitted"},
     )
 
+    assert stored is True
     query = handler.decision_collection.update_one.call_args.args[0]
     assert query["decision_id"] == "decision-1"
     assert query["execution_events.event_id"] == {
         "$ne": "order_submitted:BTCUSDT:123"
     }
+
+
+def test_decision_event_reports_failed_durability_check() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.decision_collection = MagicMock()
+    handler.decision_collection.find_one.return_value = None
+
+    stored = handler.append_decision_event(
+        "decision-1",
+        {"event_id": "trade_closed:decision-1", "status": "trade_closed"},
+    )
+
+    assert stored is False
+
+
+def test_reconciliation_block_requires_durable_matching_record() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.trade_lifecycle_collection = MagicMock()
+    handler.trade_lifecycle_collection.find_one.return_value = None
+
+    stored = handler.store_trade_reconciliation_block(
+        {
+            "trade_id": "decision-1",
+            "status": "reconciliation_blocked",
+            "reason": "ambiguous_exit_fills",
+        }
+    )
+
+    assert stored is False
+
+
+def test_reconciliation_block_rejects_unacknowledged_write() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.trade_lifecycle_collection = MagicMock()
+    handler.trade_lifecycle_collection.update_one.return_value.acknowledged = False
+
+    stored = handler.store_trade_reconciliation_block(
+        {
+            "trade_id": "decision-1",
+            "status": "reconciliation_blocked",
+            "reason": "ambiguous_exit_fills",
+        }
+    )
+
+    assert stored is False
+    handler.trade_lifecycle_collection.find_one.assert_not_called()
 
 
 def test_read_only_handler_does_not_create_or_modify_indexes() -> None:
