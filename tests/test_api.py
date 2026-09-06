@@ -1,3 +1,4 @@
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -95,7 +96,7 @@ def test_sentiment_history_does_not_treat_observation_as_effective(
 ) -> None:
     mongo_handler.return_value.get_recent_sentiment_history.return_value = [
         {
-            "timestamp": "2026-09-06T10:00:00+00:00",
+            "timestamp": datetime(2026, 9, 6, 10, 0),
             "combined_sentiment": {
                 "sentiment": "BEARISH",
                 "confidence": 0.4,
@@ -107,6 +108,7 @@ def test_sentiment_history_does_not_treat_observation_as_effective(
 
     assert response[0]["observed"] == "BEARISH"
     assert response[0]["effective"] is None
+    assert response[0]["updated_at"] == "2026-09-06T10:00:00+00:00"
 
 
 @patch("orbit.api.load_config", return_value={"risk_policy": {"max_leverage": 5}})
