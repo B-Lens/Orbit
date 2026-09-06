@@ -23,6 +23,10 @@ class TestDiscordManager:
 
         embed_fields = mock_post.call_args.kwargs["json"]["embeds"][0]["fields"]
         assert status_code == 204
+        assert (
+            mock_post.call_args.kwargs["timeout"]
+            == DiscordManager.REQUEST_TIMEOUT_SECONDS
+        )
         assert len(embed_fields) == DiscordManager.MAX_FIELDS
         assert embed_fields[-1]["name"] == "⚠ Warning"
         mock_record.assert_called_once_with(

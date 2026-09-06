@@ -10,10 +10,11 @@ from orbit.core.signal_analyzer import SignalAnalyzer
 
 class TestReportingLifecycle(unittest.TestCase):
     @patch("orbit.core.signal_analyzer.time.sleep", return_value=None)
+    @patch("orbit.core.signal_analyzer.threading.Thread")
     @patch("orbit.core.signal_analyzer.record_runtime_activity")
     @patch("orbit.core.signal_analyzer.STRATEGY_REGISTRY")
     def test_ohlcv_params_are_published_for_every_registered_strategy(
-        self, strategy_registry, _record_activity, _sleep
+        self, strategy_registry, _record_activity, thread_class, _sleep
     ):
         historical_data = pd.DataFrame(
             {
@@ -45,11 +46,17 @@ class TestReportingLifecycle(unittest.TestCase):
 
         self.assertEqual(list(analyzer.analyze_market({})), [])
 
-        strategy.send_params.assert_called_once_with(
-            stock_df=historical_data,
-            symbol="ETHUSDT",
-            duration="15 MIN",
+        thread_class.assert_called_once_with(
+            target=strategy.send_params,
+            kwargs={
+                "stock_df": historical_data,
+                "symbol": "ETHUSDT",
+                "duration": "15 MIN",
+            },
+            daemon=True,
+            name="OHLCVParams-ETHUSDT",
         )
+        thread_class.return_value.start.assert_called_once_with()
         strategy.generate_signals.assert_called_once_with(symbol="ETHUSDT")
 
     def test_active_position_is_rejected_before_market_data_or_strategy_work(self):

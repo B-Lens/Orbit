@@ -12,6 +12,7 @@ the constructor for easier testing and looser coupling.
 
 import time
 import logging
+import threading
 import uuid
 from importlib import metadata
 from typing import Any, Dict, Iterator, Mapping, Optional
@@ -151,11 +152,17 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
 
                 try:
                     strategy = strategy_class(historical_data)
-                    strategy.send_params(
-                        stock_df=historical_data,
-                        symbol=symbol,
-                        duration="15 MIN",
+                    params_thread = threading.Thread(
+                        target=strategy.send_params,
+                        kwargs={
+                            "stock_df": historical_data,
+                            "symbol": symbol,
+                            "duration": "15 MIN",
+                        },
+                        daemon=True,
+                        name=f"OHLCVParams-{symbol}",
                     )
+                    params_thread.start()
                     signal_ss = time.perf_counter()
                     signal_dict = strategy.generate_signals(symbol=symbol)
                     signal_es = time.perf_counter()
