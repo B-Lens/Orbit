@@ -3,7 +3,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from orbit.api import get_command_center, get_notifications, get_status
+from orbit.api import (
+    _risk_execution_state,
+    get_command_center,
+    get_notifications,
+    get_status,
+)
+from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.redis_manager import runtime_heartbeat_key
 
 
@@ -64,6 +70,36 @@ def test_notifications_returns_mirrored_discord_events(list_feed: MagicMock) -> 
     assert response.notifications[0].description == "Order placed successfully"
     assert len(response.notifications) == 1
     list_feed.assert_called_once_with(25)
+
+
+@patch("orbit.api.load_config", return_value={"risk_policy": {"max_leverage": 5}})
+@patch("orbit.api.ExecutionSettings.from_config")
+def test_risk_execution_state_uses_validated_execution_settings(
+    from_config: MagicMock, _load_config: MagicMock
+) -> None:
+    from_config.return_value = ExecutionSettings(
+        {"BTCUSDT": ExecutionMode.TESTNET}
+    )
+
+    state = _risk_execution_state()
+
+    assert state["can_submit_orders"] is True
+    assert state["active_modes"] == ["testnet"]
+    assert state["asset_modes"] == {"BTCUSDT": "testnet"}
+
+
+@patch("orbit.api.load_config", return_value={})
+@patch("orbit.api.ExecutionSettings.from_config")
+def test_risk_execution_state_fails_closed_on_invalid_configuration(
+    from_config: MagicMock, _load_config: MagicMock
+) -> None:
+    from_config.side_effect = RuntimeError("credentials are required")
+
+    state = _risk_execution_state()
+
+    assert state["can_submit_orders"] is False
+    assert state["active_modes"] == []
+    assert state["asset_modes"] == {}
 
 
 @patch("orbit.api._risk_execution_state")

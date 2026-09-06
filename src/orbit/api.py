@@ -19,12 +19,10 @@ from orbit.core.command_center import (
     read_runtime_state,
     read_sentiment,
 )
-from orbit.core.execution import DEFAULT_STRATEGY_CONFIG
+from orbit.core.execution import ExecutionSettings
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.notification_feed import list_notifications
-
-import yaml
 
 logger = logging.getLogger("Orbit")
 
@@ -215,21 +213,19 @@ def _recent_signals(limit: int) -> List[Dict[str, Any]]:
 
 
 def _risk_execution_state() -> Dict[str, Any]:
-    try:
-        document = yaml.safe_load(DEFAULT_STRATEGY_CONFIG.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        logger.exception("Unable to read strategy execution modes")
-        document = {}
     asset_modes: Dict[str, str] = {}
-    strategies = document.get("strategies", {})
-    if isinstance(strategies, dict):
-        for symbol, settings in strategies.items():
-            if isinstance(settings, dict) and settings.get("execution_mode"):
-                asset_modes[str(symbol)] = str(settings["execution_mode"])
-    monitored = document.get("monitored_assets", {})
-    if isinstance(monitored, dict):
-        asset_modes.update({str(symbol): str(mode) for symbol, mode in monitored.items()})
-    modes = sorted(set(asset_modes.values()))
+    modes: List[str] = []
+    can_submit_orders = False
+    try:
+        execution_settings = ExecutionSettings.from_config()
+        asset_modes = {
+            symbol: mode.value
+            for symbol, mode in execution_settings.asset_modes.items()
+        }
+        modes = sorted(mode.value for mode in execution_settings.active_modes)
+        can_submit_orders = execution_settings.can_submit_orders
+    except (RuntimeError, ValueError):
+        logger.exception("Execution configuration is invalid; failing closed")
     try:
         config = load_config()
     except (OSError, ValueError):
@@ -237,7 +233,7 @@ def _risk_execution_state() -> Dict[str, Any]:
         config = {}
     return {
         "active_modes": modes,
-        "can_submit_orders": bool(modes),
+        "can_submit_orders": can_submit_orders,
         "asset_modes": asset_modes,
         "risk_limits": dict(config.get("risk_policy", {})),
     }
