@@ -361,8 +361,6 @@ class BinanceAutomation(ExceptionManager):
             )
 
         price_to_use = entry_price or self.order_manager.get_symbol_price(symbol)
-        leverage = 5 if symbol == "BTCUSDT" else self.future_leverage
-
         logger.info(f"Placing {action} order for {symbol}...")
         record_runtime_activity(
             self.order_manager.redis_client,
@@ -377,7 +375,7 @@ class BinanceAutomation(ExceptionManager):
             price_to_use,
             stop_loss,
             target,
-            leverage,
+            self.future_leverage,
             trade_id=decision_id,
         )
 
