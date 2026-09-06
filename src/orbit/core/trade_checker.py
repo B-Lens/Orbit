@@ -781,7 +781,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
     ) -> bool:
         """Exit the position when price crosses the SMA (adaptive mode)."""
         historical_df = self.order_manager.mongo_handler.get_mongo_historical_data(
-            symbol, interval="15m"
+            symbol,
+            interval="15m",
+            execution_mode=self.order_manager.execution_settings.mode_for(symbol).value,
         )
         if historical_df is None or historical_df.empty:
             return False
@@ -951,7 +953,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 self.send_alerts(f"No strategy found for {symbol}", None)
                 return
 
-            historical_data = self.mongo_handler.handle_mongo_data(symbol)
+            historical_data = self.mongo_handler.handle_mongo_data(
+                symbol,
+                execution_mode=self.execution_settings.mode_for(symbol).value,
+            )
             strategy = strategy_class(historical_data)
             signal = strategy.generate_signals(symbol=symbol, position_side="LONG")
             new_stop_loss = signal["stop_loss"]
@@ -1051,7 +1056,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 self.send_alerts(f"No strategy found for {symbol}", None)
                 return
 
-            historical_data = self.mongo_handler.handle_mongo_data(symbol)
+            historical_data = self.mongo_handler.handle_mongo_data(
+                symbol,
+                execution_mode=self.execution_settings.mode_for(symbol).value,
+            )
             strategy = strategy_class(historical_data)
             signal = strategy.generate_signals(symbol=symbol, position_side="SHORT")
             new_stop_loss = signal["stop_loss"]
