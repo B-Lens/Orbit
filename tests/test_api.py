@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from orbit.api import (
+    _recent_sentiment_history,
     _risk_execution_state,
     _signal_response,
     get_command_center,
@@ -86,6 +87,26 @@ def test_no_signal_decisions_have_explicit_dashboard_values() -> None:
     assert response["signal"] == "NO SIGNAL"
     assert response["pattern"] == "No setup"
     assert response["sentiment"] == "Not evaluated"
+
+
+@patch("orbit.api._command_center_mongo_handler")
+def test_sentiment_history_does_not_treat_observation_as_effective(
+    mongo_handler: MagicMock,
+) -> None:
+    mongo_handler.return_value.get_recent_sentiment_history.return_value = [
+        {
+            "timestamp": "2026-09-06T10:00:00+00:00",
+            "combined_sentiment": {
+                "sentiment": "BEARISH",
+                "confidence": 0.4,
+            },
+        }
+    ]
+
+    response = _recent_sentiment_history()
+
+    assert response[0]["observed"] == "BEARISH"
+    assert response[0]["effective"] is None
 
 
 @patch("orbit.api.load_config", return_value={"risk_policy": {"max_leverage": 5}})

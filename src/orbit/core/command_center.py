@@ -105,7 +105,7 @@ def record_sentiment_snapshot(client: Any, result: Dict[str, Any]) -> None:
     }
     try:
         encoded = json.dumps(payload, default=_json_value)
-        pipeline = client.pipeline(transaction=False)
+        pipeline = client.pipeline(transaction=True)
         pipeline.set(REDIS_KEY_SENTIMENT_SNAPSHOT, encoded)
         pipeline.lpush(REDIS_KEY_SENTIMENT_HISTORY, encoded)
         pipeline.ltrim(REDIS_KEY_SENTIMENT_HISTORY, 0, 99)

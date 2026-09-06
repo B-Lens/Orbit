@@ -65,7 +65,6 @@ class FakeRedis:
         yield from (key for key in self.values if key.startswith(prefix))
 
     def pipeline(self, transaction: bool = False) -> FakePipeline:
-        assert transaction is False
         return FakePipeline(self)
 
     def lpush(self, key: object, value: object) -> None:

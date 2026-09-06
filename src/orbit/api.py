@@ -232,7 +232,9 @@ def _recent_sentiment_history() -> List[Dict[str, Any]]:
         records = _command_center_mongo_handler().get_recent_sentiment_history(24)
         return [
             {
-                "effective": item.get("combined_sentiment", {}).get("sentiment"),
+                # MongoDB stores the provider observation before the runtime's
+                # confidence and confirmation rules resolve an effective regime.
+                "effective": None,
                 "observed": item.get("combined_sentiment", {}).get("sentiment"),
                 "confidence": item.get("combined_sentiment", {}).get("confidence"),
                 "provider": item.get("combined_sentiment", {}).get("provider"),
