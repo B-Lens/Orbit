@@ -1413,6 +1413,19 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Main monitor loop
     # ------------------------------------------------------------------
 
+    def _persist_current_price(self, trade_id: str, current_price: float) -> None:
+        """Publish monitoring telemetry without interrupting trade protection."""
+        try:
+            self.merge_existing_trade_fields(
+                trade_id, {"current_price": current_price}
+            )
+        except Exception as error:
+            logger.warning(
+                "Could not persist current price for trade_id=%s: %s",
+                trade_id,
+                error,
+            )
+
     def monitor_trades(
         self,
         trading_pairs: List[str],
@@ -1440,9 +1453,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
                     trade_id = self.trades[symbol].get("trade_id") or symbol
                     self.trades[symbol]["current_price"] = current_price
-                    self.merge_existing_trade_fields(
-                        trade_id, {"current_price": current_price}
-                    )
+                    self._persist_current_price(trade_id, current_price)
 
                     if (
                         "stop_loss_price" not in self.trades[symbol]
