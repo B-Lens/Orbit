@@ -222,7 +222,7 @@ def _risk_execution_state() -> Dict[str, Any]:
             symbol: mode.value
             for symbol, mode in execution_settings.asset_modes.items()
         }
-        modes = sorted(mode.value for mode in execution_settings.active_modes)
+        modes = sorted(set(asset_modes.values()))
         can_submit_orders = execution_settings.can_submit_orders
     except (RuntimeError, ValueError):
         logger.exception("Execution configuration is invalid; failing closed")

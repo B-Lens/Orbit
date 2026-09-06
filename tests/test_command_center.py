@@ -112,7 +112,7 @@ def test_reads_runtime_positions_and_sentiment_from_live_state() -> None:
     assert runtime["status"] == "online"
     assert runtime["current_activity"] == "analyzing_signal"
     assert positions[0]["unrealized_pnl"] == 200.0
-    assert positions[0]["protection_status"] == "protected"
+    assert positions[0]["protection_status"] == "unverified"
     assert sentiment["effective"] == "BULLISH"
     assert sentiment["confidence"] == 0.84
 

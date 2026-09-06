@@ -212,7 +212,10 @@ def _position_from_trade(trade_id: str, trade: Dict[str, Any]) -> Dict[str, Any]
     stop_loss = trade.get("stop_loss_price") or trade.get("stop_loss")
     take_profit = trade.get("target") or trade.get("take_profit")
     if stop_loss is not None and (trade.get("sl_order_id") or trade.get("stop_loss_order")):
-        protection_status = "protected"
+        # Redis order IDs are not proof that the protective order remains open
+        # at the broker. Keep the dashboard conservative until broker state is
+        # available to this read-only snapshot.
+        protection_status = "unverified"
     elif stop_loss is not None:
         protection_status = "pending"
     else:
