@@ -1440,7 +1440,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
                     trade_id = self.trades[symbol].get("trade_id") or symbol
                     self.trades[symbol]["current_price"] = current_price
-                    self.update_trade_fields(
+                    self.merge_trade_fields(
                         trade_id, {"current_price": current_price}
                     )
 

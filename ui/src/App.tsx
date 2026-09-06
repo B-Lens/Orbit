@@ -39,7 +39,7 @@ function App() {
   const logs = useMemo(() => (snapshot?.logs ?? []).filter((item) => (level === "ALL" || item.level.toUpperCase() === level) && `${item.message} ${item.context ?? ""}`.toLowerCase().includes(query.toLowerCase())), [snapshot, level, query]);
   const sentimentScore = snapshot?.sentiment.confidence == null ? null : Math.round(snapshot.sentiment.confidence * 100);
   const live = snapshot?.runtime.status === "online" && !error;
-  const protectedCount = snapshot?.positions.filter((item) => /protected/i.test(item.protection_status)).length ?? 0;
+  const protectedCount = snapshot?.positions.filter((item) => item.protection_status.toLowerCase() === "protected").length ?? 0;
   const pnl = snapshot?.positions.reduce((sum, item) => sum + (item.unrealized_pnl ?? 0), 0) ?? 0;
   const modes = snapshot?.risk_execution.active_modes ?? [];
 
