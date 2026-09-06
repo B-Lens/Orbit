@@ -1297,6 +1297,26 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     symbol,
                 )
                 return False
+            active_regular_orders = [
+                order
+                for order in self.order_manager.get_open_orders(
+                    symbol, raise_on_error=True
+                )
+                if str(order.get("status", "")).upper()
+                in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}
+            ]
+            if active_regular_orders:
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "regular orders are still active: %s",
+                    trade_id,
+                    symbol,
+                    sorted(
+                        str(order.get("orderId", "unknown"))
+                        for order in active_regular_orders
+                    ),
+                )
+                return False
             open_orders = self.order_manager.get_conditional_open_orders(
                 symbol, raise_on_error=True
             )

@@ -49,6 +49,39 @@ def test_decision_event_reports_failed_durability_check() -> None:
     assert stored is False
 
 
+def test_reconciliation_block_requires_durable_matching_record() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.trade_lifecycle_collection = MagicMock()
+    handler.trade_lifecycle_collection.find_one.return_value = None
+
+    stored = handler.store_trade_reconciliation_block(
+        {
+            "trade_id": "decision-1",
+            "status": "reconciliation_blocked",
+            "reason": "ambiguous_exit_fills",
+        }
+    )
+
+    assert stored is False
+
+
+def test_reconciliation_block_rejects_unacknowledged_write() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.trade_lifecycle_collection = MagicMock()
+    handler.trade_lifecycle_collection.update_one.return_value.acknowledged = False
+
+    stored = handler.store_trade_reconciliation_block(
+        {
+            "trade_id": "decision-1",
+            "status": "reconciliation_blocked",
+            "reason": "ambiguous_exit_fills",
+        }
+    )
+
+    assert stored is False
+    handler.trade_lifecycle_collection.find_one.assert_not_called()
+
+
 def test_read_only_handler_does_not_create_or_modify_indexes() -> None:
     mongo_client = MagicMock()
 

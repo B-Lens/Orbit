@@ -622,12 +622,24 @@ class MongoHandler(ExceptionManager):
         if lifecycle is None:
             return False
         try:
-            lifecycle.update_one(
+            result = lifecycle.update_one(
                 {"trade_id": record["trade_id"]},
                 {"$setOnInsert": record},
                 upsert=True,
             )
-            return True
+            if not getattr(result, "acknowledged", True):
+                return False
+            return (
+                lifecycle.find_one(
+                    {
+                        "trade_id": record["trade_id"],
+                        "status": "reconciliation_blocked",
+                        "reason": record.get("reason"),
+                    },
+                    {"_id": 1},
+                )
+                is not None
+            )
         except Exception as exc:
             self.handle_exception(exc, "Error storing blocked trade reconciliation")
             return False

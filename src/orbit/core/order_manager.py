@@ -994,7 +994,10 @@ class OrderManager(AuthenticationManager, RedisManager):
         return None
 
     def get_open_orders(
-        self, symbol: str, orderId: Optional[str] = None
+        self,
+        symbol: str,
+        orderId: Optional[str] = None,
+        raise_on_error: bool = False,
     ) -> List[Dict[str, Any]]:
         """Return all orders for *symbol* (optionally filtered by *orderId*).
 
@@ -1015,10 +1018,14 @@ class OrderManager(AuthenticationManager, RedisManager):
             self.clientExceptionHandler(
                 symbol=symbol, error=error, Location="OrderManager -> get_open_orders"
             )
+            if raise_on_error:
+                raise
         except Exception as e:
             self.handle_exception(
                 e, context_description="Exception caught while fetching open order"
             )
+            if raise_on_error:
+                raise
         return []
 
     def get_order(self, symbol: str, order_id: int) -> Dict[str, Any]:
