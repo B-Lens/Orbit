@@ -13,7 +13,7 @@ class TestReportingLifecycle(unittest.TestCase):
     @patch("orbit.core.signal_analyzer.threading.Thread")
     @patch("orbit.core.signal_analyzer.record_runtime_activity")
     @patch("orbit.core.signal_analyzer.STRATEGY_REGISTRY")
-    def test_ohlcv_params_are_published_for_every_registered_strategy(
+    def test_ohlcv_reporting_start_failure_does_not_block_signal_generation(
         self, strategy_registry, _record_activity, thread_class, _sleep
     ):
         historical_data = pd.DataFrame(
@@ -32,6 +32,7 @@ class TestReportingLifecycle(unittest.TestCase):
         strategy_class.__module__ = "orbit.strategies.example_strategy"
         strategy_class.__name__ = "ExampleStrategy"
         strategy_registry.get.return_value = strategy_class
+        thread_class.return_value.start.side_effect = RuntimeError("thread unavailable")
 
         analyzer = SignalAnalyzer.__new__(SignalAnalyzer)
         analyzer.trading_pairs = ["ETHUSDT"]
