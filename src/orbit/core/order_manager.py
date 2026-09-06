@@ -1193,7 +1193,9 @@ class OrderManager(AuthenticationManager, RedisManager):
                 return None, None
 
             existing_data = self.mongo_handler.get_mongo_historical_data(
-                symbol, interval="15m"
+                symbol,
+                interval="15m",
+                execution_mode=self.execution_settings.mode_for(symbol).value,
             )
 
             if side == "BUY":
