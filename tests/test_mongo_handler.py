@@ -34,6 +34,17 @@ def test_decision_event_identity_prevents_duplicate_append() -> None:
     }
 
 
+def test_read_only_handler_does_not_create_or_modify_indexes() -> None:
+    mongo_client = MagicMock()
+
+    handler = MongoHandler(mongo_client=mongo_client, read_only=True)
+
+    assert handler.decision_collection is mongo_client["orbit"]["trade_decisions"]
+    handler.collection.create_index.assert_not_called()
+    handler.decision_collection.create_index.assert_not_called()
+    handler.income_collection.drop_index.assert_not_called()
+
+
 def test_data_collector_converts_binance_klines() -> None:
     handler = MongoHandler.__new__(MongoHandler)
     handler.get_binance_klines = MagicMock(

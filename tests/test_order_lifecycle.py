@@ -52,6 +52,20 @@ class TestOrderManager(unittest.TestCase):
         with self.assertRaisesRegex(ConnectionError, "redis unavailable"):
             manager.merge_trade_fields("decision-1", {"orderId": 123})
 
+    def test_existing_trade_field_merge_does_not_create_missing_trade(self):
+        redis_client = MagicMock()
+        redis_client.eval.return_value = 0
+        manager = RedisManager(redis_client=redis_client)
+
+        updated = manager.merge_existing_trade_fields(
+            "decision-1", {"current_price": 123.0}
+        )
+
+        self.assertFalse(updated)
+        script = redis_client.eval.call_args.args[0]
+        self.assertIn("if not current then", script)
+        self.assertIn("return 0", script)
+
     def test_exchange_filter_normalization(self):
         self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 12.34), 12.3)
         self.assertEqual(self.manager.adjust_quantity_step("BTCUSDT", 0.0056), 0.005)
@@ -619,6 +633,18 @@ class TestTradeChecker(unittest.TestCase):
         )
         checker.delete_trade_with_orders.assert_not_called()
         checker.order_manager.cancel_algo_conditional_order.assert_not_called()
+
+    def test_current_price_persistence_failure_does_not_escape_monitoring(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.merge_existing_trade_fields = MagicMock(
+            side_effect=ConnectionError("redis unavailable")
+        )
+
+        checker._persist_current_price("ETHUSDT", 2500.0)
+
+        checker.merge_existing_trade_fields.assert_called_once_with(
+            "ETHUSDT", {"current_price": 2500.0}
+        )
 
     def test_stop_threshold_waits_for_flat_position_before_cleanup(self):
         checker = TradeChecker.__new__(TradeChecker)

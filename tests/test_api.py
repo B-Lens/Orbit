@@ -3,7 +3,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from orbit.api import get_notifications, get_status
+from orbit.api import (
+    _risk_execution_state,
+    get_command_center,
+    get_notifications,
+    get_status,
+)
+from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.redis_manager import runtime_heartbeat_key
 
 
@@ -64,3 +70,110 @@ def test_notifications_returns_mirrored_discord_events(list_feed: MagicMock) -> 
     assert response.notifications[0].description == "Order placed successfully"
     assert len(response.notifications) == 1
     list_feed.assert_called_once_with(25)
+
+
+@patch("orbit.api.load_config", return_value={"risk_policy": {"max_leverage": 5}})
+@patch("orbit.api.ExecutionSettings.from_config")
+def test_risk_execution_state_uses_validated_execution_settings(
+    from_config: MagicMock, _load_config: MagicMock
+) -> None:
+    from_config.return_value = ExecutionSettings(
+        {"BTCUSDT": ExecutionMode.TESTNET}
+    )
+
+    state = _risk_execution_state()
+
+    assert state["can_submit_orders"] is True
+    assert state["active_modes"] == ["testnet"]
+    assert state["asset_modes"] == {"BTCUSDT": "testnet"}
+
+
+@patch("orbit.api.load_config", return_value={})
+@patch("orbit.api.ExecutionSettings.from_config")
+def test_risk_execution_state_fails_closed_on_invalid_configuration(
+    from_config: MagicMock, _load_config: MagicMock
+) -> None:
+    from_config.side_effect = RuntimeError("credentials are required")
+
+    state = _risk_execution_state()
+
+    assert state["can_submit_orders"] is False
+    assert state["active_modes"] == []
+    assert state["asset_modes"] == {}
+
+
+@patch("orbit.api._risk_execution_state")
+@patch("orbit.api._recent_signals")
+@patch("orbit.api.read_observability")
+@patch("orbit.api.read_sentiment")
+@patch("orbit.api.read_positions")
+@patch("orbit.api.read_runtime_state")
+@patch("orbit.api.create_redis_client")
+def test_command_center_uses_live_state_not_notification_feed(
+    create_client: MagicMock,
+    read_runtime: MagicMock,
+    read_position_state: MagicMock,
+    read_sentiment_state: MagicMock,
+    read_observability_state: MagicMock,
+    recent_signals: MagicMock,
+    risk_state: MagicMock,
+) -> None:
+    client = create_client.return_value
+    read_runtime.return_value = {
+        "status": "online",
+        "current_activity": "analyzing_signal",
+        "detail": "BTCUSDT",
+        "updated_at": "2026-09-06T00:00:00+00:00",
+        "runtimes": [
+            {
+                "runtime_id": "default",
+                "status": "online",
+                "heartbeat_at": "2026-09-06T00:00:00+00:00",
+            }
+        ],
+    }
+    read_position_state.return_value = [
+        {
+            "trade_id": "decision-1",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "quantity": 0.1,
+            "entry_price": 60_000,
+            "current_price": 61_000,
+            "unrealized_pnl": 100,
+            "stop_loss": 59_000,
+            "take_profit": 63_000,
+            "protection_status": "protected",
+            "execution_mode": None,
+            "entered_at": None,
+            "exit_pending": False,
+        }
+    ]
+    read_sentiment_state.return_value = {
+        "effective": "BULLISH",
+        "confidence": 0.8,
+    }
+    read_observability_state.return_value = ([], [])
+    recent_signals.return_value = [
+        {
+            "decision_id": "decision-2",
+            "symbol": "ETHUSDT",
+            "signal": None,
+            "outcome": "no_signal",
+        }
+    ]
+    risk_state.return_value = {
+        "active_modes": ["testnet"],
+        "can_submit_orders": True,
+        "asset_modes": {"BTCUSDT": "testnet"},
+        "risk_limits": {"max_leverage": 5},
+    }
+
+    response = get_command_center()
+
+    assert response.runtime.current_activity == "analyzing_signal"
+    assert response.positions[0].execution_mode == "testnet"
+    assert response.signals[0].outcome == "no_signal"
+    assert response.sentiment.effective == "BULLISH"
+    client.ping.assert_called_once_with()
+    client.close.assert_called_once_with()

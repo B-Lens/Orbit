@@ -217,6 +217,36 @@ class RedisManager:
             )
             raise
 
+    def merge_existing_trade_fields(
+        self, trade_id: str, updates: Dict[str, Any]
+    ) -> bool:
+        """Atomically merge fields only when the persisted trade still exists."""
+        script = """
+        local current = redis.call('GET', KEYS[1])
+        if not current then
+            return 0
+        end
+        local trade = cjson.decode(current)
+        local updates = cjson.decode(ARGV[1])
+        for key, value in pairs(updates) do
+            trade[key] = value
+        end
+        redis.call('SET', KEYS[1], cjson.encode(trade))
+        return 1
+        """
+        try:
+            result = self.redis_client.eval(
+                script, 1, _trade_key(trade_id), json.dumps(updates)
+            )
+            return bool(result)
+        except Exception as error:
+            logger.exception(
+                "[Redis] merge_existing_trade_fields(%s) failed: %s",
+                trade_id,
+                error,
+            )
+            raise
+
     def delete_trade_with_orders(self, trade_id: str) -> None:
         """Remove ``trade:{trade_id}`` and all associated ``order:*`` keys.
 
