@@ -369,7 +369,7 @@ class BinanceAutomation(ExceptionManager):
             f"{symbol} {action}",
         )
 
-        with position_lifecycle_lock(symbol):
+        with position_lifecycle_lock(symbol, self.order_manager.redis_client):
             order_response, quantity, order_request = self.order_manager.place_order(
                 self.risk_management,
                 symbol,

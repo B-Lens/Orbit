@@ -730,6 +730,34 @@ class TestTradeChecker(unittest.TestCase):
         checker.mongo_handler.store_trade_reconciliation_block.assert_not_called()
         checker.delete_trade_with_orders.assert_not_called()
 
+    def test_ambiguous_trade_is_retained_when_distributed_lock_is_busy(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"SKYUSDT": {"trade_id": "decision-1"}}
+        checker.redis_client = MagicMock()
+        distributed_lock = checker.redis_client.lock.return_value
+        distributed_lock.acquire.return_value = False
+        checker.order_manager = MagicMock()
+        checker.mongo_handler = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        error = TradeReconciliationError(
+            "Binance exit fills were ambiguous for SKYUSDT",
+            "ambiguous_exit_fills",
+        )
+
+        archived = checker._quarantine_flat_trade(
+            "SKYUSDT", "decision-1", {"trade_id": "decision-1"}, error
+        )
+
+        self.assertFalse(archived)
+        checker.redis_client.lock.assert_called_once_with(
+            "orbit:position-lifecycle-lock:SKYUSDT",
+            timeout=120,
+            blocking_timeout=10,
+        )
+        checker.order_manager.get_open_orders.assert_not_called()
+        checker.mongo_handler.store_trade_reconciliation_block.assert_not_called()
+        checker.delete_trade_with_orders.assert_not_called()
+
     def test_failed_ambiguous_quarantine_remains_a_reconciliation_failure(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()

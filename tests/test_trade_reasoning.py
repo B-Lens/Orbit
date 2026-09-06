@@ -103,7 +103,7 @@ def test_entry_order_is_serialized_with_position_cleanup() -> None:
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
             "orbit.core.main.position_lifecycle_lock",
-            lambda symbol: lifecycle_lock(),
+            lambda symbol, redis_client=None: lifecycle_lock(),
         )
         monkeypatch.setattr("orbit.core.main.time.sleep", lambda _seconds: None)
         automation.process_signal(_signal())

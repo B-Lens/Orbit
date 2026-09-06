@@ -26,6 +26,7 @@ import time
 import logging
 import math
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -52,12 +53,37 @@ _POSITION_RISK_RETRY_DELAY = 1.0
 _INCOME_SETTLEMENT_GRACE_MS = 60_000
 _POSITION_LIFECYCLE_LOCKS: Dict[str, Any] = {}
 _POSITION_LIFECYCLE_LOCKS_GUARD = threading.Lock()
+_POSITION_LIFECYCLE_LOCK_TIMEOUT = 120
+_POSITION_LIFECYCLE_LOCK_WAIT = 10
 
 
-def position_lifecycle_lock(symbol: str) -> Any:
-    """Return the process-wide lock serializing entry and cleanup for a symbol."""
+@contextmanager
+def position_lifecycle_lock(
+    symbol: str, redis_client: Optional[redis.StrictRedis] = None
+) -> Any:
+    """Serialize entry and cleanup for a symbol across threads and processes."""
     with _POSITION_LIFECYCLE_LOCKS_GUARD:
-        return _POSITION_LIFECYCLE_LOCKS.setdefault(symbol, threading.RLock())
+        local_lock = _POSITION_LIFECYCLE_LOCKS.setdefault(symbol, threading.RLock())
+
+    with local_lock:
+        if redis_client is None:
+            yield
+            return
+
+        distributed_lock = redis_client.lock(
+            f"orbit:position-lifecycle-lock:{symbol}",
+            timeout=_POSITION_LIFECYCLE_LOCK_TIMEOUT,
+            blocking_timeout=_POSITION_LIFECYCLE_LOCK_WAIT,
+        )
+        acquired = distributed_lock.acquire(blocking=True)
+        if not acquired:
+            raise RuntimeError(
+                f"Could not acquire the position lifecycle lock for {symbol}"
+            )
+        try:
+            yield
+        finally:
+            distributed_lock.release()
 
 
 class TradeReconciliationError(RuntimeError):
@@ -1255,10 +1281,21 @@ class TradeChecker(AuthenticationManager, RedisManager):
         error: TradeReconciliationError,
     ) -> bool:
         """Serialize quarantine against replacement-position creation."""
-        with position_lifecycle_lock(symbol):
-            return self._quarantine_flat_trade_locked(
-                symbol, trade_id, persisted_trade, error
+        try:
+            with position_lifecycle_lock(
+                symbol, getattr(self, "redis_client", None)
+            ):
+                return self._quarantine_flat_trade_locked(
+                    symbol, trade_id, persisted_trade, error
+                )
+        except Exception:
+            logger.exception(
+                "Preserving reconciliation-blocked trade %s for %s because its "
+                "lifecycle lock could not be acquired or released",
+                trade_id,
+                symbol,
             )
+            return False
 
     def _quarantine_flat_trade_locked(
         self,
