@@ -572,7 +572,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         price: Optional[float] = None,
         sl: Optional[float] = None,
         target: Optional[float] = None,
-        leverage: int = 2,
+        leverage: int = 5,
         quantity: Optional[float] = None,
         ros: bool = False,
         trade_id: Optional[str] = None,
@@ -1163,7 +1163,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         symbol: str,
         side: str,
         price: Optional[float] = None,
-        leverage: int = 2,
+        leverage: int = 5,
         trade_id: Optional[str] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
         """Place a *bridge* limit order sized by max-loss and swing stop-loss.
@@ -1184,8 +1184,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                 price = self.get_future_symbol_price(symbol=symbol)
 
             effective_trade_id = trade_id or symbol
-            future_leverage = 10 if symbol == "BTCUSDT" else leverage
-
             if self.mongo_handler is None:
                 self.send_alerts(
                     data=None,
@@ -1224,14 +1222,14 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 return None, None
 
-            quantity = (self.MAX_LOSS_PER_BRIDGE / future_leverage) / price_diff
+            quantity = (self.MAX_LOSS_PER_BRIDGE / leverage) / price_diff
 
             order_response, used_qty, order_request = self.place_order(
                 risk_management=risk_management,
                 symbol=symbol,
                 side=side,
                 price=price,
-                leverage=future_leverage,
+                leverage=leverage,
                 quantity=quantity,
                 ros=True,
                 trade_id=effective_trade_id,

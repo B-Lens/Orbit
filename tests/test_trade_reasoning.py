@@ -55,6 +55,27 @@ def test_core_blocks_llm_rejected_trade_and_persists_reasoning() -> None:
     assert event["llm_reasoning"]["reasoning"] == "weak setup"
 
 
+def test_core_uses_configured_leverage_for_every_asset() -> None:
+    order_manager = MagicMock()
+    order_manager.place_order.return_value = (None, None, None)
+    trade_reasoner = MagicMock()
+    trade_reasoner.review_entry.return_value = EntryReasoning(True, "aligned", 0.9)
+    automation = BinanceAutomation.__new__(BinanceAutomation)
+    automation.order_manager = order_manager
+    automation._trade_reasoner = trade_reasoner
+    automation.future_leverage = 5
+    automation.risk_management = {}
+    automation.send_logs = MagicMock()
+    automation.send_alerts = MagicMock()
+
+    signal = {**_signal(), "symbol": "ETHUSDT"}
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("orbit.core.main.time.sleep", lambda _seconds: None)
+        automation.process_signal(signal)
+
+    assert order_manager.place_order.call_args.args[6] == 5
+
+
 def test_distribution_calculates_requested_metrics() -> None:
     result = MongoHandler._distribution([1.0, 2.0, 3.0, 4.0])
 

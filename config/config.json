@@ -18,7 +18,7 @@
       "SOLUSDT": 0.03,
       "stop_loss_percent":1
     },
-    "FUTURE_LEVERAGE": 2,
+    "FUTURE_LEVERAGE": 5,
     "risk_policy": {
       "max_leverage": 5,
       "max_position_notional_pct": 0.25,

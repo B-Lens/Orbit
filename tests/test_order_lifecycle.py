@@ -262,6 +262,22 @@ class TestOrderManager(unittest.TestCase):
         )
         self.assertEqual(decision_id, "decision-1")
         self.assertEqual(event["reason"], "minimum_notional")
+        self.assertEqual(
+            self.manager.calculate_risk_position_size.call_args.kwargs["leverage"],
+            5,
+        )
+
+    @patch("orbit.core.order_manager.get_swing_sl", return_value=99.0)
+    def test_bridge_orders_use_five_x_leverage_for_btc(self, _get_swing_sl):
+        self.manager.mongo_handler.get_mongo_historical_data.return_value = MagicMock()
+        self.manager.place_order = MagicMock(return_value=(None, None, None))
+
+        response = self.manager.place_bridge_order(
+            {"stop_loss_percent": 1}, "BTCUSDT", "BUY", price=100.0
+        )
+
+        self.assertEqual(response, (None, None))
+        self.assertEqual(self.manager.place_order.call_args.kwargs["leverage"], 5)
 
     def test_risk_guard_evaluates_normalized_protective_prices(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
