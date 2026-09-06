@@ -6,7 +6,12 @@ from binance.error import ClientError
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.order_manager import OrderManager
 from orbit.core.redis_manager import RedisManager
-from orbit.core.trade_checker import TradeChecker, is_stop_order, is_take_profit_order
+from orbit.core.trade_checker import (
+    TradeChecker,
+    TradeReconciliationError,
+    is_stop_order,
+    is_take_profit_order,
+)
 
 
 def _order_manager():
@@ -445,6 +450,61 @@ class TestTradeChecker(unittest.TestCase):
         )
         checker.set_cooldown.assert_called_once_with("ETHUSDT")
         checker.delete_trade_with_orders.assert_called_once_with("decision-1")
+
+    def test_ambiguous_flat_trade_is_archived_without_blocking_other_symbols(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {}
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(return_value=[])
+        checker.scan_trade_keys = MagicMock(
+            return_value=["trade:SKYUSDT", "trade:ETHUSDT"]
+        )
+        records = {
+            "SKYUSDT": {
+                "trade_id": "SKYUSDT",
+                "symbol": "SKYUSDT",
+                "positionSide": "BUY",
+                "quantity": 10.0,
+            },
+            "ETHUSDT": {
+                "trade_id": "ETHUSDT",
+                "symbol": "ETHUSDT",
+                "positionSide": "BUY",
+                "quantity": 0.1,
+            },
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        ambiguity = TradeReconciliationError(
+            "Binance exit fills were ambiguous for SKYUSDT",
+            "ambiguous_exit_fills",
+        )
+        checker._exit_trade = MagicMock(
+            side_effect=lambda symbol, _trade_id: (
+                (_ for _ in ()).throw(ambiguity) if symbol == "SKYUSDT" else True
+            )
+        )
+        checker.mongo_handler = MagicMock()
+        checker.mongo_handler.store_trade_reconciliation_block.return_value = True
+        checker.delete_trade_with_orders = MagicMock()
+
+        self.assertEqual(checker.activePosition_coolMaker(), {})
+
+        self.assertEqual(checker._exit_trade.call_count, 2)
+        block = checker.mongo_handler.store_trade_reconciliation_block.call_args.args[0]
+        self.assertEqual(block["trade_id"], "SKYUSDT")
+        self.assertEqual(block["reason"], "ambiguous_exit_fills")
+        checker.mongo_handler.append_decision_event.assert_called_once_with(
+            "SKYUSDT",
+            {
+                "event_id": "reconciliation_blocked:SKYUSDT",
+                "status": "reconciliation_blocked",
+                "reason": "ambiguous_exit_fills",
+                "error": "Binance exit fills were ambiguous for SKYUSDT",
+            },
+        )
+        checker.delete_trade_with_orders.assert_called_once_with("SKYUSDT")
 
     def test_position_reconciliation_resolves_duplicate_records_by_open_order(self):
         checker = TradeChecker.__new__(TradeChecker)

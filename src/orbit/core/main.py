@@ -60,6 +60,7 @@ RUNTIME_HEARTBEAT_INTERVAL: int = 10
 RUNTIME_HEARTBEAT_TTL: int = 30
 TRADE_CHECKER_STALE_AFTER: int = 60
 SIGNAL_ANALYSIS_STALE_AFTER: int = SIGNAL_ANALYSIS_SLEEP + 300
+TRADE_CHECKER_RESTART_DELAY: int = 120
 
 logger = logging.getLogger("Orbit")
 
@@ -509,23 +510,27 @@ class BinanceAutomation(ExceptionManager):
     def start_trade_checker(self) -> None:
         """Background trade-monitor thread entry-point."""
         self.send_logs(data=None, description="Starting trade checker thread")
-        try:
-            record_runtime_activity(
-                self.order_manager.redis_client,
-                "monitoring_positions",
-                "Refreshing broker positions and protective orders",
-            )
-            self.trades = self.trade_checker.activePosition_coolMaker()
-            time.sleep(3)
-            self.trade_checker.monitor_trades(
-                self.trade_checker_pair,
-                self.risk_management,
-                lambda: self.mark_runtime_progress("trade_checker"),
-            )
-        except Exception as e:
-            self.handle_exception(
-                e, context_description="Exception in trade checker thread"
-            )
+        while True:
+            try:
+                record_runtime_activity(
+                    self.order_manager.redis_client,
+                    "monitoring_positions",
+                    "Refreshing broker positions and protective orders",
+                )
+                self.trades = self.trade_checker.activePosition_coolMaker()
+                self.mark_runtime_progress("trade_checker")
+                time.sleep(3)
+                self.trade_checker.monitor_trades(
+                    self.trade_checker_pair,
+                    self.risk_management,
+                    lambda: self.mark_runtime_progress("trade_checker"),
+                )
+                raise RuntimeError("Trade checker monitor exited unexpectedly")
+            except Exception as e:
+                self.handle_exception(
+                    e, context_description="Exception in trade checker thread"
+                )
+                time.sleep(TRADE_CHECKER_RESTART_DELAY)
 
     def handle_crons(self) -> None:
         """Start the sentiment cron in a background daemon thread."""
@@ -569,14 +574,21 @@ class BinanceAutomation(ExceptionManager):
         Args:
             check_interval: Seconds between health checks.
         """
+        stopped_workers: set[int] = set()
         while True:
             for worker in self.workers_to_monitor:
                 if not worker.is_alive():
-                    self.send_alerts(
-                        data=None, description=f"Worker {worker.name} has stopped!"
-                    )
-                    logger.error(f"Worker {worker.name} has stopped.")
-                logger.info(f"Worker {worker.name} is alive.")
+                    worker_id = id(worker)
+                    if worker_id not in stopped_workers:
+                        self.send_alerts(
+                            data=None,
+                            description=f"Worker {worker.name} has stopped!",
+                        )
+                        logger.error("Worker %s has stopped.", worker.name)
+                        stopped_workers.add(worker_id)
+                else:
+                    stopped_workers.discard(id(worker))
+                    logger.info("Worker %s is alive.", worker.name)
             time.sleep(check_interval)
 
     def publish_runtime_heartbeat(
