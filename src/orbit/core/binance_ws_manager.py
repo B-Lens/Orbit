@@ -57,12 +57,12 @@ _PING_TIMEOUT: int = 20          # seconds to wait for pong
 
 
 class BinanceWSManager:
-    """Fault-tolerant WebSocket manager for Binance Futures trade streams.
+    """Fault-tolerant WebSocket manager for Binance Futures ticker streams.
 
     Args:
         trading_pairs: List of symbols to subscribe to (e.g. ``["BTCUSDT"]``).
         on_price_update: Callback invoked with ``(symbol, price, timestamp)``
-            whenever a new trade tick arrives.
+            whenever a new ticker update arrives.
         on_status_change: Optional callback invoked with a human-readable
             status string on connect / disconnect / error events.
         stale_threshold: Seconds without a message before the connection is
