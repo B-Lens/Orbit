@@ -1267,6 +1267,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
             "closed_at": datetime.now(timezone.utc),
         }
         try:
+            if self._symbol_has_broker_exposure(symbol):
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "broker exposure reopened",
+                    trade_id,
+                    symbol,
+                )
+                return False
             protective_order_ids = {
                 str(persisted_trade.get(field))
                 for field in ("sl_order_id", "tp_order_id")
@@ -1335,6 +1343,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     symbol,
                 )
                 return False
+            if self._symbol_has_broker_exposure(symbol):
+                logger.error(
+                    "Preserving reconciliation-blocked trade %s for %s because "
+                    "broker exposure reopened during quarantine",
+                    trade_id,
+                    symbol,
+                )
+                return False
         except Exception:
             logger.exception(
                 "Preserving reconciliation-blocked trade %s for %s because its "
@@ -1354,6 +1370,20 @@ class TradeChecker(AuthenticationManager, RedisManager):
             error,
         )
         return True
+
+    def _symbol_has_broker_exposure(self, symbol: str) -> bool:
+        """Return whether any active execution environment has symbol exposure."""
+        clients = {
+            id(self.order_manager.futures_clients[mode]):
+            self.order_manager.futures_clients[mode]
+            for mode in self.order_manager.execution_settings.active_modes
+        }
+        return any(
+            str(position.get("symbol", "")) == symbol
+            and float(position.get("positionAmt", 0) or 0) != 0
+            for client in clients.values()
+            for position in self._get_position_risk(client)
+        )
 
     def activePosition_coolMaker(self) -> Dict[str, Dict[str, Any]]:
         """Discover Futures positions with non-zero broker exposure."""

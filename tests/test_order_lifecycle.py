@@ -626,6 +626,7 @@ class TestTradeChecker(unittest.TestCase):
         checker = TradeChecker.__new__(TradeChecker)
         checker.trades = {}
         checker.order_manager = MagicMock()
+        checker._symbol_has_broker_exposure = MagicMock(return_value=False)
         checker.order_manager.get_conditional_open_orders.return_value = [
             {"algoId": "101", "orderType": "STOP_MARKET"}
         ]
@@ -654,6 +655,7 @@ class TestTradeChecker(unittest.TestCase):
         checker = TradeChecker.__new__(TradeChecker)
         checker.trades = {}
         checker.order_manager = MagicMock()
+        checker._symbol_has_broker_exposure = MagicMock(return_value=False)
         checker.order_manager.get_conditional_open_orders.return_value = []
         checker.mongo_handler = MagicMock()
         checker.mongo_handler.store_trade_reconciliation_block.return_value = True
@@ -690,6 +692,33 @@ class TestTradeChecker(unittest.TestCase):
 
         with self.assertRaises(TradeReconciliationError):
             checker.activePosition_coolMaker()
+
+    def test_ambiguous_trade_is_retained_if_exposure_reopens_during_quarantine(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"SKYUSDT": {"trade_id": "decision-1"}}
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker.mongo_handler = MagicMock()
+        checker.mongo_handler.store_trade_reconciliation_block.return_value = True
+        checker.mongo_handler.append_decision_event.return_value = True
+        checker._symbol_has_broker_exposure = MagicMock(
+            side_effect=[False, True]
+        )
+        checker.set_cooldown = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        error = TradeReconciliationError(
+            "Binance exit fills were ambiguous for SKYUSDT",
+            "ambiguous_exit_fills",
+        )
+
+        archived = checker._quarantine_flat_trade(
+            "SKYUSDT", "decision-1", {"trade_id": "decision-1"}, error
+        )
+
+        self.assertFalse(archived)
+        checker.set_cooldown.assert_not_called()
+        checker.delete_trade_with_orders.assert_not_called()
+        self.assertIn("SKYUSDT", checker.trades)
 
 
     @patch("orbit.core.trade_checker.time.sleep", side_effect=KeyboardInterrupt)
