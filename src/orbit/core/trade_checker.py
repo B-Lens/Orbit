@@ -22,8 +22,9 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 **injected** through the constructor.
 """
 
-import time
 import logging
+import math
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -212,24 +213,33 @@ class TradeChecker(AuthenticationManager, RedisManager):
         """Return a fresh price for *symbol*, falling back to the REST API."""
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
-            if time.time() - last_updated > 2:
+            price_age = time.time() - last_updated
+            if price_age <= 2 and math.isfinite(current_price) and current_price > 0:
+                return current_price
+
+            if price_age > 2:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
-                    f"({time.time() - last_updated:.2f}s old) — falling back to REST."
+                    f"({price_age:.2f}s old) — falling back to REST."
                 )
-                try:
-                    current_price = self.get_future_symbol_price(symbol=symbol)
-                    self.live_prices[symbol] = (current_price, time.time())
-                except Exception:
-                    pass
-            return current_price
+            else:
+                logger.warning(
+                    f"[WARN] Live price for {symbol} is invalid — falling back to REST."
+                )
 
-        logger.warning(f"[WARN] Live price for {symbol} not found — fetching via REST.")
+        else:
+            logger.warning(
+                f"[WARN] Live price for {symbol} not found — fetching via REST."
+            )
+
         try:
             current_price = self.get_future_symbol_price(symbol=symbol)
+            if not math.isfinite(current_price) or current_price <= 0:
+                raise ValueError(f"Invalid REST price for {symbol}: {current_price!r}")
             self.live_prices[symbol] = (current_price, time.time())
             return current_price
-        except Exception:
+        except Exception as error:
+            logger.warning(f"[WARN] Could not fetch a valid price for {symbol}: {error}")
             return None
 
     # ------------------------------------------------------------------
