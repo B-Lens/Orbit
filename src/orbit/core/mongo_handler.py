@@ -34,6 +34,8 @@ except Exception:  # pragma: no cover - handled gracefully if pymongo not instal
 logger = logging.getLogger("Orbit")
 
 OHLCV_COLLECTION_NAME: str = "OHLCVData"
+TESTNET_OHLCV_COLLECTION_NAME: str = "OHLCVDataTestnet"
+TESTNET_FUTURES_API_URL: str = "https://demo-fapi.binance.com"
 
 
 def _epoch_to_seconds(ts: int) -> int:
@@ -85,6 +87,7 @@ class MongoHandler(ExceptionManager):
             )
             self.db = self._mongo_client[db_name]
             self.collection = self.db[OHLCV_COLLECTION_NAME]
+            self.testnet_collection = self.db[TESTNET_OHLCV_COLLECTION_NAME]
             self.decision_collection = self.db["trade_decisions"]
             self.trade_lifecycle_collection = self.db["trade_lifecycle"]
             self.trade_metrics_collection = self.db["trade_metrics"]
@@ -92,6 +95,14 @@ class MongoHandler(ExceptionManager):
             if read_only:
                 return
             self.collection.create_index(
+                [
+                    ("symbol", ASCENDING),
+                    ("interval", ASCENDING),
+                    ("timestamp", ASCENDING),
+                ],
+                unique=True,
+            )
+            self.testnet_collection.create_index(
                 [
                     ("symbol", ASCENDING),
                     ("interval", ASCENDING),
@@ -174,8 +185,13 @@ class MongoHandler(ExceptionManager):
     # Data retrieval
     # ------------------------------------------------------------------
 
+    def _ohlcv_collection(self, execution_mode: str) -> Any:
+        if execution_mode == "testnet":
+            return getattr(self, "testnet_collection", None)
+        return self.collection
+
     def get_mongo_historical_data(
-        self, symbol: str, interval: str = "15m"
+        self, symbol: str, interval: str = "15m", execution_mode: str = "live"
     ) -> pd.DataFrame:
         """Retrieve the last 15 days of OHLCV data from MongoDB.
 
@@ -187,7 +203,8 @@ class MongoHandler(ExceptionManager):
             A :class:`~pandas.DataFrame` with OHLCV columns, or an empty
             frame when no data is available.
         """
-        if self.collection is None:
+        collection = self._ohlcv_collection(execution_mode)
+        if collection is None:
             return pd.DataFrame()
         try:
             end_ts = int(time.time())
@@ -197,7 +214,7 @@ class MongoHandler(ExceptionManager):
                 "interval": interval,
                 "timestamp": {"$gte": start_ts},
             }
-            cursor = self.collection.find(query, {"_id": 0}).sort(
+            cursor = collection.find(query, {"_id": 0}).sort(
                 "timestamp", ASCENDING
             )
             items = list(cursor)
@@ -216,7 +233,12 @@ class MongoHandler(ExceptionManager):
     # ------------------------------------------------------------------
 
     def get_binance_klines(
-        self, symbol: str, interval: str, start_time: int, end_time: int
+        self,
+        symbol: str,
+        interval: str,
+        start_time: int,
+        end_time: int,
+        execution_mode: str = "live",
     ) -> List[Any]:
         """Fetch kline (candlestick) data from the Binance REST API.
 
@@ -232,12 +254,16 @@ class MongoHandler(ExceptionManager):
         Returns:
             A list of raw kline arrays, or an empty list on failure.
         """
-        lang, _ = locale.getdefaultlocale()
-        url = (
-            "https://api.binance.us/api/v3/klines"
-            if lang == "en_US"
-            else "https://api.binance.com/api/v3/klines"
-        )
+        if execution_mode == "testnet":
+            base_url = os.getenv("BINANCE_FUTURES_TESTNET_URL", TESTNET_FUTURES_API_URL)
+            url = f"{base_url.rstrip('/')}/fapi/v1/klines"
+        else:
+            lang, _ = locale.getdefaultlocale()
+            url = (
+                "https://api.binance.us/api/v3/klines"
+                if lang == "en_US"
+                else "https://api.binance.com/api/v3/klines"
+            )
         params = {
             "symbol": symbol,
             "interval": interval,
@@ -283,7 +309,11 @@ class MongoHandler(ExceptionManager):
         return []
 
     def data_collector(
-        self, symbol: str, interval: str = "15m", start_time: Optional[int] = None
+        self,
+        symbol: str,
+        interval: str = "15m",
+        start_time: Optional[int] = None,
+        execution_mode: str = "live",
     ) -> pd.DataFrame:
         """Collect OHLCV data from Binance for *symbol* and return a DataFrame.
 
@@ -307,7 +337,11 @@ class MongoHandler(ExceptionManager):
 
         while current_time < end_time:
             data = self.get_binance_klines(
-                symbol, interval, start_time=current_time, end_time=end_time
+                symbol,
+                interval,
+                start_time=current_time,
+                end_time=end_time,
+                execution_mode=execution_mode,
             )
             if not data:
                 logger.warning(
@@ -356,7 +390,9 @@ class MongoHandler(ExceptionManager):
 
         return df
 
-    def handle_mongo_data(self, symbol: str) -> pd.DataFrame:
+    def handle_mongo_data(
+        self, symbol: str, execution_mode: str = "live"
+    ) -> pd.DataFrame:
         """Load cached data from Mongo, fetch missing candles, persist, and return.
 
         This is the primary entry-point used by strategies and the trade
@@ -368,7 +404,9 @@ class MongoHandler(ExceptionManager):
         Returns:
             A timestamp-indexed :class:`~pandas.DataFrame` with OHLCV columns.
         """
-        existing_data = self.get_mongo_historical_data(symbol, interval="15m")
+        existing_data = self.get_mongo_historical_data(
+            symbol, interval="15m", execution_mode=execution_mode
+        )
 
         required_start_time = None
         if not existing_data.empty:
@@ -391,7 +429,12 @@ class MongoHandler(ExceptionManager):
         timestamp_ms = (
             int(required_start_time.timestamp() * 1000) if required_start_time else None
         )
-        new_data = self.data_collector(symbol, interval="15m", start_time=timestamp_ms)
+        new_data = self.data_collector(
+            symbol,
+            interval="15m",
+            start_time=timestamp_ms,
+            execution_mode=execution_mode,
+        )
         new_data = new_data.iloc[:-1]
 
         historical_data = (
@@ -408,7 +451,9 @@ class MongoHandler(ExceptionManager):
             historical_data_db["timestamp"] = (
                 historical_data_db["timestamp"].astype("int64") // 1_000_000_000
             )
-            self.store_historical_data(symbol, historical_data_db)
+            self.store_historical_data(
+                symbol, historical_data_db, execution_mode=execution_mode
+            )
 
         return historical_data
 
@@ -677,7 +722,11 @@ class MongoHandler(ExceptionManager):
             return 0.0
 
     def store_historical_data(
-        self, symbol: str, df: pd.DataFrame, interval: str = "15m"
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        interval: str = "15m",
+        execution_mode: str = "live",
     ) -> None:
         """Persist OHLCV rows into MongoDB with a 60-day TTL.
 
@@ -690,7 +739,8 @@ class MongoHandler(ExceptionManager):
                 ``low``, ``close``, ``volume`` columns.
             interval: Candle interval string.
         """
-        if self.collection is None or df.empty:
+        collection = self._ohlcv_collection(execution_mode)
+        if collection is None or df.empty:
             if df.empty:
                 logger.info(f"No data to store for {symbol} ({interval}).")
             return
@@ -715,7 +765,7 @@ class MongoHandler(ExceptionManager):
                     }
                 )
             if records:
-                self.collection.insert_many(records, ordered=False)
+                collection.insert_many(records, ordered=False)
                 logger.info(
                     f"Stored {len(records)} records for {symbol} ({interval}) in MongoDB."
                 )

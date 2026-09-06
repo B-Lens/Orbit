@@ -136,7 +136,10 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     # deliberately excluded from the blocked-trade audit ledger.
                     continue
 
-                historical_data = self.mongo_handler.handle_mongo_data(symbol)
+                execution_mode = self.execution_settings.mode_for(symbol).value
+                historical_data = self.mongo_handler.handle_mongo_data(
+                    symbol, execution_mode=execution_mode
+                )
                 if historical_data.empty:
                     self.send_alerts(f"No historical data found for {symbol}", None)
                     self._record_decision(

@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -40,9 +40,38 @@ def test_read_only_handler_does_not_create_or_modify_indexes() -> None:
     handler = MongoHandler(mongo_client=mongo_client, read_only=True)
 
     assert handler.decision_collection is mongo_client["orbit"]["trade_decisions"]
+    assert handler.testnet_collection is mongo_client["orbit"]["OHLCVDataTestnet"]
     handler.collection.create_index.assert_not_called()
     handler.decision_collection.create_index.assert_not_called()
     handler.income_collection.drop_index.assert_not_called()
+
+
+@patch("orbit.core.mongo_handler.requests.get")
+def test_testnet_klines_use_futures_testnet_endpoint(mock_get: MagicMock) -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    response = mock_get.return_value
+    response.json.return_value = []
+
+    handler.get_binance_klines(
+        "BTCUSDT", "15m", 1_700_000_000_000, 1_700_000_900_000, "testnet"
+    )
+
+    assert mock_get.call_args.args[0] == (
+        "https://demo-fapi.binance.com/fapi/v1/klines"
+    )
+
+
+def test_testnet_ohlcv_is_stored_in_separate_collection() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.collection = MagicMock()
+    handler.testnet_collection = MagicMock()
+    frame = _ohlcv_frame(pd.Timestamp("2023-11-14 22:13:20")).reset_index()
+    frame["timestamp"] = frame["timestamp"].astype("int64") // 1_000_000_000
+
+    handler.store_historical_data("BTCUSDT", frame, execution_mode="testnet")
+
+    handler.testnet_collection.insert_many.assert_called_once()
+    handler.collection.insert_many.assert_not_called()
 
 
 def test_data_collector_converts_binance_klines() -> None:
@@ -103,7 +132,10 @@ def test_handle_mongo_data_normalizes_legacy_microsecond_timestamp() -> None:
 
     assert result.index[0] == pd.Timestamp("2023-11-14 22:13:20")
     handler.data_collector.assert_called_once_with(
-        "BTCUSDT", interval="15m", start_time=1_700_000_900_000
+        "BTCUSDT",
+        interval="15m",
+        start_time=1_700_000_900_000,
+        execution_mode="live",
     )
 
 
