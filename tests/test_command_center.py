@@ -6,10 +6,12 @@ from orbit.core.command_center import (
     CommandCenterLogHandler,
     REDIS_KEY_COMMAND_CENTER_EXCEPTIONS,
     REDIS_KEY_COMMAND_CENTER_LOGS,
+    REDIS_KEY_SENTIMENT_HISTORY,
     read_observability,
     read_positions,
     read_runtime_state,
     read_sentiment,
+    read_sentiment_history,
     record_exception,
     record_runtime_activity,
     record_sentiment_snapshot,
@@ -29,6 +31,10 @@ class FakePipeline:
 
     def lpush(self, *args: object) -> "FakePipeline":
         self.operations.append(("lpush", args))
+        return self
+
+    def set(self, *args: object) -> "FakePipeline":
+        self.operations.append(("set", args))
         return self
 
     def ltrim(self, *args: object) -> "FakePipeline":
@@ -59,7 +65,6 @@ class FakeRedis:
         yield from (key for key in self.values if key.startswith(prefix))
 
     def pipeline(self, transaction: bool = False) -> FakePipeline:
-        assert transaction is False
         return FakePipeline(self)
 
     def lpush(self, key: object, value: object) -> None:
@@ -115,6 +120,8 @@ def test_reads_runtime_positions_and_sentiment_from_live_state() -> None:
     assert positions[0]["protection_status"] == "unverified"
     assert sentiment["effective"] == "BULLISH"
     assert sentiment["confidence"] == 0.84
+    assert read_sentiment_history(client)[0]["effective"] == "BULLISH"
+    assert REDIS_KEY_SENTIMENT_HISTORY in client.lists
 
 
 def test_structured_logs_and_exceptions_are_bounded_ui_sources() -> None:
@@ -156,5 +163,5 @@ def test_observability_writes_do_not_interrupt_trading_on_redis_failure() -> Non
     record_exception(client, ValueError("bad"), "test", "trace")
 
     client.setex.assert_called_once()
-    client.set.assert_called_once()
+    assert client.pipeline.call_count == 2
     assert runtime_activity_key("default") in client.setex.call_args.args
