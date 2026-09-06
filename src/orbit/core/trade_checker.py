@@ -400,6 +400,51 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # Trade-data bookkeeping
     # ------------------------------------------------------------------
 
+    def update_protective_order_data(
+        self,
+        symbol: str,
+        trade: Dict[str, Any],
+        stop_loss_order: Optional[Dict[str, Any]],
+        take_profit_order: Optional[Dict[str, Any]],
+    ) -> None:
+        """Persist reconciled protective orders without requiring a live price."""
+        current_trade = self.trades.setdefault(symbol, trade.copy())
+        updates: Dict[str, Any] = {"quantity": trade["quantity"]}
+
+        if stop_loss_order:
+            stop_price = (
+                stop_loss_order.get("stopPrice")
+                or stop_loss_order.get("triggerPrice")
+                or stop_loss_order.get("stop_price")
+            )
+            updates.update(
+                {
+                    "stop_loss_order": stop_loss_order,
+                    "sl_order_id": str(stop_loss_order.get("algoId", "")),
+                }
+            )
+            if stop_price is not None:
+                updates["stop_loss_price"] = float(stop_price)
+
+        if take_profit_order:
+            target = (
+                take_profit_order.get("stopPrice")
+                or take_profit_order.get("triggerPrice")
+                or take_profit_order.get("stop_price")
+            )
+            updates.update(
+                {
+                    "take_profit_order": take_profit_order,
+                    "tp_order_id": str(take_profit_order.get("algoId", "")),
+                }
+            )
+            if target is not None:
+                updates["target"] = float(target)
+
+        current_trade.update(updates)
+        trade_id = trade.get("trade_id") or symbol
+        self.merge_trade_fields(trade_id, updates)
+
     def update_trade_data(
         self,
         symbol: str,
@@ -1510,6 +1555,12 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         any_trade_active = True
                         stop_loss_order, take_profit_order = self.ensure_orders(
                             symbol, tradesFound[symbol], risk_management
+                        )
+                        self.update_protective_order_data(
+                            symbol,
+                            tradesFound[symbol],
+                            stop_loss_order,
+                            take_profit_order,
                         )
                         current_price = self.check_price_freshness(symbol)
                         if current_price is None:
