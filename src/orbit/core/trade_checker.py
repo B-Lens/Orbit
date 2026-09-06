@@ -25,6 +25,7 @@ Dependencies (:class:`OrderManager`, :class:`MongoHandler`, Redis) can be
 import time
 import logging
 import math
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -49,6 +50,14 @@ logger = logging.getLogger("Orbit")
 _POSITION_RISK_MAX_ATTEMPTS = 3
 _POSITION_RISK_RETRY_DELAY = 1.0
 _INCOME_SETTLEMENT_GRACE_MS = 60_000
+_POSITION_LIFECYCLE_LOCKS: Dict[str, Any] = {}
+_POSITION_LIFECYCLE_LOCKS_GUARD = threading.Lock()
+
+
+def position_lifecycle_lock(symbol: str) -> Any:
+    """Return the process-wide lock serializing entry and cleanup for a symbol."""
+    with _POSITION_LIFECYCLE_LOCKS_GUARD:
+        return _POSITION_LIFECYCLE_LOCKS.setdefault(symbol, threading.RLock())
 
 
 class TradeReconciliationError(RuntimeError):
@@ -1239,6 +1248,19 @@ class TradeChecker(AuthenticationManager, RedisManager):
         raise RuntimeError("position-risk retry loop exited unexpectedly")
 
     def _quarantine_flat_trade(
+        self,
+        symbol: str,
+        trade_id: str,
+        persisted_trade: Dict[str, Any],
+        error: TradeReconciliationError,
+    ) -> bool:
+        """Serialize quarantine against replacement-position creation."""
+        with position_lifecycle_lock(symbol):
+            return self._quarantine_flat_trade_locked(
+                symbol, trade_id, persisted_trade, error
+            )
+
+    def _quarantine_flat_trade_locked(
         self,
         symbol: str,
         trade_id: str,

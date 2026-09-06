@@ -38,7 +38,7 @@ load_dotenv()
 
 from config.config import load_config
 from orbit.core.signal_analyzer import SignalAnalyzer
-from orbit.core.trade_checker import TradeChecker
+from orbit.core.trade_checker import TradeChecker, position_lifecycle_lock
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.order_manager import OrderManager
 from orbit.core.exception_manager import ExceptionManager
@@ -369,16 +369,17 @@ class BinanceAutomation(ExceptionManager):
             f"{symbol} {action}",
         )
 
-        order_response, quantity, order_request = self.order_manager.place_order(
-            self.risk_management,
-            symbol,
-            action,
-            price_to_use,
-            stop_loss,
-            target,
-            self.future_leverage,
-            trade_id=decision_id,
-        )
+        with position_lifecycle_lock(symbol):
+            order_response, quantity, order_request = self.order_manager.place_order(
+                self.risk_management,
+                symbol,
+                action,
+                price_to_use,
+                stop_loss,
+                target,
+                self.future_leverage,
+                trade_id=decision_id,
+            )
 
         time.sleep(0.5)
 
