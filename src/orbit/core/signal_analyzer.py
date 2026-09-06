@@ -151,6 +151,11 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
 
                 try:
                     strategy = strategy_class(historical_data)
+                    strategy.send_params(
+                        stock_df=historical_data,
+                        symbol=symbol,
+                        duration="15 MIN",
+                    )
                     signal_ss = time.perf_counter()
                     signal_dict = strategy.generate_signals(symbol=symbol)
                     signal_es = time.perf_counter()

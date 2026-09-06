@@ -1,12 +1,57 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
+
 from orbit.core.main import BinanceAutomation
 from orbit.core.order_manager import OrderManager
 from orbit.core.signal_analyzer import SignalAnalyzer
 
 
 class TestReportingLifecycle(unittest.TestCase):
+    @patch("orbit.core.signal_analyzer.time.sleep", return_value=None)
+    @patch("orbit.core.signal_analyzer.record_runtime_activity")
+    @patch("orbit.core.signal_analyzer.STRATEGY_REGISTRY")
+    def test_ohlcv_params_are_published_for_every_registered_strategy(
+        self, strategy_registry, _record_activity, _sleep
+    ):
+        historical_data = pd.DataFrame(
+            {
+                "open": [100.0],
+                "high": [102.0],
+                "low": [99.0],
+                "close": [101.0],
+                "volume": [12.5],
+            },
+            index=pd.DatetimeIndex(["2026-09-06 12:00:00"]),
+        )
+        strategy = MagicMock()
+        strategy.generate_signals.return_value = None
+        strategy_class = MagicMock(return_value=strategy)
+        strategy_class.__module__ = "orbit.strategies.example_strategy"
+        strategy_class.__name__ = "ExampleStrategy"
+        strategy_registry.get.return_value = strategy_class
+
+        analyzer = SignalAnalyzer.__new__(SignalAnalyzer)
+        analyzer.trading_pairs = ["ETHUSDT"]
+        analyzer.redis_client = MagicMock()
+        analyzer.mongo_handler = MagicMock()
+        analyzer.mongo_handler.handle_mongo_data.return_value = historical_data
+        analyzer.execution_settings = MagicMock()
+        analyzer.execution_settings.mode_for.return_value.value = "testnet"
+        analyzer.send_logs = MagicMock()
+        analyzer.send_signal_updates = MagicMock()
+        analyzer._record_decision = MagicMock()
+
+        self.assertEqual(list(analyzer.analyze_market({})), [])
+
+        strategy.send_params.assert_called_once_with(
+            stock_df=historical_data,
+            symbol="ETHUSDT",
+            duration="15 MIN",
+        )
+        strategy.generate_signals.assert_called_once_with(symbol="ETHUSDT")
+
     def test_active_position_is_rejected_before_market_data_or_strategy_work(self):
         analyzer = SignalAnalyzer.__new__(SignalAnalyzer)
         analyzer.trading_pairs = ["ETHUSDT"]
