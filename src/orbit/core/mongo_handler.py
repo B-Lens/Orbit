@@ -476,37 +476,20 @@ class MongoHandler(ExceptionManager):
         except Exception as exc:
             self.handle_exception(exc, "Error storing trade decision")
 
-    def append_decision_event(self, decision_id: str, event: Dict[str, Any]) -> bool:
-        """Append an execution transition and report whether it is durable."""
+    def append_decision_event(self, decision_id: str, event: Dict[str, Any]) -> None:
+        """Append an execution transition without rewriting the original decision."""
         collection = getattr(self, "decision_collection", None)
         if collection is None or not decision_id:
-            return False
+            return
         event = {"timestamp": datetime.now(timezone.utc), **event}
         query: Dict[str, Any] = {"decision_id": decision_id}
         event_id = event.get("event_id")
         if event_id:
             query["execution_events.event_id"] = {"$ne": event_id}
         try:
-            result = collection.update_one(
-                query, {"$push": {"execution_events": event}}
-            )
-            if not getattr(result, "acknowledged", True):
-                return False
-            if event_id:
-                return (
-                    collection.find_one(
-                        {
-                            "decision_id": decision_id,
-                            "execution_events.event_id": event_id,
-                        },
-                        {"_id": 1},
-                    )
-                    is not None
-                )
-            return bool(getattr(result, "matched_count", 0))
+            collection.update_one(query, {"$push": {"execution_events": event}})
         except Exception as exc:
             self.handle_exception(exc, "Error appending trade decision event")
-            return False
 
     @staticmethod
     def _distribution(values: List[float]) -> Dict[str, float]:
