@@ -92,6 +92,9 @@ class MongoHandler(ExceptionManager):
             self.trade_lifecycle_collection = self.db["trade_lifecycle"]
             self.trade_metrics_collection = self.db["trade_metrics"]
             self.income_collection = self.db["futures_income"]
+            self.sentiment_history_collection = self._mongo_client[
+                "crypto_sentiment"
+            ]["sentiment_history"]
             if read_only:
                 return
             self.collection.create_index(
@@ -663,6 +666,24 @@ class MongoHandler(ExceptionManager):
                 self.handle_exception(exc, "Error reading recent trade decisions")
             return []
 
+    def get_recent_sentiment_history(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """Return market-intelligence records from the recent UTC window."""
+        collection = getattr(self, "sentiment_history_collection", None)
+        if collection is None:
+            return []
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max(0, hours))
+        try:
+            return list(
+                collection.find({"timestamp": {"$gte": cutoff}}, {"_id": 0})
+                .sort("timestamp", -1)
+                .limit(100)
+            )
+        except Exception as exc:
+            if getattr(self, "read_only", False):
+                logger.warning("Error reading sentiment history: %s", exc)
+            else:
+                self.handle_exception(exc, "Error reading sentiment history")
+            return []
     def get_income_records(
         self, start_ms: int, end_ms: int, execution_mode: Optional[str] = None
     ) -> List[Dict[str, Any]]:

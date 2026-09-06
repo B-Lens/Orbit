@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from orbit.api import (
     _risk_execution_state,
+    _signal_response,
     get_command_center,
     get_notifications,
     get_status,
@@ -72,6 +73,21 @@ def test_notifications_returns_mirrored_discord_events(list_feed: MagicMock) -> 
     list_feed.assert_called_once_with(25)
 
 
+def test_no_signal_decisions_have_explicit_dashboard_values() -> None:
+    response = _signal_response(
+        {
+            "decision_id": "decision-1",
+            "symbol": "BTCUSDT",
+            "outcome": "no_signal",
+            "strategy": "orbit.strategies.btc_strategy.BTCStrategy",
+        }
+    )
+
+    assert response["signal"] == "NO SIGNAL"
+    assert response["pattern"] == "No setup"
+    assert response["sentiment"] == "Not evaluated"
+
+
 @patch("orbit.api.load_config", return_value={"risk_policy": {"max_leverage": 5}})
 @patch("orbit.api.ExecutionSettings.from_config")
 def test_risk_execution_state_uses_validated_execution_settings(
@@ -103,9 +119,11 @@ def test_risk_execution_state_fails_closed_on_invalid_configuration(
 
 
 @patch("orbit.api._risk_execution_state")
+@patch("orbit.api._recent_sentiment_history", return_value=[])
 @patch("orbit.api._recent_signals")
 @patch("orbit.api.read_observability")
 @patch("orbit.api.read_sentiment")
+@patch("orbit.api.read_sentiment_history")
 @patch("orbit.api.read_positions")
 @patch("orbit.api.read_runtime_state")
 @patch("orbit.api.create_redis_client")
@@ -113,9 +131,11 @@ def test_command_center_uses_live_state_not_notification_feed(
     create_client: MagicMock,
     read_runtime: MagicMock,
     read_position_state: MagicMock,
+    read_sentiment_history_state: MagicMock,
     read_sentiment_state: MagicMock,
     read_observability_state: MagicMock,
     recent_signals: MagicMock,
+    _recent_sentiments: MagicMock,
     risk_state: MagicMock,
 ) -> None:
     client = create_client.return_value
@@ -153,6 +173,7 @@ def test_command_center_uses_live_state_not_notification_feed(
         "effective": "BULLISH",
         "confidence": 0.8,
     }
+    read_sentiment_history_state.return_value = []
     read_observability_state.return_value = ([], [])
     recent_signals.return_value = [
         {

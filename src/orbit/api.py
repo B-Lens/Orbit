@@ -18,6 +18,7 @@ from orbit.core.command_center import (
     read_positions,
     read_runtime_state,
     read_sentiment,
+    read_sentiment_history,
 )
 from orbit.core.execution import ExecutionSettings
 from orbit.core.mongo_handler import MongoHandler
@@ -119,6 +120,16 @@ class SentimentResponse(BaseModel):
     run_in_progress: bool = False
 
 
+class SentimentHistoryResponse(BaseModel):
+    effective: Optional[str] = None
+    observed: Optional[str] = None
+    confidence: Optional[float] = None
+    provider: Optional[str] = None
+    explanation: Optional[str] = None
+    action: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class RiskExecutionResponse(BaseModel):
     active_modes: List[str]
     can_submit_orders: bool
@@ -149,6 +160,7 @@ class CommandCenterResponse(BaseModel):
     positions: List[PositionResponse]
     signals: List[SignalResponse]
     sentiment: SentimentResponse
+    sentiment_history: List[SentimentHistoryResponse]
     risk_execution: RiskExecutionResponse
     logs: List[LogResponse]
     exceptions: List[ExceptionResponse]
@@ -178,14 +190,17 @@ def _signal_response(record: Dict[str, Any]) -> Dict[str, Any]:
         latest = events[-1]
         if isinstance(latest, dict):
             latest_status = latest.get("status")
+    outcome = str(record.get("outcome", "unknown"))
+    no_signal = outcome == "no_signal"
+    strategy = str(record.get("strategy", "")).rsplit(".", 1)[-1]
     return {
         "decision_id": str(record.get("decision_id", "")),
         "symbol": str(record.get("symbol", "")),
-        "signal": record.get("signal"),
-        "outcome": str(record.get("outcome", "unknown")),
+        "signal": record.get("signal") or ("NO SIGNAL" if no_signal else None),
+        "outcome": outcome,
         "reason": record.get("reason"),
-        "pattern": record.get("pattern"),
-        "sentiment": record.get("sentiment"),
+        "pattern": record.get("pattern") or ("No setup" if no_signal else strategy or None),
+        "sentiment": record.get("sentiment") or ("Not evaluated" if no_signal else None),
         "execution_mode": record.get("execution_mode"),
         "entry_price": record.get("entry_price"),
         "stop_loss": record.get("stop_loss"),
@@ -209,6 +224,25 @@ def _recent_signals(limit: int) -> List[Dict[str, Any]]:
         ]
     except Exception:
         logger.exception("Unable to read recent signal decisions")
+        return []
+
+
+def _recent_sentiment_history() -> List[Dict[str, Any]]:
+    try:
+        records = _command_center_mongo_handler().get_recent_sentiment_history(24)
+        return [
+            {
+                "effective": item.get("combined_sentiment", {}).get("sentiment"),
+                "observed": item.get("combined_sentiment", {}).get("sentiment"),
+                "confidence": item.get("combined_sentiment", {}).get("confidence"),
+                "provider": item.get("combined_sentiment", {}).get("provider"),
+                "explanation": item.get("combined_sentiment", {}).get("explanation"),
+                "updated_at": _iso_value(item.get("timestamp")),
+            }
+            for item in records
+        ]
+    except Exception:
+        logger.exception("Unable to read sentiment history")
         return []
 
 
@@ -314,6 +348,7 @@ def get_command_center(
             runtime = read_runtime_state(client, _expected_runtime_ids())
             positions = read_positions(client)
             sentiment = read_sentiment(client)
+            sentiment_history = read_sentiment_history(client)
             logs, exceptions = read_observability(
                 client, log_limit, exception_limit
             )
@@ -339,6 +374,10 @@ def get_command_center(
             for item in _recent_signals(signal_limit)
         ],
         sentiment=SentimentResponse.model_validate(sentiment),
+        sentiment_history=[
+            SentimentHistoryResponse.model_validate(item)
+            for item in (_recent_sentiment_history() or sentiment_history)
+        ],
         risk_execution=RiskExecutionResponse.model_validate(risk_execution),
         logs=[LogResponse.model_validate(item) for item in logs],
         exceptions=[ExceptionResponse.model_validate(item) for item in exceptions],
