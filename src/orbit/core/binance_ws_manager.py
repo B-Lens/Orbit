@@ -3,7 +3,7 @@ binance_ws_manager
 ==================
 
 Provides :class:`BinanceWSManager`, a fault-tolerant WebSocket manager for
-Binance Futures real-time trade price feeds.
+Binance Futures real-time ticker price feeds.
 
 Features
 --------
@@ -57,12 +57,12 @@ _PING_TIMEOUT: int = 20          # seconds to wait for pong
 
 
 class BinanceWSManager:
-    """Fault-tolerant WebSocket manager for Binance Futures trade streams.
+    """Fault-tolerant WebSocket manager for Binance Futures ticker streams.
 
     Args:
         trading_pairs: List of symbols to subscribe to (e.g. ``["BTCUSDT"]``).
         on_price_update: Callback invoked with ``(symbol, price, timestamp)``
-            whenever a new trade tick arrives.
+            whenever a new ticker update arrives.
         on_status_change: Optional callback invoked with a human-readable
             status string on connect / disconnect / error events.
         stale_threshold: Seconds without a message before the connection is
@@ -175,7 +175,10 @@ class BinanceWSManager:
         # but _stream_url itself is cheap — just read under the lock.
         with self._lock:
             pairs = list(self.trading_pairs)
-        streams = "/".join(f"{p.lower()}@trade" for p in pairs)
+        # Ticker streams publish the latest contract price at a fixed cadence.
+        # Trade streams only publish when a trade occurs, which makes quiet
+        # symbols appear stale and causes unnecessary REST fallbacks.
+        streams = "/".join(f"{p.lower()}@ticker" for p in pairs)
         return f"wss://fstream.binance.com/stream?streams={streams}"
 
     def _notify_status(self, msg: str) -> None:
@@ -216,7 +219,7 @@ class BinanceWSManager:
             msg = json.loads(raw)
             data = msg.get("data", {})
             symbol = data.get("s")
-            price_str = data.get("p")
+            price_str = data.get("c")
             if symbol and price_str:
                 self._on_price_update(symbol, float(price_str), now)
             else:

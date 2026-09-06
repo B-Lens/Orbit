@@ -1,9 +1,12 @@
+import json
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
 from binance.error import ClientError
 
 from orbit.core.execution import ExecutionMode, ExecutionSettings
+from orbit.core.binance_ws_manager import BinanceWSManager
 from orbit.core.order_manager import OrderManager
 from orbit.core.redis_manager import RedisManager
 from orbit.core.trade_checker import TradeChecker, is_stop_order, is_take_profit_order
@@ -393,6 +396,87 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
+    def test_price_stream_uses_periodic_tickers_and_latest_price(self):
+        on_price_update = MagicMock()
+        manager = BinanceWSManager(["BTCUSDT", "PAXGUSDT"], on_price_update)
+
+        self.assertEqual(
+            manager._stream_url(),
+            "wss://fstream.binance.com/stream?streams="
+            "btcusdt@ticker/paxgusdt@ticker",
+        )
+        manager._on_message(
+            MagicMock(),
+            json.dumps({"data": {"s": "PAXGUSDT", "c": "4382.40"}}),
+        )
+
+        symbol, price, timestamp = on_price_update.call_args.args
+        self.assertEqual((symbol, price), ("PAXGUSDT", 4382.40))
+        self.assertEqual(timestamp, manager._last_message_time)
+
+    def test_stale_price_is_not_used_when_rest_fallback_fails(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"PAXGUSDT": (4400.0, time.time() - 10)}
+        checker.get_future_symbol_price = MagicMock(
+            side_effect=ValueError("bad ticker")
+        )
+
+        self.assertIsNone(checker.check_price_freshness("PAXGUSDT"))
+        self.assertEqual(checker.live_prices["PAXGUSDT"][0], 4400.0)
+
+    def test_invalid_price_is_replaced_with_valid_rest_price(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"SKYUSDT": (0.0, time.time())}
+        checker.get_future_symbol_price = MagicMock(return_value=0.05)
+
+        self.assertEqual(checker.check_price_freshness("SKYUSDT"), 0.05)
+        self.assertEqual(checker.live_prices["SKYUSDT"][0], 0.05)
+
+    def test_price_outage_persists_reconciled_protective_orders(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        trade = {
+            "trade_id": "trade-1",
+            "positionSide": "BUY",
+            "quantity": 0.1,
+            "stop_loss_price": 4300.0,
+            "target": 4500.0,
+            "stop_loss_order": {"algoId": "101"},
+        }
+        stop_order = {"algoId": "102", "triggerPrice": "4310.0"}
+        target_order = {"algoId": "202", "triggerPrice": "4510.0"}
+        checker.trades = {"PAXGUSDT": trade.copy()}
+        checker._ws_manager = MagicMock()
+        checker._ensure_ws = MagicMock()
+        checker.check_price_freshness = MagicMock(
+            side_effect=[None, KeyboardInterrupt]
+        )
+        checker.activePosition_coolMaker = MagicMock(
+            return_value={"PAXGUSDT": trade}
+        )
+        checker.ensure_orders = MagicMock(return_value=(stop_order, target_order))
+        checker.merge_trade_fields = MagicMock()
+        indian_time = MagicMock()
+        indian_time.minute = 0
+
+        with patch("orbit.core.trade_checker.get_indian_time", return_value=indian_time):
+            with self.assertRaises(KeyboardInterrupt):
+                checker.monitor_trades(["PAXGUSDT"], {})
+
+        self.assertEqual(checker.trades["PAXGUSDT"]["sl_order_id"], "102")
+        self.assertEqual(checker.trades["PAXGUSDT"]["tp_order_id"], "202")
+        checker.merge_trade_fields.assert_called_once_with(
+            "trade-1",
+            {
+                "quantity": 0.1,
+                "stop_loss_order": stop_order,
+                "sl_order_id": "102",
+                "stop_loss_price": 4310.0,
+                "take_profit_order": target_order,
+                "tp_order_id": "202",
+                "target": 4510.0,
+            },
+        )
+
     def test_position_discovery_ignores_stale_entry_price_without_exposure(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
