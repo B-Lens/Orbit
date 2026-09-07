@@ -62,11 +62,12 @@ copies duplicated decision data and did not represent executed positions.
 ## GitHub Testnet reporting and analysis
 
 When `ORBIT_GITHUB_REPORTING_ENABLED=true`, `TestnetDailyReporterThread` publishes
-the previous UTC day's accepted, rejected, and errored Testnet attempts on Saturday
-morning UTC to one idempotent GitHub issue and adds it to the configured Project.
+the completed Saturday-through-Friday batch of daily Testnet reports on Saturday
+morning UTC. Each date has an idempotent GitHub issue, so a restart after Saturday
+repairs the latest completed batch instead of skipping it.
 The issue separates strategy rejections from risk/order rejections, shows closed-
-trade performance by asset, and keeps active positions and unrealized P&L in a
-separate section. No-signal evaluations are counted but are not trade attempts.
+trade performance by asset, and keeps trades active at each historical cutoff in
+a separate section. No-signal evaluations are counted but are not trade attempts.
 Before publication, the reporter synchronizes Binance Testnet income from the
 start of the reporting window. Income rows are tagged by execution mode, and the
 report queries only `testnet` rows so mixed live/Testnet deployments cannot blend

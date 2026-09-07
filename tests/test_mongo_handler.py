@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -47,6 +48,36 @@ def test_decision_event_reports_failed_durability_check() -> None:
     )
 
     assert stored is False
+
+
+def test_active_trade_decisions_are_resolved_at_historical_cutoff() -> None:
+    cutoff = datetime(2026, 8, 22, tzinfo=timezone.utc)
+    open_trade = {
+        "decision_id": "open",
+        "execution_events": [
+            {"status": "order_filled", "timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc)}
+        ],
+    }
+    closed_trade = {
+        "decision_id": "closed",
+        "execution_events": [
+            {"status": "order_filled", "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc)},
+            {"status": "trade_closed", "timestamp": datetime(2026, 8, 21, tzinfo=timezone.utc)},
+        ],
+    }
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.decision_collection = MagicMock()
+    handler.decision_collection.find.return_value.sort.return_value = [
+        open_trade,
+        closed_trade,
+    ]
+
+    result = handler.get_active_trade_decisions(cutoff, "testnet")
+
+    assert result == [open_trade]
+    query = handler.decision_collection.find.call_args.args[0]
+    assert query["timestamp"] == {"$lt": cutoff}
+    assert query["execution_mode"] == "testnet"
 
 
 def test_reconciliation_block_requires_durable_matching_record() -> None:

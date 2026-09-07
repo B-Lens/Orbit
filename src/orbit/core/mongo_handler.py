@@ -695,6 +695,49 @@ class MongoHandler(ExceptionManager):
                 self.handle_exception(exc, "Error reading recent trade decisions")
             return []
 
+    def get_active_trade_decisions(
+        self, as_of: datetime, execution_mode: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Return accepted trades filled but not closed before a UTC cutoff."""
+        collection = getattr(self, "decision_collection", None)
+        if collection is None:
+            return []
+        query: Dict[str, Any] = {
+            "timestamp": {"$lt": as_of},
+            "outcome": "accepted",
+            "execution_events": {
+                "$elemMatch": {"status": "order_filled", "timestamp": {"$lt": as_of}}
+            },
+        }
+        if execution_mode:
+            query["execution_mode"] = execution_mode
+        try:
+            candidates = list(
+                collection.find(query, {"_id": 0}).sort("timestamp", ASCENDING)
+            )
+
+            def closed_before_cutoff(event: Dict[str, Any]) -> bool:
+                timestamp = event.get("timestamp")
+                if event.get("status") != "trade_closed" or not isinstance(
+                    timestamp, datetime
+                ):
+                    return False
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                return timestamp.astimezone(timezone.utc) < as_of
+
+            return [
+                row
+                for row in candidates
+                if not any(
+                    closed_before_cutoff(event)
+                    for event in row.get("execution_events", [])
+                )
+            ]
+        except Exception as exc:
+            self.handle_exception(exc, "Error reading active trade decisions")
+            return []
+
     def get_recent_sentiment_history(self, hours: int = 24) -> List[Dict[str, Any]]:
         """Return market-intelligence records from the recent UTC window."""
         collection = getattr(self, "sentiment_history_collection", None)

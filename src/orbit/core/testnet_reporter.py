@@ -111,11 +111,13 @@ def build_report_body(
     report_date: date,
     decisions: Iterable[Mapping[str, Any]],
     income_records: Iterable[Mapping[str, Any]],
-    active_positions: Iterable[Mapping[str, Any]] = (),
+    active_trades: Iterable[Mapping[str, Any]] = (),
 ) -> str:
     """Render readable daily evidence with closed and active P&L separated."""
     all_decisions = list(decisions)
-    income = [dict(row) for row in income_records]
+    # Income remains synchronized for the immutable audit ledger. Daily closed-
+    # trade P&L comes from lifecycle-linked close events, not timestamp guesses.
+    list(income_records)
     start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     window_decisions = [
@@ -140,41 +142,19 @@ def build_report_body(
         if event.get("status") == "order_rejected"
         and _in_window(event.get("timestamp"), start, end)
     )
-    active = [
-        dict(row)
-        for row in active_positions
-        if float(row.get("positionAmt", 0) or 0) != 0
-    ]
-    active_symbols = {str(row.get("symbol") or "") for row in active}
-    active_entry_ms: dict[str, int] = {}
+    active = [dict(row) for row in active_trades]
+    closed_by_symbol: dict[str, list[float]] = {}
     for decision in all_decisions:
-        symbol = str(decision.get("symbol") or "")
-        if symbol not in active_symbols:
-            continue
-        fill_times = [
-            event.get("timestamp")
-            for event in decision.get("execution_events", [])
-            if event.get("status") == "order_filled"
-            and isinstance(event.get("timestamp"), datetime)
-        ]
-        if fill_times:
-            latest_fill = max(
-                value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
-                for value in fill_times
+        for event in decision.get("execution_events", []):
+            if event.get("status") != "trade_closed" or not _in_window(
+                event.get("timestamp"), start, end
+            ):
+                continue
+            symbol = str(decision.get("symbol") or "UNKNOWN")
+            closed_by_symbol.setdefault(symbol, []).append(
+                float(event.get("pnl", 0) or 0)
             )
-            active_entry_ms[symbol] = max(
-                active_entry_ms.get(symbol, 0), int(latest_fill.timestamp() * 1000)
-            )
-    closed_income = [
-        row
-        for row in income
-        if int(row.get("time", 0) or 0)
-        < active_entry_ms.get(str(row.get("symbol") or ""), 2**63 - 1)
-    ]
-    performance = PerformanceTracker.summarize(closed_income)
-    symbol_income: dict[str, list[dict[str, Any]]] = {}
-    for row in closed_income:
-        symbol_income.setdefault(str(row.get("symbol") or "ACCOUNT"), []).append(row)
+    closed_pnl = sum(sum(values) for values in closed_by_symbol.values())
 
     lines = [
         f"# Orbit Testnet daily report — {report_date.isoformat()}",
@@ -192,43 +172,46 @@ def build_report_body(
         f"- Risk/order rejections: **{events['order_rejected']}**",
         f"- Errors: **{counts['error']}**",
         f"- No-signal evaluations (counted, not expanded): **{counts['no_signal']}**",
-        f"- Closed-trade realized P&L: **{performance.realized_pnl:.8f} USDT**",
-        f"- Commission: **{performance.commission:.8f} USDT**",
-        f"- Funding: **{performance.funding:.8f} USDT**",
-        f"- Other income: **{performance.other_income:.8f} USDT**",
-        f"- Closed-trade net P&L: **{performance.net_pnl:.8f} USDT**",
+        f"- Closed trades: **{events['trade_closed']}**",
+        f"- Closed-trade net P&L: **{closed_pnl:.8f} USDT**",
         "",
         "## Closed-trade performance by asset",
         "",
-        "| Asset | Realized P&L | Commission | Funding | Other | Net P&L |",
-        "| :--- | ---: | ---: | ---: | ---: | ---: |",
+        "| Asset | Closed trades | Net P&L |",
+        "| :--- | ---: | ---: |",
     ]
-    for symbol, records in sorted(symbol_income.items()):
-        summary = PerformanceTracker.summarize(records)
-        lines.append(
-            f"| {_format_value(symbol)} | {summary.realized_pnl:.8f} | "
-            f"{summary.commission:.8f} | {summary.funding:.8f} | "
-            f"{summary.other_income:.8f} | {summary.net_pnl:.8f} |"
-        )
-    if not symbol_income:
-        lines.append("| — | 0.00000000 | 0.00000000 | 0.00000000 | 0.00000000 | 0.00000000 |")
+    for symbol, pnl_values in sorted(closed_by_symbol.items()):
+        lines.append(f"| {_format_value(symbol)} | {len(pnl_values)} | {sum(pnl_values):.8f} |")
+    if not closed_by_symbol:
+        lines.append("| — | 0 | 0.00000000 |")
 
     lines.extend([
         "", "## Active trades", "",
-        "_Unrealized P&L is separate and excluded from closed-trade totals._", "",
-        "| Asset | Side | Quantity | Entry | Mark | Unrealized P&L |",
-        "| :--- | :--- | ---: | ---: | ---: | ---: |",
+        "_These trades were active at the report cutoff. No unrealized P&L is inferred._", "",
+        "| Decision | Asset | Side | Entry | Quantity |",
+        "| :--- | :--- | :--- | ---: | ---: |",
     ])
     for position in sorted(active, key=lambda row: str(row.get("symbol") or "")):
-        amount = float(position.get("positionAmt", 0) or 0)
+        fill = next(
+            (
+                event
+                for event in reversed(position.get("execution_events", []))
+                if event.get("status") == "order_filled"
+            ),
+            {},
+        )
         values = (
-            position.get("symbol"), "LONG" if amount > 0 else "SHORT", abs(amount),
-            position.get("entryPrice"), position.get("markPrice"),
-            position.get("unRealizedProfit"),
+            position.get("decision_id"),
+            position.get("symbol"),
+            position.get("signal"),
+            fill.get("average_price")
+            or fill.get("price")
+            or position.get("entry_price"),
+            fill.get("executed_quantity") or fill.get("quantity"),
         )
         lines.append("| " + " | ".join(_format_value(value) for value in values) + " |")
     if not active:
-        lines.append("| — | — | 0 | — | — | — |")
+        lines.append("| — | — | — | — | — |")
 
     lines.extend(["", "## Rejections", "", "### Strategy rejections", ""])
     lines.extend(
@@ -277,8 +260,8 @@ def build_report_body(
     ]
     lines.extend([
         "", "<details>", "<summary>Execution-event details</summary>", "",
-        "| Time (UTC) | Asset | Event | Reason / details |",
-        "| :--- | :--- | :--- | :--- |",
+        "| Time (UTC) | Decision | Asset | Event | Reason / details |",
+        "| :--- | :--- | :--- | :--- | :--- |",
     ])
     for decision, event in execution_rows:
         details = {
@@ -290,6 +273,7 @@ def build_report_body(
         )
         event_values = (
             event.get("timestamp"),
+            decision.get("decision_id"),
             decision.get("symbol"),
             event.get("status"),
             detail,
@@ -298,7 +282,7 @@ def build_report_body(
             "| " + " | ".join(_format_value(value) for value in event_values) + " |"
         )
     if not execution_rows:
-        lines.append("| — | — | — | No execution events recorded |")
+        lines.append("| — | — | — | — | No execution events recorded |")
     lines.extend(["", "</details>"])
     lines.extend(
         [
@@ -666,14 +650,9 @@ class TestnetDailyReporter:
         income = self.mongo_handler.get_income_records(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
-        active_positions: list[Mapping[str, Any]] = []
-        if self.futures_client is not None:
-            try:
-                active_positions = list(self.futures_client.get_position_risk())
-            except Exception:
-                logger.exception("Failed to read active Testnet positions")
+        active_trades = self.mongo_handler.get_active_trade_decisions(end, "testnet")
         title = f"Orbit Testnet daily report: {report_date.isoformat()}"
-        body = build_report_body(report_date, decisions, income, active_positions)
+        body = build_report_body(report_date, decisions, income, active_trades)
         return self.github.publish(
             title,
             body,
@@ -704,18 +683,26 @@ class TestnetDailyReporter:
         )
 
     def run_forever(self, interval_seconds: int = 3600) -> None:
-        last_published: Optional[date] = None
+        last_daily_batch_end: Optional[date] = None
         last_week_published: Optional[date] = None
         while True:
             today = datetime.now(timezone.utc).date()
-            yesterday = today - timedelta(days=1)
-            if today.weekday() == 5 and yesterday != last_published:
-                try:
-                    url = self.publish_date(yesterday)
-                    logger.info("Published Testnet daily report: %s", url)
-                    last_published = yesterday
-                except Exception:
-                    logger.exception("Failed to publish Testnet daily report")
+            days_since_friday = (today.weekday() - 4) % 7 or 7
+            batch_end = today - timedelta(days=days_since_friday)
+            if batch_end != last_daily_batch_end:
+                batch_succeeded = True
+                for days_ago in range(6, -1, -1):
+                    report_date = batch_end - timedelta(days=days_ago)
+                    try:
+                        url = self.publish_date(report_date)
+                        logger.info("Published Testnet daily report: %s", url)
+                    except Exception:
+                        batch_succeeded = False
+                        logger.exception(
+                            "Failed to publish Testnet daily report for %s", report_date
+                        )
+                if batch_succeeded:
+                    last_daily_batch_end = batch_end
             previous_week = today - timedelta(days=today.weekday() + 7)
             if previous_week != last_week_published:
                 try:
