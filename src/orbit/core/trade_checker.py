@@ -770,6 +770,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 break
         if closing_quantity < expected_quantity:
             raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
+        closed_at = datetime.fromtimestamp(
+            max(int(fill.get("time", 0) or 0) for fill in closing_fills) / 1000,
+            tz=timezone.utc,
+        )
         if entry_fills:
             entered_at = datetime.fromtimestamp(
                 min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,
@@ -853,6 +857,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             {
                 "event_id": f"trade_closed:{trade_id}",
                 "status": "trade_closed",
+                "timestamp": closed_at,
                 "exit_price": exit_price,
                 "pnl": pnl,
                 "duration_seconds": duration_seconds,

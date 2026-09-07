@@ -216,9 +216,16 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     exit_record = checker.mongo_handler.store_trade_exit.call_args.args[0]
     assert exit_record["pnl"] == 20.0
     assert exit_record["pnl_source"] == "binance_trade_fills_and_funding"
+    assert exit_record["closed_at"] == datetime.fromtimestamp(
+        exit_time_ms / 1000, tz=timezone.utc
+    )
     assert exit_record["duration_seconds"] >= 599
     assert exit_record["llm_exit_reasoning"]["reasoning"] == "momentum continued"
     checker.mongo_handler.append_decision_event.assert_called_once()
+    close_event = checker.mongo_handler.append_decision_event.call_args.args[1]
+    assert close_event["timestamp"] == datetime.fromtimestamp(
+        exit_time_ms / 1000, tz=timezone.utc
+    )
 
 
 def test_exit_uses_income_commission_when_fill_commission_is_non_usdt() -> None:
