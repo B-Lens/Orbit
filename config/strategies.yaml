@@ -35,3 +35,7 @@ strategies:
   XRPUSDT:
     strategy: orbit.strategies.xrpusdt_strategy.XRPUSDTStrategy
     execution_mode: testnet
+
+  BNBUSDT:
+    strategy: orbit.strategies.bnbusdt_strategy.BNBStrategy
+    execution_mode: testnet
