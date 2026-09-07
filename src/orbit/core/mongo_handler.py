@@ -705,9 +705,26 @@ class MongoHandler(ExceptionManager):
         query: Dict[str, Any] = {
             "timestamp": {"$lt": as_of},
             "outcome": "accepted",
-            "execution_events": {
-                "$elemMatch": {"status": "order_filled", "timestamp": {"$lt": as_of}}
-            },
+            "$and": [
+                {
+                    "execution_events": {
+                        "$elemMatch": {
+                            "status": "order_filled",
+                            "timestamp": {"$lt": as_of},
+                        }
+                    }
+                },
+                {
+                    "execution_events": {
+                        "$not": {
+                            "$elemMatch": {
+                                "status": "trade_closed",
+                                "timestamp": {"$lt": as_of},
+                            }
+                        }
+                    }
+                },
+            ],
         }
         if execution_mode:
             query["execution_mode"] = execution_mode
@@ -736,7 +753,7 @@ class MongoHandler(ExceptionManager):
             ]
         except Exception as exc:
             self.handle_exception(exc, "Error reading active trade decisions")
-            return []
+            raise
 
     def get_recent_sentiment_history(self, hours: int = 24) -> List[Dict[str, Any]]:
         """Return market-intelligence records from the recent UTC window."""

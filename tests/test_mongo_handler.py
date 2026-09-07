@@ -78,6 +78,44 @@ def test_active_trade_decisions_are_resolved_at_historical_cutoff() -> None:
     query = handler.decision_collection.find.call_args.args[0]
     assert query["timestamp"] == {"$lt": cutoff}
     assert query["execution_mode"] == "testnet"
+    assert query["$and"] == [
+        {
+            "execution_events": {
+                "$elemMatch": {
+                    "status": "order_filled",
+                    "timestamp": {"$lt": cutoff},
+                }
+            }
+        },
+        {
+            "execution_events": {
+                "$not": {
+                    "$elemMatch": {
+                        "status": "trade_closed",
+                        "timestamp": {"$lt": cutoff},
+                    }
+                }
+            }
+        },
+    ]
+
+
+def test_active_trade_read_failure_propagates_for_report_retry() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.decision_collection = MagicMock()
+    handler.decision_collection.find.side_effect = RuntimeError("read failed")
+    handler.handle_exception = MagicMock()
+
+    try:
+        handler.get_active_trade_decisions(
+            datetime(2026, 8, 22, tzinfo=timezone.utc), "testnet"
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "read failed"
+    else:
+        raise AssertionError("active-trade read failure must propagate")
+
+    handler.handle_exception.assert_called_once()
 
 
 def test_reconciliation_block_requires_durable_matching_record() -> None:
