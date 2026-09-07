@@ -2,7 +2,6 @@ monitored_assets:
   BNBUSDT: testnet
   MKRUSDT: testnet
   LTCUSDT: testnet
-  XRPUSDT: testnet
 
 strategies:
   BCHUSDT:
@@ -31,4 +30,8 @@ strategies:
 
   SOLUSDT:
     strategy: orbit.strategies.solusdt_strategy.SOLUSDTStrategy
+    execution_mode: testnet
+
+  XRPUSDT:
+    strategy: orbit.strategies.xrpusdt_strategy.XRPUSDTStrategy
     execution_mode: testnet
