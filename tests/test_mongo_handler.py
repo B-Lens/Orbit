@@ -78,26 +78,55 @@ def test_active_trade_decisions_are_resolved_at_historical_cutoff() -> None:
     query = handler.decision_collection.find.call_args.args[0]
     assert query["timestamp"] == {"$lt": cutoff}
     assert query["execution_mode"] == "testnet"
-    assert query["$and"] == [
+    assert query["execution_events"] == {
+        "$elemMatch": {
+            "status": "order_filled",
+            "timestamp": {"$lt": cutoff},
+        }
+    }
+    assert query["$nor"] == [
         {
             "execution_events": {
                 "$elemMatch": {
-                    "status": "order_filled",
+                    "status": "trade_closed",
                     "timestamp": {"$lt": cutoff},
                 }
             }
         },
-        {
-            "execution_events": {
-                "$not": {
-                    "$elemMatch": {
-                        "status": "trade_closed",
-                        "timestamp": {"$lt": cutoff},
-                    }
-                }
-            }
-        },
     ]
+
+
+def test_active_trade_decisions_respect_durable_closed_lifecycle() -> None:
+    cutoff = datetime(2026, 8, 22, tzinfo=timezone.utc)
+    open_trade = {
+        "decision_id": "open",
+        "execution_events": [
+            {"status": "order_filled", "timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc)}
+        ],
+    }
+    closed_without_event = {
+        "decision_id": "closed",
+        "execution_events": [
+            {"status": "order_filled", "timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc)}
+        ],
+    }
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.decision_collection = MagicMock()
+    handler.decision_collection.find.return_value.sort.return_value = [
+        open_trade,
+        closed_without_event,
+    ]
+    handler.trade_lifecycle_collection = MagicMock()
+    handler.trade_lifecycle_collection.find.return_value = [{"trade_id": "closed"}]
+
+    result = handler.get_active_trade_decisions(cutoff, "testnet")
+
+    assert result == [open_trade]
+    lifecycle_query = handler.trade_lifecycle_collection.find.call_args.args[0]
+    assert lifecycle_query == {
+        "trade_id": {"$in": ["open", "closed"]},
+        "closed_at": {"$lt": cutoff},
+    }
 
 
 def test_active_trade_read_failure_propagates_for_report_retry() -> None:

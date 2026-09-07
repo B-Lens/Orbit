@@ -705,25 +705,21 @@ class MongoHandler(ExceptionManager):
         query: Dict[str, Any] = {
             "timestamp": {"$lt": as_of},
             "outcome": "accepted",
-            "$and": [
+            "execution_events": {
+                "$elemMatch": {
+                    "status": "order_filled",
+                    "timestamp": {"$lt": as_of},
+                }
+            },
+            "$nor": [
                 {
                     "execution_events": {
                         "$elemMatch": {
-                            "status": "order_filled",
+                            "status": "trade_closed",
                             "timestamp": {"$lt": as_of},
                         }
                     }
-                },
-                {
-                    "execution_events": {
-                        "$not": {
-                            "$elemMatch": {
-                                "status": "trade_closed",
-                                "timestamp": {"$lt": as_of},
-                            }
-                        }
-                    }
-                },
+                }
             ],
         }
         if execution_mode:
@@ -732,6 +728,25 @@ class MongoHandler(ExceptionManager):
             candidates = list(
                 collection.find(query, {"_id": 0}).sort("timestamp", ASCENDING)
             )
+            lifecycle = getattr(self, "trade_lifecycle_collection", None)
+            candidate_ids = [
+                str(row["decision_id"])
+                for row in candidates
+                if row.get("decision_id")
+            ]
+            closed_ids = set()
+            if lifecycle is not None and candidate_ids:
+                closed_ids = {
+                    str(row["trade_id"])
+                    for row in lifecycle.find(
+                        {
+                            "trade_id": {"$in": candidate_ids},
+                            "closed_at": {"$lt": as_of},
+                        },
+                        {"_id": 0, "trade_id": 1},
+                    )
+                    if row.get("trade_id")
+                }
 
             def closed_before_cutoff(event: Dict[str, Any]) -> bool:
                 timestamp = event.get("timestamp")
@@ -746,6 +761,7 @@ class MongoHandler(ExceptionManager):
             return [
                 row
                 for row in candidates
+                if str(row.get("decision_id") or "") not in closed_ids
                 if not any(
                     closed_before_cutoff(event)
                     for event in row.get("execution_events", [])
