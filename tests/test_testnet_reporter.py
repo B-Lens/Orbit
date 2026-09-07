@@ -101,6 +101,10 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("No-signal evaluations (counted, not expanded): **1**", body)
         self.assertIn("Closed-trade net P&L: **8.50000000 USDT**", body)
         self.assertIn("| BTCUSDT | 1 | 8.50000000 |", body)
+        self.assertIn("## Daily exchange-ledger activity", body)
+        self.assertIn("Commission: **-1.00000000 USDT**", body)
+        self.assertIn("Funding: **-0.50000000 USDT**", body)
+        self.assertIn("Net account income: **8.50000000 USDT**", body)
         self.assertIn("## Closed-trade performance by asset", body)
         self.assertIn("## Active trades", body)
         self.assertNotIn("quiet-1", body)
@@ -127,7 +131,11 @@ class TestReportRendering(unittest.TestCase):
             "symbol": "ETHUSDT",
             "signal": "BUY",
             "entry_price": "100",
-            "execution_events": [{"status": "order_filled", "quantity": "0.5"}],
+            "execution_events": [{
+                "status": "order_filled",
+                "quantity": "0.5",
+                "timestamp": datetime(2026, 8, 21, 1, tzinfo=timezone.utc),
+            }],
         }]
 
         body = build_report_body(date(2026, 8, 21), decisions, [], active)
@@ -136,6 +144,32 @@ class TestReportRendering(unittest.TestCase):
         self.assertNotIn("ETHUSDT | 1 |", body)
         self.assertIn("| active-eth | ETHUSDT | BUY | 100 | 0.5 |", body)
         self.assertIn("Closed-trade net P&L: **5.00000000 USDT**", body)
+
+    def test_active_trade_uses_latest_fill_before_report_cutoff(self):
+        active = [{
+            "decision_id": "active-eth",
+            "symbol": "ETHUSDT",
+            "signal": "BUY",
+            "execution_events": [
+                {
+                    "status": "order_filled",
+                    "average_price": "100",
+                    "executed_quantity": "0.5",
+                    "timestamp": datetime(2026, 8, 21, 20, tzinfo=timezone.utc),
+                },
+                {
+                    "status": "order_filled",
+                    "average_price": "110",
+                    "executed_quantity": "0.25",
+                    "timestamp": datetime(2026, 8, 22, 2, tzinfo=timezone.utc),
+                },
+            ],
+        }]
+
+        body = build_report_body(date(2026, 8, 21), [], [], active)
+
+        self.assertIn("| active-eth | ETHUSDT | BUY | 100 | 0.5 |", body)
+        self.assertNotIn("| active-eth | ETHUSDT | BUY | 110 | 0.25 |", body)
 
     def test_weekly_report_separates_signals_submissions_and_fills(self):
         decisions = [

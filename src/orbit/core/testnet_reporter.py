@@ -115,9 +115,11 @@ def build_report_body(
 ) -> str:
     """Render readable daily evidence with closed and active P&L separated."""
     all_decisions = list(decisions)
-    # Income remains synchronized for the immutable audit ledger. Daily closed-
-    # trade P&L comes from lifecycle-linked close events, not timestamp guesses.
-    list(income_records)
+    income = [dict(row) for row in income_records]
+    # Closed-trade P&L comes from lifecycle-linked close events. The complete
+    # daily exchange ledger is reported separately because rows such as funding
+    # and entry commission cannot safely be attributed to a closed lifecycle.
+    account_performance = PerformanceTracker.summarize(income)
     start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     window_decisions = [
@@ -185,6 +187,22 @@ def build_report_body(
     if not closed_by_symbol:
         lines.append("| — | 0 | 0.00000000 |")
 
+    lines.extend(
+        [
+            "",
+            "## Daily exchange-ledger activity",
+            "",
+            "_Whole-account income recorded during this UTC day. These values include "
+            "active-position activity and are not attributed to closed trades._",
+            "",
+            f"- Realized P&L: **{account_performance.realized_pnl:.8f} USDT**",
+            f"- Commission: **{account_performance.commission:.8f} USDT**",
+            f"- Funding: **{account_performance.funding:.8f} USDT**",
+            f"- Other income: **{account_performance.other_income:.8f} USDT**",
+            f"- Net account income: **{account_performance.net_pnl:.8f} USDT**",
+        ]
+    )
+
     lines.extend([
         "", "## Active trades", "",
         "_These trades were active at the report cutoff. No unrealized P&L is inferred._", "",
@@ -192,11 +210,16 @@ def build_report_body(
         "| :--- | :--- | :--- | ---: | ---: |",
     ])
     for position in sorted(active, key=lambda row: str(row.get("symbol") or "")):
-        fill = next(
+        fill: Mapping[str, Any] = next(
             (
                 event
                 for event in reversed(position.get("execution_events", []))
                 if event.get("status") == "order_filled"
+                and _in_window(
+                    event.get("timestamp"),
+                    datetime.min.replace(tzinfo=timezone.utc),
+                    end,
+                )
             ),
             {},
         )
