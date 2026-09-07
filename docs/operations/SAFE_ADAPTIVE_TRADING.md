@@ -62,10 +62,12 @@ copies duplicated decision data and did not represent executed positions.
 ## GitHub Testnet reporting and analysis
 
 When `ORBIT_GITHUB_REPORTING_ENABLED=true`, `TestnetDailyReporterThread` publishes
-the previous UTC day's accepted, rejected, and errored Testnet attempts to one
-idempotent GitHub issue and adds it to the configured Project. The issue includes
-prices, sentiment, strategy identity, decision reason, all execution transitions,
-and fee-aware net P&L. No-signal evaluations are counted but are not trade attempts.
+the completed Saturday-through-Friday batch of daily Testnet reports on Saturday
+morning UTC. Each date has an idempotent GitHub issue, so a restart after Saturday
+repairs the latest completed batch instead of skipping it.
+The issue separates strategy rejections from risk/order rejections, shows closed-
+trade performance by asset, and keeps trades active at each historical cutoff in
+a separate section. No-signal evaluations are counted but are not trade attempts.
 Before publication, the reporter synchronizes Binance Testnet income from the
 start of the reporting window. Income rows are tagged by execution mode, and the
 report queries only `testnet` rows so mixed live/Testnet deployments cannot blend
@@ -73,10 +75,11 @@ account performance.
 
 When an LLM provider is configured, both daily and weekly report issues receive a
 plain-language explanation comment generated from the completed report. The prompt
-asks the model to explain the signal-to-fill funnel, rejection reasons, fee-aware
-net P&L, and protective-order failures without treating policy rejections as a
-reason to weaken safeguards. Republishing updates the marker-owned comment, and a
-post-write reconciliation removes duplicates created by overlapping publishers.
+asks the model to add only useful interpretation that the report does not already
+state, using short scan-friendly sections for highlights and follow-ups without
+treating policy rejections as a reason to weaken safeguards. Republishing updates
+the marker-owned comment, and post-write reconciliation removes duplicates created
+by overlapping publishers.
 
 The publisher then applies `ai-autonomous`. The existing Codex workflow analyzes
 the evidence and may create a reviewed pull request only for a demonstrated code

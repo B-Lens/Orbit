@@ -17,7 +17,7 @@ import locale
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd
 import requests
@@ -619,6 +619,20 @@ class MongoHandler(ExceptionManager):
             self.handle_exception(exc, "Error storing completed trade metrics")
             return False
 
+    def get_trade_exit(self, trade_id: str) -> Optional[Dict[str, Any]]:
+        """Return the immutable completed lifecycle record for one trade, if present."""
+        lifecycle = getattr(self, "trade_lifecycle_collection", None)
+        if lifecycle is None:
+            return None
+        try:
+            record = lifecycle.find_one(
+                {"trade_id": trade_id, "pnl": {"$exists": True}}, {"_id": 0}
+            )
+            return cast(Optional[Dict[str, Any]], record)
+        except Exception as exc:
+            self.handle_exception(exc, "Error reading completed trade lifecycle")
+            raise
+
     def store_trade_reconciliation_block(self, record: Dict[str, Any]) -> bool:
         """Persist a terminal audit row when an exit cannot be attributed safely."""
         lifecycle = getattr(self, "trade_lifecycle_collection", None)
@@ -694,6 +708,82 @@ class MongoHandler(ExceptionManager):
             else:
                 self.handle_exception(exc, "Error reading recent trade decisions")
             return []
+
+    def get_active_trade_decisions(
+        self, as_of: datetime, execution_mode: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Return accepted trades filled but not closed before a UTC cutoff."""
+        collection = getattr(self, "decision_collection", None)
+        if collection is None:
+            return []
+        query: Dict[str, Any] = {
+            "timestamp": {"$lt": as_of},
+            "outcome": "accepted",
+            "execution_events": {
+                "$elemMatch": {
+                    "status": "order_filled",
+                    "timestamp": {"$lt": as_of},
+                }
+            },
+            "$nor": [
+                {
+                    "execution_events": {
+                        "$elemMatch": {
+                            "status": "trade_closed",
+                            "timestamp": {"$lt": as_of},
+                        }
+                    }
+                }
+            ],
+        }
+        if execution_mode:
+            query["execution_mode"] = execution_mode
+        try:
+            candidates = list(
+                collection.find(query, {"_id": 0}).sort("timestamp", ASCENDING)
+            )
+            lifecycle = getattr(self, "trade_lifecycle_collection", None)
+            candidate_ids = [
+                str(row["decision_id"])
+                for row in candidates
+                if row.get("decision_id")
+            ]
+            closed_ids = set()
+            if lifecycle is not None and candidate_ids:
+                closed_ids = {
+                    str(row["trade_id"])
+                    for row in lifecycle.find(
+                        {
+                            "trade_id": {"$in": candidate_ids},
+                            "closed_at": {"$lt": as_of},
+                        },
+                        {"_id": 0, "trade_id": 1},
+                    )
+                    if row.get("trade_id")
+                }
+
+            def closed_before_cutoff(event: Dict[str, Any]) -> bool:
+                timestamp = event.get("timestamp")
+                if event.get("status") != "trade_closed" or not isinstance(
+                    timestamp, datetime
+                ):
+                    return False
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                return timestamp.astimezone(timezone.utc) < as_of
+
+            return [
+                row
+                for row in candidates
+                if str(row.get("decision_id") or "") not in closed_ids
+                if not any(
+                    closed_before_cutoff(event)
+                    for event in row.get("execution_events", [])
+                )
+            ]
+        except Exception as exc:
+            self.handle_exception(exc, "Error reading active trade decisions")
+            raise
 
     def get_recent_sentiment_history(self, hours: int = 24) -> List[Dict[str, Any]]:
         """Return market-intelligence records from the recent UTC window."""

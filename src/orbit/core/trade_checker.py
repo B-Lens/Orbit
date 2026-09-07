@@ -28,7 +28,7 @@ import math
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
 import redis
@@ -700,6 +700,38 @@ class TradeChecker(AuthenticationManager, RedisManager):
             self.delete_trade_with_orders(trade_id)
             getattr(self, "trades", {}).pop(symbol, None)
             return True
+
+        existing_exit = mongo_handler.get_trade_exit(trade_id)
+        if isinstance(existing_exit, Mapping) and existing_exit.get("closed_at"):
+            # A prior attempt may have durably stored the lifecycle but failed while
+            # appending its decision event. Reuse that immutable record so retrying
+            # cannot attach freshly generated accounting or LLM reasoning to it.
+            closed_at = existing_exit["closed_at"]
+            if not isinstance(closed_at, datetime):
+                raise RuntimeError(f"Stored close timestamp was invalid for {trade_id}")
+            if closed_at.tzinfo is None:
+                closed_at = closed_at.replace(tzinfo=timezone.utc)
+            if not mongo_handler.append_decision_event(
+                trade_id,
+                {
+                    "event_id": f"trade_closed:{trade_id}",
+                    "status": "trade_closed",
+                    "timestamp": closed_at,
+                    "exit_price": existing_exit.get("exit_price"),
+                    "pnl": existing_exit.get("pnl"),
+                    "duration_seconds": existing_exit.get("duration_seconds"),
+                    "llm_exit_reasoning": existing_exit.get("llm_exit_reasoning"),
+                },
+            ):
+                raise RuntimeError(f"MongoDB close event persistence failed for {trade_id}")
+            self.delete_trade_with_orders(trade_id)
+            getattr(self, "trades", {}).pop(symbol, None)
+            logger.info(
+                "[EXIT] Recovered durable close event for %s and removed its state.",
+                trade_id,
+            )
+            return True
+
         position_direction = str(
             persisted_trade.get("positionSide") or persisted_trade.get("side") or ""
         ).upper()
@@ -770,6 +802,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 break
         if closing_quantity < expected_quantity:
             raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
+        closed_at = datetime.fromtimestamp(
+            max(int(fill.get("time", 0) or 0) for fill in closing_fills) / 1000,
+            tz=timezone.utc,
+        )
         if entry_fills:
             entered_at = datetime.fromtimestamp(
                 min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,
@@ -848,17 +884,19 @@ class TradeChecker(AuthenticationManager, RedisManager):
             }
         if not mongo_handler.store_trade_exit(exit_record):
             raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
-        mongo_handler.append_decision_event(
+        if not mongo_handler.append_decision_event(
             trade_id,
             {
                 "event_id": f"trade_closed:{trade_id}",
                 "status": "trade_closed",
+                "timestamp": closed_at,
                 "exit_price": exit_price,
                 "pnl": pnl,
                 "duration_seconds": duration_seconds,
                 "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
             },
-        )
+        ):
+            raise RuntimeError(f"MongoDB close event persistence failed for {trade_id}")
 
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)

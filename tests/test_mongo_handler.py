@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -47,6 +48,115 @@ def test_decision_event_reports_failed_durability_check() -> None:
     )
 
     assert stored is False
+
+
+def test_get_trade_exit_returns_immutable_lifecycle_record() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.trade_lifecycle_collection = MagicMock()
+    expected = {"trade_id": "decision-1", "pnl": 1.25}
+    handler.trade_lifecycle_collection.find_one.return_value = expected
+
+    assert handler.get_trade_exit("decision-1") == expected
+    handler.trade_lifecycle_collection.find_one.assert_called_once_with(
+        {"trade_id": "decision-1", "pnl": {"$exists": True}}, {"_id": 0}
+    )
+
+
+def test_active_trade_decisions_are_resolved_at_historical_cutoff() -> None:
+    cutoff = datetime(2026, 8, 22, tzinfo=timezone.utc)
+    open_trade = {
+        "decision_id": "open",
+        "execution_events": [
+            {"status": "order_filled", "timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc)}
+        ],
+    }
+    closed_trade = {
+        "decision_id": "closed",
+        "execution_events": [
+            {"status": "order_filled", "timestamp": datetime(2026, 8, 19, tzinfo=timezone.utc)},
+            {"status": "trade_closed", "timestamp": datetime(2026, 8, 21, tzinfo=timezone.utc)},
+        ],
+    }
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.decision_collection = MagicMock()
+    handler.decision_collection.find.return_value.sort.return_value = [
+        open_trade,
+        closed_trade,
+    ]
+
+    result = handler.get_active_trade_decisions(cutoff, "testnet")
+
+    assert result == [open_trade]
+    query = handler.decision_collection.find.call_args.args[0]
+    assert query["timestamp"] == {"$lt": cutoff}
+    assert query["execution_mode"] == "testnet"
+    assert query["execution_events"] == {
+        "$elemMatch": {
+            "status": "order_filled",
+            "timestamp": {"$lt": cutoff},
+        }
+    }
+    assert query["$nor"] == [
+        {
+            "execution_events": {
+                "$elemMatch": {
+                    "status": "trade_closed",
+                    "timestamp": {"$lt": cutoff},
+                }
+            }
+        },
+    ]
+
+
+def test_active_trade_decisions_respect_durable_closed_lifecycle() -> None:
+    cutoff = datetime(2026, 8, 22, tzinfo=timezone.utc)
+    open_trade = {
+        "decision_id": "open",
+        "execution_events": [
+            {"status": "order_filled", "timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc)}
+        ],
+    }
+    closed_without_event = {
+        "decision_id": "closed",
+        "execution_events": [
+            {"status": "order_filled", "timestamp": datetime(2026, 8, 20, tzinfo=timezone.utc)}
+        ],
+    }
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.decision_collection = MagicMock()
+    handler.decision_collection.find.return_value.sort.return_value = [
+        open_trade,
+        closed_without_event,
+    ]
+    handler.trade_lifecycle_collection = MagicMock()
+    handler.trade_lifecycle_collection.find.return_value = [{"trade_id": "closed"}]
+
+    result = handler.get_active_trade_decisions(cutoff, "testnet")
+
+    assert result == [open_trade]
+    lifecycle_query = handler.trade_lifecycle_collection.find.call_args.args[0]
+    assert lifecycle_query == {
+        "trade_id": {"$in": ["open", "closed"]},
+        "closed_at": {"$lt": cutoff},
+    }
+
+
+def test_active_trade_read_failure_propagates_for_report_retry() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.decision_collection = MagicMock()
+    handler.decision_collection.find.side_effect = RuntimeError("read failed")
+    handler.handle_exception = MagicMock()
+
+    try:
+        handler.get_active_trade_decisions(
+            datetime(2026, 8, 22, tzinfo=timezone.utc), "testnet"
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "read failed"
+    else:
+        raise AssertionError("active-trade read failure must propagate")
+
+    handler.handle_exception.assert_called_once()
 
 
 def test_reconciliation_block_requires_durable_matching_record() -> None:

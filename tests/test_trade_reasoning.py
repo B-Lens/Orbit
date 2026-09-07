@@ -216,9 +216,16 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     exit_record = checker.mongo_handler.store_trade_exit.call_args.args[0]
     assert exit_record["pnl"] == 20.0
     assert exit_record["pnl_source"] == "binance_trade_fills_and_funding"
+    assert exit_record["closed_at"] == datetime.fromtimestamp(
+        exit_time_ms / 1000, tz=timezone.utc
+    )
     assert exit_record["duration_seconds"] >= 599
     assert exit_record["llm_exit_reasoning"]["reasoning"] == "momentum continued"
     checker.mongo_handler.append_decision_event.assert_called_once()
+    close_event = checker.mongo_handler.append_decision_event.call_args.args[1]
+    assert close_event["timestamp"] == datetime.fromtimestamp(
+        exit_time_ms / 1000, tz=timezone.utc
+    )
 
 
 def test_exit_uses_income_commission_when_fill_commission_is_non_usdt() -> None:
@@ -282,7 +289,7 @@ def test_exit_uses_income_commission_when_fill_commission_is_non_usdt() -> None:
     assert exit_record["pnl"] == pytest.approx(9.4)
 
 
-def test_exit_refreshes_cooldown_before_failed_lifecycle_persistence() -> None:
+def test_exit_preserves_trade_state_when_close_event_persistence_fails() -> None:
     checker = TradeChecker.__new__(TradeChecker)
     checker.trades = {"BTCUSDT": {"trade_id": "decision-1"}}
     checker.order_manager = MagicMock()
@@ -318,7 +325,8 @@ def test_exit_refreshes_cooldown_before_failed_lifecycle_persistence() -> None:
     ]
     checker.execution_settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
     checker.mongo_handler = MagicMock()
-    checker.mongo_handler.store_trade_exit.return_value = False
+    checker.mongo_handler.store_trade_exit.return_value = True
+    checker.mongo_handler.append_decision_event.return_value = False
     checker._trade_reasoner = MagicMock()
     checker._position_is_flat = MagicMock(return_value=True)
     checker.load_trade = MagicMock(
@@ -333,11 +341,48 @@ def test_exit_refreshes_cooldown_before_failed_lifecycle_persistence() -> None:
     checker.delete_trade_with_orders = MagicMock()
     checker.set_cooldown = MagicMock()
 
-    with pytest.raises(RuntimeError, match="lifecycle persistence failed"):
+    with pytest.raises(RuntimeError, match="close event persistence failed"):
         checker._exit_trade("BTCUSDT", "decision-1")
 
     checker.set_cooldown.assert_called_once_with("BTCUSDT")
     checker.delete_trade_with_orders.assert_not_called()
+
+
+def test_exit_retry_reuses_durable_lifecycle_record() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.trades = {"BTCUSDT": {"trade_id": "decision-1"}}
+    checker.order_manager = MagicMock()
+    checker.execution_settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
+    closed_at = datetime.now(timezone.utc)
+    checker.mongo_handler = MagicMock()
+    checker.mongo_handler.get_trade_exit.return_value = {
+        "trade_id": "decision-1",
+        "closed_at": closed_at,
+        "exit_price": 101.0,
+        "pnl": 1.0,
+        "duration_seconds": 60.0,
+        "llm_exit_reasoning": {"reasoning": "stored review"},
+    }
+    checker.mongo_handler.append_decision_event.return_value = True
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "decision-1",
+            "symbol": "BTCUSDT",
+            "positionSide": "BUY",
+            "quantity": 1.0,
+        }
+    )
+    checker.delete_trade_with_orders = MagicMock()
+    checker.set_cooldown = MagicMock()
+
+    assert checker._exit_trade("BTCUSDT", "decision-1") is True
+
+    checker.order_manager.get_account_trades.assert_not_called()
+    checker.delete_trade_with_orders.assert_called_once_with("decision-1")
+    close_event = checker.mongo_handler.append_decision_event.call_args.args[1]
+    assert close_event["timestamp"] == closed_at
+    assert close_event["llm_exit_reasoning"] == {"reasoning": "stored review"}
 
 
 def test_exit_rejects_fills_after_a_new_entry_lifecycle() -> None:
