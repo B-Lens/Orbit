@@ -852,7 +852,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             }
         if not mongo_handler.store_trade_exit(exit_record):
             raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
-        mongo_handler.append_decision_event(
+        if not mongo_handler.append_decision_event(
             trade_id,
             {
                 "event_id": f"trade_closed:{trade_id}",
@@ -863,7 +863,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 "duration_seconds": duration_seconds,
                 "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
             },
-        )
+        ):
+            raise RuntimeError(f"MongoDB close event persistence failed for {trade_id}")
 
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
