@@ -26,6 +26,7 @@ from orbit.core.redis_manager import (
 
 REDIS_KEY_RUNTIME_ACTIVITY_PREFIX = "orbit:runtime:activity"
 REDIS_KEY_SENTIMENT_SNAPSHOT = "orbit:market:sentiment_snapshot"
+REDIS_KEY_SENTIMENT_HISTORY = "orbit:market:sentiment_history"
 REDIS_KEY_COMMAND_CENTER_LOGS = "orbit:observability:logs"
 REDIS_KEY_COMMAND_CENTER_EXCEPTIONS = "orbit:observability:exceptions"
 
@@ -103,10 +104,12 @@ def record_sentiment_snapshot(client: Any, result: Dict[str, Any]) -> None:
         "updated_at": _utc_now(),
     }
     try:
-        client.set(
-            REDIS_KEY_SENTIMENT_SNAPSHOT,
-            json.dumps(payload, default=_json_value),
-        )
+        encoded = json.dumps(payload, default=_json_value)
+        pipeline = client.pipeline(transaction=True)
+        pipeline.set(REDIS_KEY_SENTIMENT_SNAPSHOT, encoded)
+        pipeline.lpush(REDIS_KEY_SENTIMENT_HISTORY, encoded)
+        pipeline.ltrim(REDIS_KEY_SENTIMENT_HISTORY, 0, 99)
+        pipeline.execute()
     except Exception:
         pass
 
@@ -290,6 +293,21 @@ def read_sentiment(client: Any) -> Dict[str, Any]:
     snapshot["last_completed_slot"] = _decode(client.get(REDIS_KEY_SENTIMENT_LAST_RUN_SLOT))
     snapshot["run_in_progress"] = bool(client.get(REDIS_KEY_SENTIMENT_RUN_SLOT_LEASE))
     return snapshot
+
+
+def read_sentiment_history(client: Any, hours: int = 24) -> List[Dict[str, Any]]:
+    """Return completed sentiment observations within the requested UTC window."""
+    cutoff = datetime.now(timezone.utc).timestamp() - max(0, hours) * 3_600
+    history: List[Dict[str, Any]] = []
+    for item in _list_records(client, REDIS_KEY_SENTIMENT_HISTORY, 100):
+        updated_at = item.get("updated_at")
+        try:
+            observed_at = datetime.fromisoformat(str(updated_at)).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if observed_at >= cutoff:
+            history.append(item)
+    return history
 
 
 def read_observability(
