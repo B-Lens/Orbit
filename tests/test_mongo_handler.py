@@ -50,6 +50,18 @@ def test_decision_event_reports_failed_durability_check() -> None:
     assert stored is False
 
 
+def test_get_trade_exit_returns_immutable_lifecycle_record() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.trade_lifecycle_collection = MagicMock()
+    expected = {"trade_id": "decision-1", "pnl": 1.25}
+    handler.trade_lifecycle_collection.find_one.return_value = expected
+
+    assert handler.get_trade_exit("decision-1") == expected
+    handler.trade_lifecycle_collection.find_one.assert_called_once_with(
+        {"trade_id": "decision-1", "pnl": {"$exists": True}}, {"_id": 0}
+    )
+
+
 def test_active_trade_decisions_are_resolved_at_historical_cutoff() -> None:
     cutoff = datetime(2026, 8, 22, tzinfo=timezone.utc)
     open_trade = {

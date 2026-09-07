@@ -17,7 +17,7 @@ import locale
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd
 import requests
@@ -618,6 +618,20 @@ class MongoHandler(ExceptionManager):
         except Exception as exc:
             self.handle_exception(exc, "Error storing completed trade metrics")
             return False
+
+    def get_trade_exit(self, trade_id: str) -> Optional[Dict[str, Any]]:
+        """Return the immutable completed lifecycle record for one trade, if present."""
+        lifecycle = getattr(self, "trade_lifecycle_collection", None)
+        if lifecycle is None:
+            return None
+        try:
+            record = lifecycle.find_one(
+                {"trade_id": trade_id, "pnl": {"$exists": True}}, {"_id": 0}
+            )
+            return cast(Optional[Dict[str, Any]], record)
+        except Exception as exc:
+            self.handle_exception(exc, "Error reading completed trade lifecycle")
+            raise
 
     def store_trade_reconciliation_block(self, record: Dict[str, Any]) -> bool:
         """Persist a terminal audit row when an exit cannot be attributed safely."""
