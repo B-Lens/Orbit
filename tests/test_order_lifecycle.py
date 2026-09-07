@@ -1,3 +1,4 @@
+import inspect
 import json
 import time
 import unittest
@@ -401,6 +402,101 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
+    def test_websocket_uses_tolerant_default_stale_threshold(self):
+        default_threshold = inspect.signature(TradeChecker).parameters[
+            "ws_stale_threshold"
+        ].default
+        checker = TradeChecker.__new__(TradeChecker)
+        checker._ws_manager = None
+        checker._ws_stale_threshold = default_threshold
+        checker._handle_price_update = MagicMock()
+        checker._handle_ws_status = MagicMock()
+
+        with patch("orbit.core.trade_checker.BinanceWSManager") as manager_class:
+            checker._ensure_ws(["BTCUSDT"])
+
+        manager_class.assert_called_once_with(
+            trading_pairs=["BTCUSDT"],
+            on_price_update=checker._handle_price_update,
+            on_status_change=checker._handle_ws_status,
+            stale_threshold=30.0,
+        )
+
+    def test_stale_watchdog_requests_only_one_reconnect_per_connection(self):
+        manager = BinanceWSManager(["BTCUSDT"], MagicMock(), stale_threshold=5.0)
+        manager._connected = True
+        manager._last_message_time = time.time() - 10
+        manager._close_ws = MagicMock()
+        wait_count = 0
+
+        def stop_after_two_checks(timeout):
+            nonlocal wait_count
+            wait_count += 1
+            if wait_count == 3:
+                manager._stop_event.set()
+            return False
+
+        manager._stop_event.wait = MagicMock(side_effect=stop_after_two_checks)
+
+        manager._stale_checker()
+
+        manager._close_ws.assert_called_once_with()
+
+    def test_stale_watchdog_retries_when_close_does_not_reconnect(self):
+        manager = BinanceWSManager(["BTCUSDT"], MagicMock(), stale_threshold=5.0)
+        manager._connected = True
+        manager._last_message_time = time.time() - 10
+        manager._close_ws = MagicMock()
+        wait_count = 0
+
+        def stop_after_two_checks(timeout):
+            nonlocal wait_count
+            wait_count += 1
+            if wait_count == 2:
+                manager._reconnect_requested_at = time.time() - 6
+            if wait_count == 3:
+                manager._stop_event.set()
+            return False
+
+        manager._stop_event.wait = MagicMock(side_effect=stop_after_two_checks)
+
+        manager._stale_checker()
+
+        self.assertEqual(manager._close_ws.call_count, 2)
+
+    def test_stale_watchdog_retries_after_close_error(self):
+        manager = BinanceWSManager(["BTCUSDT"], MagicMock(), stale_threshold=5.0)
+        manager._connected = True
+        manager._last_message_time = time.time() - 10
+        manager._ws = MagicMock()
+        manager._ws.close.side_effect = [RuntimeError("close failed"), None]
+        wait_count = 0
+
+        def stop_after_two_checks(timeout):
+            nonlocal wait_count
+            wait_count += 1
+            if wait_count == 2:
+                manager._reconnect_requested_at = time.time() - 6
+            if wait_count == 3:
+                manager._stop_event.set()
+            return False
+
+        manager._stop_event.wait = MagicMock(side_effect=stop_after_two_checks)
+
+        manager._stale_checker()
+
+        self.assertEqual(manager._ws.close.call_count, 2)
+
+    def test_websocket_error_uses_valid_warning_logger(self):
+        manager = BinanceWSManager(["BTCUSDT"], MagicMock())
+
+        with patch("orbit.core.binance_ws_manager.logger.warning") as warning:
+            manager._on_error(MagicMock(), RuntimeError("connection dropped"))
+
+        warning.assert_called_once_with(
+            "[WSManager] WebSocket Issue : connection dropped"
+        )
+
     def test_price_stream_uses_periodic_tickers_and_latest_price(self):
         on_price_update = MagicMock()
         manager = BinanceWSManager(["BTCUSDT", "PAXGUSDT"], on_price_update)

@@ -100,6 +100,8 @@ class BinanceWSManager:
         self._stop_event = threading.Event()
         self._last_message_time: float = 0.0
         self._connected: bool = False
+        self._reconnect_requested: bool = False
+        self._reconnect_requested_at: float = 0.0
 
         # Fix #4 — suppress duplicate log/callback on error+close pair
         self._notified_disconnect: bool = False
@@ -206,6 +208,8 @@ class BinanceWSManager:
         self._connected = True
         self._notified_disconnect = False  # reset for the new connection
         with self._lock:
+            self._reconnect_requested = False
+            self._reconnect_requested_at = 0.0
             self._last_message_time = time.time()
         self._notify_status("WebSocket connection opened.")
 
@@ -232,7 +236,7 @@ class BinanceWSManager:
         # Fix #4 — log the error once here, but do NOT call _notify_status
         # yet. _on_close always fires after _on_error, so we let _on_close
         # own the status notification to avoid duplicate callbacks.
-        logger.Warning(f"[WSManager] WebSocket Issue : {error}")
+        logger.warning(f"[WSManager] WebSocket Issue : {error}")
 
     def _on_close(
         self,
@@ -338,9 +342,31 @@ class BinanceWSManager:
 
             with self._lock:
                 last_msg = self._last_message_time
+                reconnect_requested = self._reconnect_requested
+                reconnect_requested_at = self._reconnect_requested_at
 
-            age = time.time() - last_msg
-            if age > self.stale_threshold:
+            now = time.time()
+            age = now - last_msg
+            reconnect_latch_expired = (
+                reconnect_requested
+                and now - reconnect_requested_at >= self.stale_threshold
+            )
+            if age > self.stale_threshold and (
+                not reconnect_requested or reconnect_latch_expired
+            ):
+                with self._lock:
+                    # Closing a socket can take longer than one watchdog cycle.
+                    # Suppress duplicate closes, but expire the latch so a failed
+                    # or ineffective close cannot disable reconnects permanently.
+                    now = time.time()
+                    if (
+                        self._reconnect_requested
+                        and now - self._reconnect_requested_at
+                        < self.stale_threshold
+                    ):
+                        continue
+                    self._reconnect_requested = True
+                    self._reconnect_requested_at = now
                 logger.warning(
                     f"[WSManager] No message received for {age:.1f}s "
                     f"(threshold={self.stale_threshold}s) — forcing reconnect."
