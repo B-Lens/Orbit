@@ -442,6 +442,51 @@ class TestTradeChecker(unittest.TestCase):
 
         manager._close_ws.assert_called_once_with()
 
+    def test_stale_watchdog_retries_when_close_does_not_reconnect(self):
+        manager = BinanceWSManager(["BTCUSDT"], MagicMock(), stale_threshold=5.0)
+        manager._connected = True
+        manager._last_message_time = time.time() - 10
+        manager._close_ws = MagicMock()
+        wait_count = 0
+
+        def stop_after_two_checks(timeout):
+            nonlocal wait_count
+            wait_count += 1
+            if wait_count == 2:
+                manager._reconnect_requested_at = time.time() - 6
+            if wait_count == 3:
+                manager._stop_event.set()
+            return False
+
+        manager._stop_event.wait = MagicMock(side_effect=stop_after_two_checks)
+
+        manager._stale_checker()
+
+        self.assertEqual(manager._close_ws.call_count, 2)
+
+    def test_stale_watchdog_retries_after_close_error(self):
+        manager = BinanceWSManager(["BTCUSDT"], MagicMock(), stale_threshold=5.0)
+        manager._connected = True
+        manager._last_message_time = time.time() - 10
+        manager._ws = MagicMock()
+        manager._ws.close.side_effect = [RuntimeError("close failed"), None]
+        wait_count = 0
+
+        def stop_after_two_checks(timeout):
+            nonlocal wait_count
+            wait_count += 1
+            if wait_count == 2:
+                manager._reconnect_requested_at = time.time() - 6
+            if wait_count == 3:
+                manager._stop_event.set()
+            return False
+
+        manager._stop_event.wait = MagicMock(side_effect=stop_after_two_checks)
+
+        manager._stale_checker()
+
+        self.assertEqual(manager._ws.close.call_count, 2)
+
     def test_websocket_error_uses_valid_warning_logger(self):
         manager = BinanceWSManager(["BTCUSDT"], MagicMock())
 
