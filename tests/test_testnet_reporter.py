@@ -21,7 +21,9 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("trade-attempt-to-fill funnel", prompt)
         self.assertIn("intentional safety rejection", prompt)
         self.assertIn("do not invent facts", prompt)
-        self.assertIn("under\n65,000 characters", prompt)
+        self.assertIn("under 65,000\ncharacters", prompt)
+        self.assertIn("Do not repeat its tables", prompt)
+        self.assertIn("**At a glance**", prompt)
         self.assertIn("# daily report", prompt)
 
     def test_includes_every_trade_attempt_and_exact_rejection(self):
@@ -89,12 +91,15 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("Accepted signals: **1**", body)
         self.assertIn("Orders submitted: **0**", body)
         self.assertIn("Orders filled: **1**", body)
-        self.assertIn("Order-stage rejections: **1**", body)
+        self.assertIn("Strategy rejections: **1**", body)
+        self.assertIn("Risk/order rejections: **1**", body)
         self.assertIn("No-signal evaluations (counted, not expanded): **1**", body)
-        self.assertIn("Realized P&L: **10.00000000 USDT**", body)
+        self.assertIn("Closed-trade realized P&L: **10.00000000 USDT**", body)
         self.assertIn("Commission: **-1.00000000 USDT**", body)
         self.assertIn("Funding: **-0.50000000 USDT**", body)
-        self.assertIn("Net P&L after fees/funding: **8.50000000 USDT**", body)
+        self.assertIn("Closed-trade net P&L: **8.50000000 USDT**", body)
+        self.assertIn("## Closed-trade performance by asset", body)
+        self.assertIn("## Active trades", body)
         self.assertNotIn("quiet-1", body)
         self.assertNotIn("prior-day-order", body)
 
@@ -103,6 +108,35 @@ class TestReportRendering(unittest.TestCase):
         parts = _split_report(body, limit=100)
         self.assertGreater(len(parts), 1)
         self.assertEqual("\n".join(parts), body)
+
+    def test_active_trade_pnl_is_separate_from_closed_asset_performance(self):
+        income = [
+            {"time": 1, "symbol": "BTCUSDT", "incomeType": "REALIZED_PNL", "income": "5"},
+            {"time": 1, "symbol": "ETHUSDT", "incomeType": "REALIZED_PNL", "income": "4"},
+            {"time": 3_000, "symbol": "ETHUSDT", "incomeType": "REALIZED_PNL", "income": "8"},
+        ]
+        decisions = [{
+            "symbol": "ETHUSDT",
+            "execution_events": [{
+                "status": "order_filled",
+                "timestamp": datetime(1970, 1, 1, 0, 0, 2, tzinfo=timezone.utc),
+            }],
+        }]
+        active = [{
+            "symbol": "ETHUSDT",
+            "positionAmt": "0.5",
+            "entryPrice": "100",
+            "markPrice": "104",
+            "unRealizedProfit": "2",
+        }]
+
+        body = build_report_body(date(2026, 8, 21), decisions, income, active)
+
+        self.assertIn("| BTCUSDT | 5.00000000", body)
+        self.assertIn("| ETHUSDT | 4.00000000", body)
+        self.assertNotIn("| ETHUSDT | 8.00000000", body)
+        self.assertIn("| ETHUSDT | LONG | 0.5 | 100 | 104 | 2 |", body)
+        self.assertIn("Closed-trade net P&L: **9.00000000 USDT**", body)
 
     def test_weekly_report_separates_signals_submissions_and_fills(self):
         decisions = [
@@ -219,6 +253,23 @@ class TestDailyReporter(unittest.TestCase):
             reporter.run_forever(interval_seconds=0)
 
         reporter.publish_week.assert_called_once_with(date(2026, 8, 17))
+        reporter.publish_date.assert_not_called()
+
+    @patch("orbit.core.testnet_reporter.time_module.sleep")
+    @patch("orbit.core.testnet_reporter.datetime")
+    def test_daily_report_is_published_on_saturday_morning(
+        self, datetime_mock, sleep_mock
+    ):
+        datetime_mock.now.return_value = datetime(2026, 8, 22, 1, tzinfo=timezone.utc)
+        sleep_mock.side_effect = RuntimeError("stop loop")
+        reporter = DailyReporter(MagicMock(), MagicMock())
+        reporter.publish_date = MagicMock(return_value="daily")
+        reporter.publish_week = MagicMock(return_value="weekly")
+
+        with self.assertRaisesRegex(RuntimeError, "stop loop"):
+            reporter.run_forever(interval_seconds=0)
+
+        reporter.publish_date.assert_called_once_with(date(2026, 8, 21))
 
     def test_reads_only_testnet_window_and_publishes_idempotent_title(self):
         mongo = MagicMock()
@@ -228,6 +279,7 @@ class TestDailyReporter(unittest.TestCase):
         github.publish.return_value = "https://github.test/report/1"
         futures = MagicMock()
         futures.get_income_history.return_value = []
+        futures.get_position_risk.return_value = []
         summary_generator = MagicMock(return_value="Two orders filled.")
         reporter = DailyReporter(mongo, github, futures, summary_generator)
 
@@ -251,6 +303,7 @@ class TestDailyReporter(unittest.TestCase):
         mongo.get_income_records.assert_called_once_with(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
+        futures.get_position_risk.assert_called_once_with()
         self.assertEqual(
             github.publish.call_args.args[0], "Orbit Testnet daily report: 2026-08-21"
         )
