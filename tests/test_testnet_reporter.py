@@ -275,7 +275,9 @@ class TestDailyReporter(unittest.TestCase):
 
     @patch("orbit.core.testnet_reporter.time_module.sleep")
     @patch("orbit.core.testnet_reporter.datetime")
-    def test_weekly_report_is_repaired_after_monday(self, datetime_mock, sleep_mock):
+    def test_daily_report_runs_on_monday_but_weekly_report_does_not(
+        self, datetime_mock, sleep_mock
+    ):
         datetime_mock.now.return_value = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
         sleep_mock.side_effect = RuntimeError("stop loop")
         reporter = DailyReporter(MagicMock(), MagicMock())
@@ -285,13 +287,12 @@ class TestDailyReporter(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stop loop"):
             reporter.run_forever(interval_seconds=0)
 
-        reporter.publish_week.assert_called_once_with(date(2026, 8, 17))
-        self.assertEqual(reporter.publish_date.call_count, 7)
-        reporter.publish_date.assert_any_call(date(2026, 8, 21))
+        reporter.publish_date.assert_called_once_with(date(2026, 8, 24))
+        reporter.publish_week.assert_not_called()
 
     @patch("orbit.core.testnet_reporter.time_module.sleep")
     @patch("orbit.core.testnet_reporter.datetime")
-    def test_daily_report_is_published_on_saturday_morning(
+    def test_daily_and_weekly_reports_are_published_on_saturday(
         self, datetime_mock, sleep_mock
     ):
         datetime_mock.now.return_value = datetime(2026, 8, 22, 1, tzinfo=timezone.utc)
@@ -303,10 +304,8 @@ class TestDailyReporter(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stop loop"):
             reporter.run_forever(interval_seconds=0)
 
-        self.assertEqual(
-            [call.args[0] for call in reporter.publish_date.call_args_list],
-            [date(2026, 8, day) for day in range(15, 22)],
-        )
+        reporter.publish_date.assert_called_once_with(date(2026, 8, 21))
+        reporter.publish_week.assert_called_once_with(date(2026, 8, 15))
 
     def test_reads_only_testnet_window_and_publishes_idempotent_title(self):
         mongo = MagicMock()

@@ -62,9 +62,7 @@ copies duplicated decision data and did not represent executed positions.
 ## GitHub Testnet reporting and analysis
 
 When `ORBIT_GITHUB_REPORTING_ENABLED=true`, `TestnetDailyReporterThread` publishes
-the completed Saturday-through-Friday batch of daily Testnet reports on Saturday
-morning UTC. Each date has an idempotent GitHub issue, so a restart after Saturday
-repairs the latest completed batch instead of skipping it.
+one idempotent daily Testnet report for the completed previous UTC day.
 The issue separates strategy rejections from risk/order rejections, shows closed-
 trade performance by asset, and keeps trades active at each historical cutoff in
 a separate section. No-signal evaluations are counted but are not trade attempts.
@@ -118,8 +116,8 @@ retains `sentiment_history` because its rolling 24-hour score is an input to the
 current signal filter. Removing any of these collections would change trading,
 risk, or reporting behavior rather than merely removing archival data.
 
-On Monday UTC, the Testnet reporter also publishes an idempotent report for the
-completed Monday-through-Sunday week. It distinguishes accepted signals,
+On Saturday UTC, the Testnet reporter also publishes an idempotent report for the
+completed Saturday-through-Friday week. It distinguishes accepted signals,
 submitted orders, filled orders, order-stage rejections, and realized-PnL
 events. The weekly scorecard includes fee-aware net P&L, realized-PnL profit
 factor, ledger drawdown, protective-order failures, and symbol/strategy
@@ -127,9 +125,7 @@ breakdowns. It does not label realized-PnL rows as closed trades or estimate
 slippage and uptime from data that the runtime does not persist.
 
 Weekly scorecards do not receive `ai-autonomous` and therefore cannot start the
-issue-implementation workflow. On every run, the reporter idempotently publishes
-the latest completed UTC week, so a restart after Monday still repairs that
-week's report.
+issue-implementation workflow.
 
 ## Risk policy
 
