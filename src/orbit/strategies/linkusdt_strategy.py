@@ -29,8 +29,45 @@ class LINKUSDTStrategy(Strategy):
     def __post_init__(self) -> None:
         super().__init__(self.data)
 
-    def _indicators(self) -> pd.DataFrame:
-        frame = self.data.copy()
+    @staticmethod
+    def _has_contiguous_bars(data: pd.DataFrame, interval: pd.Timedelta) -> bool:
+        """Return whether *data* has no missing candles at its native cadence."""
+        if len(data) < 2:
+            return True
+        differences = data.index.to_series().diff().dropna()
+        return bool((differences == interval).all())
+
+    def _hourly_data(self) -> pd.DataFrame:
+        """Return complete 1-hour candles from native hourly or 15-minute data."""
+        if self.data.empty or not isinstance(self.data.index, pd.DatetimeIndex):
+            return pd.DataFrame(columns=self.data.columns, index=self.data.index)
+
+        data = self.data.sort_index()
+        differences = data.index.to_series().diff().dropna()
+        interval = differences.median() if not differences.empty else pd.Timedelta(hours=1)
+        if interval >= pd.Timedelta(hours=1):
+            return data if self._has_contiguous_bars(data, interval) else data.iloc[0:0]
+
+        bars_per_hour = pd.Timedelta(hours=1) / interval
+        if not bars_per_hour.is_integer() or not self._has_contiguous_bars(data, interval):
+            return data.iloc[0:0]
+
+        grouped = data.resample("1h", label="left", closed="left")
+        hourly = grouped.agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }
+        )
+        expected = int(bars_per_hour)
+        complete = grouped["close"].count() == expected
+        return hourly[complete].dropna()
+
+    def _indicators(self, data: pd.DataFrame) -> pd.DataFrame:
+        frame = data.copy()
         frame["prior_high"] = frame["high"].shift(1).rolling(self.donchian_period).max()
         frame["prior_low"] = frame["low"].shift(1).rolling(self.donchian_period).min()
         frame["ema"] = self.compute_ema(frame["close"], self.ema_period)
@@ -55,11 +92,12 @@ class LINKUSDTStrategy(Strategy):
     ) -> Optional[Dict[str, Any]]:
         """Return a candidate signal from complete, contiguous hourly candles."""
         del symbol
+        hourly = self._hourly_data()
         minimum_bars = max(self.donchian_period, self.ema_period, self.volume_period) + 1
-        if position_side or len(self.data) < minimum_bars:
+        if position_side or len(hourly) < minimum_bars:
             return None
 
-        frame = self._indicators()
+        frame = self._indicators(hourly)
         current = frame.iloc[-1]
         if pd.isna(current[["prior_high", "prior_low", "atr", "average_volume"]]).any():
             return None
