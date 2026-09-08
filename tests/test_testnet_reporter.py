@@ -281,8 +281,6 @@ class TestDailyReporter(unittest.TestCase):
         datetime_mock.now.return_value = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
         sleep_mock.side_effect = RuntimeError("stop loop")
         reporter = DailyReporter(MagicMock(), MagicMock())
-        reporter.github.published_daily_report_dates.return_value = set()
-        reporter.github.published_weekly_report_dates.return_value = {date(2026, 8, 17)}
         reporter.publish_date = MagicMock(return_value="daily")
         reporter.publish_week = MagicMock(return_value="weekly")
 
@@ -300,8 +298,6 @@ class TestDailyReporter(unittest.TestCase):
         datetime_mock.now.return_value = datetime(2026, 8, 22, 1, tzinfo=timezone.utc)
         sleep_mock.side_effect = RuntimeError("stop loop")
         reporter = DailyReporter(MagicMock(), MagicMock())
-        reporter.github.published_daily_report_dates.return_value = set()
-        reporter.github.published_weekly_report_dates.return_value = set()
         reporter.publish_date = MagicMock(return_value="daily")
         reporter.publish_week = MagicMock(return_value="weekly")
 
@@ -310,57 +306,6 @@ class TestDailyReporter(unittest.TestCase):
 
         reporter.publish_date.assert_called_once_with(date(2026, 8, 21))
         reporter.publish_week.assert_called_once_with(date(2026, 8, 10))
-
-    @patch("orbit.core.testnet_reporter.time_module.sleep")
-    @patch("orbit.core.testnet_reporter.datetime")
-    def test_missed_daily_and_weekly_reports_are_backfilled(
-        self, datetime_mock, sleep_mock
-    ):
-        datetime_mock.now.return_value = datetime(2026, 9, 2, 12, tzinfo=timezone.utc)
-        sleep_mock.side_effect = RuntimeError("stop loop")
-        reporter = DailyReporter(MagicMock(), MagicMock())
-        reporter.github.published_daily_report_dates.return_value = {date(2026, 8, 29)}
-        reporter.github.published_weekly_report_dates.return_value = {date(2026, 8, 10)}
-        reporter.publish_date = MagicMock(return_value="daily")
-        reporter.publish_week = MagicMock(return_value="weekly")
-
-        with self.assertRaisesRegex(RuntimeError, "stop loop"):
-            reporter.run_forever(interval_seconds=0)
-
-        self.assertEqual(
-            [call.args[0] for call in reporter.publish_date.call_args_list],
-            [
-                date(2026, 8, 29),
-                date(2026, 8, 30),
-                date(2026, 8, 31),
-                date(2026, 9, 1),
-            ],
-        )
-        self.assertEqual(
-            [call.args[0] for call in reporter.publish_week.call_args_list],
-            [date(2026, 8, 10), date(2026, 8, 17)],
-        )
-
-    @patch("orbit.core.testnet_reporter.time_module.sleep")
-    @patch("orbit.core.testnet_reporter.datetime")
-    def test_discovery_failure_is_retried_on_next_interval(
-        self, datetime_mock, sleep_mock
-    ):
-        datetime_mock.now.return_value = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
-        sleep_mock.side_effect = [None, RuntimeError("stop loop")]
-        reporter = DailyReporter(MagicMock(), MagicMock())
-        reporter.github.published_daily_report_dates.side_effect = [
-            RuntimeError("GitHub unavailable"),
-            set(),
-        ]
-        reporter.github.published_weekly_report_dates.return_value = {date(2026, 8, 10)}
-        reporter.publish_date = MagicMock(return_value="daily")
-        reporter.publish_week = MagicMock(return_value="weekly")
-
-        with self.assertRaisesRegex(RuntimeError, "stop loop"):
-            reporter.run_forever(interval_seconds=0)
-
-        reporter.publish_date.assert_called_once_with(date(2026, 8, 24))
 
     def test_reads_only_testnet_window_and_publishes_idempotent_title(self):
         mongo = MagicMock()
@@ -435,19 +380,6 @@ class TestDailyReporter(unittest.TestCase):
 
 
 class TestGitHubProjectClient(unittest.TestCase):
-    def test_published_report_dates_ignore_unrelated_and_invalid_titles(self):
-        client = GitHubProjectClient.__new__(GitHubProjectClient)
-        client._report_issues = MagicMock(
-            return_value=[
-                {"title": "Orbit Testnet daily report: 2026-08-21"},
-                {"title": "Orbit Testnet daily report: not-a-date"},
-                {"title": "Orbit Testnet weekly report: 2026-08-17"},
-            ]
-        )
-
-        self.assertEqual(client.published_daily_report_dates(), {date(2026, 8, 21)})
-        self.assertEqual(client.published_weekly_report_dates(), {date(2026, 8, 17)})
-
     def test_summary_lookup_finds_marker_after_first_comment_page(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
         client.repository = "B-Lens/Orbit"
