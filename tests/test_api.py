@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from orbit.api import (
+    _closed_trade_response,
     _recent_sentiment_history,
     _risk_execution_state,
     _signal_response,
@@ -88,6 +89,26 @@ def test_no_signal_decisions_have_explicit_dashboard_values() -> None:
     assert response["signal"] == "NO SIGNAL"
     assert response["pattern"] == "No setup"
     assert response["sentiment"] == "Not evaluated"
+
+
+def test_closed_trade_dashboard_response_keeps_full_lifecycle_details() -> None:
+    closed_at = datetime(2026, 9, 7, 10, 0)
+    response = _closed_trade_response(
+        {
+            "trade_id": "decision-1",
+            "symbol": "BTCUSDT",
+            "positionSide": "BUY",
+            "price": 100.0,
+            "exit_price": 105.0,
+            "pnl": 5.0,
+            "closed_at": closed_at,
+            "llm_exit_reasoning": {"reasoning": "Target reached"},
+        }
+    )
+
+    assert response["entry_price"] == 100.0
+    assert response["closed_at"] == "2026-09-07T10:00:00+00:00"
+    assert response["details"]["llm_exit_reasoning"]["reasoning"] == "Target reached"
 
 
 @patch("orbit.api._command_center_mongo_handler")
