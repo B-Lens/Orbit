@@ -1,12 +1,16 @@
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
+
+import pytest
 
 from orbit.core.command_center import (
     CommandCenterLogHandler,
     REDIS_KEY_COMMAND_CENTER_EXCEPTIONS,
     REDIS_KEY_COMMAND_CENTER_LOGS,
     REDIS_KEY_SENTIMENT_HISTORY,
+    configured_runtime_id,
     read_observability,
     read_positions,
     read_runtime_state,
@@ -124,6 +128,15 @@ def test_reads_runtime_positions_and_sentiment_from_live_state() -> None:
     assert REDIS_KEY_SENTIMENT_HISTORY in client.lists
 
 
+def test_runtime_id_uses_the_single_expected_runtime_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ORBIT_RUNTIME_ID", raising=False)
+    monkeypatch.setenv("ORBIT_EXPECTED_RUNTIME_IDS", "orbit-prod-1")
+
+    assert configured_runtime_id() == "orbit-prod-1"
+
+
 def test_structured_logs_and_exceptions_are_bounded_ui_sources() -> None:
     client = FakeRedis()
     handler = CommandCenterLogHandler(client)
@@ -150,6 +163,29 @@ def test_structured_logs_and_exceptions_are_bounded_ui_sources() -> None:
     assert REDIS_KEY_COMMAND_CENTER_LOGS in client.lists
     assert REDIS_KEY_COMMAND_CENTER_EXCEPTIONS in client.lists
     assert read_observability(client, 0, 0) == ([], [])
+
+
+def test_observability_hides_exceptions_older_than_24_hours() -> None:
+    client = FakeRedis()
+    client.lpush(
+        REDIS_KEY_COMMAND_CENTER_EXCEPTIONS,
+        json.dumps(
+            {
+                "id": "expired",
+                "type": "RuntimeError",
+                "message": "old failure",
+                "created_at": (
+                    datetime.now(timezone.utc) - timedelta(hours=24, seconds=1)
+                ).isoformat(),
+            }
+        ),
+    )
+    record_exception(client, RuntimeError("current failure"), "monitor", "trace")
+
+    _, exceptions = read_observability(client, 10, 10)
+
+    assert len(exceptions) == 1
+    assert exceptions[0]["message"] == "current failure"
 
 
 def test_observability_writes_do_not_interrupt_trading_on_redis_failure() -> None:
