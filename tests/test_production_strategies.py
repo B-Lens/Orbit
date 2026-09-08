@@ -480,39 +480,34 @@ class TestATOMUSDTVWAP(unittest.TestCase):
 def _linkusdt_hourly_data(*, direction: str = "flat", bars: int = 260) -> pd.DataFrame:
     """Generate synthetic hourly OHLCV data for testing.
     
-    Creates a long period of low volatility to trigger the squeeze,
-    followed by a sudden breakout candle.
+    Creates data that triggers EMA crossovers.
     """
     index = pd.date_range("2026-01-01", periods=bars, freq="1h")
-    base_price = 15.00
     
-    close = np.full(bars, base_price)
-    high = close + 0.05
-    low = close - 0.05
-    volume = np.full(bars, 500_000.0)
-
-    if direction == "up":
-        # Breakout candle: strong volume, closes above upper BB and EMA
-        close[-1] = 15.50
-        high[-1] = 15.60
-        low[-1] = 14.90
-        volume[-1] = 1_000_000.0
+    if direction == "flat":
+        close = np.full(bars, 15.0)
+    elif direction == "up":
+        # Start at 12, drift up to 16 to get EMA-200 pointing up.
+        close = np.linspace(12.0, 16.0, bars)
+        # Induce a slight pullback then a sharp cross up at the end
+        close[-5:-1] = 15.0
+        close[-1] = 16.5  # Sharp spike to cross EMA-9 over EMA-21
     elif direction == "down":
-        # Breakout candle: strong volume, closes below lower BB and EMA
-        close[-1] = 14.50
-        high[-1] = 15.10
-        low[-1] = 14.40
-        volume[-1] = 1_000_000.0
-    elif direction != "flat":
+        # Start at 18, drift down to 14
+        close = np.linspace(18.0, 14.0, bars)
+        # Induce a slight rally then a sharp cross down at the end
+        close[-5:-1] = 15.0
+        close[-1] = 13.5  # Sharp drop to cross EMA-9 below EMA-21
+    else:
         raise ValueError(f"Unknown direction: {direction}")
 
     return pd.DataFrame(
         {
             "open": close,
-            "high": high,
-            "low": low,
+            "high": close + 0.1,
+            "low": close - 0.1,
             "close": close,
-            "volume": volume,
+            "volume": np.full(bars, 500_000.0),
         },
         index=index,
     )

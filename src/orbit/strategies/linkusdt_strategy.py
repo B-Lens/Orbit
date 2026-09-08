@@ -1,19 +1,15 @@
-"""Hourly BB Squeeze Breakout strategy for LINKUSDT.
+"""Hourly EMA Crossover strategy for LINKUSDT.
 
-Strategy: Bollinger Band Squeeze Breakout with EMA Trend Filter
+Strategy: Triple EMA Momentum Crossover
 ---------------------------------------------------------------
-Chainlink (LINK) spends 70-80% of its time in tight ranges, leading to
-volatility compression (squeeze). When breakouts occur, they are typically
-impulsive and sustained. This strategy detects volatility compression using
-Bollinger Band bandwidth and trades breakouts in the direction of the macro
-trend (EMA-200).
+Chainlink (LINK) tends to trend strongly once a move begins. This strategy
+capitalizes on momentum by trading the crossover of a fast EMA (9) over a 
+medium EMA (21), strictly filtered by the macro trend (EMA 200).
 
-1. **Bollinger Band Squeeze**: Bandwidth drops below its 48-hour minimum.
-2. **Breakout**: Price closes outside the Bollinger Bands.
-3. **Trend Filter**: Only take long breakouts above EMA-200, and short
-   breakouts below EMA-200.
-4. **Volume Confirmation**: Volume must spike >1.35x its 24-hour average.
-5. **Risk Management**: ATR-based stops targeting 1:3.5 R:R.
+1. **Trend Filter**: Only take longs when price > EMA-200.
+2. **Crossover**: Fast EMA (9) crosses Medium EMA (21).
+3. **Momentum Confirmation**: RSI(14) > 50 for longs.
+4. **Risk Management**: Dynamic ATR-based stops.
 """
 
 import logging
@@ -30,18 +26,16 @@ logger = logging.getLogger("Orbit")
 
 @dataclass
 class LINKUSDTStrategy(Strategy):
-    """Hourly BB Squeeze Breakout strategy for LINKUSDT."""
+    """Hourly EMA Crossover strategy for LINKUSDT."""
 
     data: pd.DataFrame
-    bb_period: int = 20
-    bb_std: float = 2.0
-    squeeze_lookback: int = 48
-    ema_period: int = 200
+    ema_fast: int = 9
+    ema_medium: int = 21
+    ema_slow: int = 200
+    rsi_period: int = 14
     atr_period: int = 14
-    atr_stop_multiple: float = 3.0
+    atr_stop_multiple: float = 2.5
     reward_risk: float = 2.0
-    volume_period: int = 24
-    volume_multiple: float = 1.20
     enforce_freshness: bool = True
 
     def __post_init__(self) -> None:
@@ -124,28 +118,22 @@ class LINKUSDTStrategy(Strategy):
     # Indicator computation
     # ------------------------------------------------------------------
 
+    def _compute_rsi(self, series: pd.Series) -> pd.Series:
+        delta = series.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.ewm(com=self.rsi_period - 1, min_periods=self.rsi_period).mean()
+        avg_loss = loss.ewm(com=self.rsi_period - 1, min_periods=self.rsi_period).mean()
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        return 100 - (100 / (1 + rs))
+
     def _indicators(self, data: pd.DataFrame) -> pd.DataFrame:
         frame = data.copy()
         
-        bb_middle = frame["close"].rolling(window=self.bb_period).mean()
-        bb_std = frame["close"].rolling(window=self.bb_period).std()
-        
-        frame["bb_upper"] = bb_middle + self.bb_std * bb_std
-        frame["bb_lower"] = bb_middle - self.bb_std * bb_std
-        frame["bb_bandwidth"] = (frame["bb_upper"] - frame["bb_lower"]) / bb_middle
-        
-        # Min bandwidth over lookback (shifted to avoid look-ahead)
-        frame["bb_bandwidth_min"] = (
-            frame["bb_bandwidth"].shift(1).rolling(self.squeeze_lookback).min()
-        )
-        # Squeeze defined as current bandwidth within 5% of the lookback minimum
-        frame["squeeze"] = frame["bb_bandwidth"] <= frame["bb_bandwidth_min"] * 1.05
-        # Recent squeeze within the last 10 hours
-        frame["squeeze_recent"] = (
-            frame["squeeze"].rolling(10).max().fillna(0).astype(bool)
-        )
-        
-        frame["ema"] = frame["close"].ewm(span=self.ema_period, adjust=False).mean()
+        frame["ema_fast"] = frame["close"].ewm(span=self.ema_fast, adjust=False).mean()
+        frame["ema_medium"] = frame["close"].ewm(span=self.ema_medium, adjust=False).mean()
+        frame["ema_slow"] = frame["close"].ewm(span=self.ema_slow, adjust=False).mean()
+        frame["rsi"] = self._compute_rsi(frame["close"])
         
         previous_close = frame["close"].shift(1)
         true_range = pd.concat(
@@ -158,10 +146,6 @@ class LINKUSDTStrategy(Strategy):
         ).max(axis=1)
         frame["atr"] = true_range.ewm(alpha=1 / self.atr_period, adjust=False).mean()
         
-        frame["average_volume"] = (
-            frame["volume"].shift(1).rolling(self.volume_period).mean()
-        )
-        
         return frame
 
     # ------------------------------------------------------------------
@@ -173,16 +157,9 @@ class LINKUSDTStrategy(Strategy):
     ) -> Optional[Dict[str, Any]]:
         del symbol
         hourly, latest_closed = self._hourly_data()
-        minimum_bars = (
-            max(
-                self.bb_period + self.squeeze_lookback,
-                self.ema_period,
-                self.atr_period,
-                self.volume_period,
-            )
-            + 1
-        )
+        minimum_bars = self.ema_slow + 2
         recent = hourly.tail(minimum_bars)
+        
         if (
             position_side
             or not latest_closed
@@ -191,50 +168,30 @@ class LINKUSDTStrategy(Strategy):
         ):
             return None
 
-        current = self._indicators(hourly).iloc[-1]
+        indicators = self._indicators(hourly)
+        current = indicators.iloc[-1]
+        prev = indicators.iloc[-2]
         
-        if (
-            pd.isna(current["atr"]) 
-            or current["atr"] <= 0 
-            or pd.isna(current["average_volume"])
-            or current["average_volume"] <= 0
-        ):
+        if pd.isna(current["atr"]) or current["atr"] <= 0:
             return None
 
         close = float(current["close"])
-        active_volume = current["volume"] > (
-            self.volume_multiple * current["average_volume"]
-        )
-        squeeze_recent = bool(current["squeeze_recent"])
         atr = float(current["atr"])
-        
         risk = self.atr_stop_multiple * atr
         
-        long_signal = (
-            close > current["bb_upper"]
-            and close > current["ema"]
-            and active_volume
-            and squeeze_recent
-        )
-        
-        short_signal = (
-            close < current["bb_lower"]
-            and close < current["ema"]
-            and active_volume
-            and squeeze_recent
-        )
-        
-        if long_signal:
+        # Long Conditions
+        # 1. Macro Trend is UP
+        long_trend = current["ema_medium"] > current["ema_slow"]
+        # 2. Fast EMA crosses Medium EMA UP
+        long_cross = (prev["ema_fast"] <= prev["ema_medium"]) and (current["ema_fast"] > current["ema_medium"])
+        # 3. RSI > 50 (Momentum)
+        long_momentum = current["rsi"] > 50.0
+
+        if long_trend and long_cross and long_momentum:
             stop = close - risk
             target = close + self.reward_risk * risk
-            pattern = (
-                f"1H BB Squeeze Breakout Bullish | EMA200={current['ema']:.3f} "
-                f"close={close:.3f} ATR={atr:.3f}"
-            )
-            logger.info(
-                "LINKUSDT BUY signal: entry=%.4f SL=%.4f TP=%.4f | %s",
-                close, stop, target, pattern,
-            )
+            pattern = f"1H EMA Crossover Bullish | EMA9={current['ema_fast']:.3f} close={close:.3f} ATR={atr:.3f}"
+            logger.info("LINKUSDT BUY signal: entry=%.4f SL=%.4f TP=%.4f | %s", close, stop, target, pattern)
             return {
                 "signal": "BUY",
                 "entry_price": close,
@@ -243,17 +200,19 @@ class LINKUSDTStrategy(Strategy):
                 "pattern": pattern,
             }
             
-        elif short_signal:
+        # Short Conditions
+        # 1. Macro Trend is DOWN
+        short_trend = current["ema_medium"] < current["ema_slow"]
+        # 2. Fast EMA crosses Medium EMA DOWN
+        short_cross = (prev["ema_fast"] >= prev["ema_medium"]) and (current["ema_fast"] < current["ema_medium"])
+        # 3. RSI < 50 (Momentum)
+        short_momentum = current["rsi"] < 50.0
+
+        if short_trend and short_cross and short_momentum:
             stop = close + risk
             target = close - self.reward_risk * risk
-            pattern = (
-                f"1H BB Squeeze Breakout Bearish | EMA200={current['ema']:.3f} "
-                f"close={close:.3f} ATR={atr:.3f}"
-            )
-            logger.info(
-                "LINKUSDT SELL signal: entry=%.4f SL=%.4f TP=%.4f | %s",
-                close, stop, target, pattern,
-            )
+            pattern = f"1H EMA Crossover Bearish | EMA9={current['ema_fast']:.3f} close={close:.3f} ATR={atr:.3f}"
+            logger.info("LINKUSDT SELL signal: entry=%.4f SL=%.4f TP=%.4f | %s", close, stop, target, pattern)
             return {
                 "signal": "SELL",
                 "entry_price": close,
