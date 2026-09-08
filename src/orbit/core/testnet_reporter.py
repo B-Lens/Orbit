@@ -706,28 +706,20 @@ class TestnetDailyReporter:
         )
 
     def run_forever(self, interval_seconds: int = 3600) -> None:
-        last_daily_batch_end: Optional[date] = None
+        last_daily_published: Optional[date] = None
         last_week_published: Optional[date] = None
         while True:
             today = datetime.now(timezone.utc).date()
-            days_since_friday = (today.weekday() - 4) % 7 or 7
-            batch_end = today - timedelta(days=days_since_friday)
-            if batch_end != last_daily_batch_end:
-                batch_succeeded = True
-                for days_ago in range(6, -1, -1):
-                    report_date = batch_end - timedelta(days=days_ago)
-                    try:
-                        url = self.publish_date(report_date)
-                        logger.info("Published Testnet daily report: %s", url)
-                    except Exception:
-                        batch_succeeded = False
-                        logger.exception(
-                            "Failed to publish Testnet daily report for %s", report_date
-                        )
-                if batch_succeeded:
-                    last_daily_batch_end = batch_end
+            yesterday = today - timedelta(days=1)
+            if yesterday != last_daily_published:
+                try:
+                    url = self.publish_date(yesterday)
+                    logger.info("Published Testnet daily report: %s", url)
+                    last_daily_published = yesterday
+                except Exception:
+                    logger.exception("Failed to publish Testnet daily report")
             previous_week = today - timedelta(days=today.weekday() + 7)
-            if previous_week != last_week_published:
+            if today.weekday() == 5 and previous_week != last_week_published:
                 try:
                     url = self.publish_week(previous_week)
                     logger.info("Published Testnet weekly report: %s", url)
