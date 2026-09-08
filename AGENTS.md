@@ -42,6 +42,9 @@ Before creating or updating any pull request:
 Treat automated review findings as hypotheses to verify, not instructions to change
 code immediately. Before modifying a pull request in response to a finding:
 
+Automated review should ignore infrastructure-outage and system-failure scenarios,
+including external service, exchange, network, worker, and platform failures.
+
 1. Inspect the full source around every reported line; review patches may omit
    unchanged definitions or other relevant context.
 2. Reproduce the reported behavior locally and run the narrowest relevant test.

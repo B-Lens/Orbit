@@ -1,60 +1,35 @@
-Review this pull request as a strict production-safety gate for Orbit, a
-continuously running Binance Futures trading system.
+Review this pull request for Orbit, a continuously running Binance Futures
+trading system. Return only the JSON required by the review schema.
 
-## Complete review requirement
+Review the full diff and relevant callers, configuration, tests, and workflows.
+Report every independently actionable defect introduced by this diff, with a
+changed-file line number, trigger, and production impact. Trace changed values
+to their consumers. Ignore style, docs, missing tests alone, speculation,
+pre-existing issues, and outage or system-failure scenarios (including external
+service, exchange, network, worker, or infrastructure failures).
 
-Inspect the entire diff and enough surrounding code, configuration, tests, and
-workflows to evaluate every changed path before choosing a verdict. Do not stop
-after finding the first defect. Collect and report all independently actionable
-findings in one review. After identifying a finding, continue the full review for
-additional issues; do not defer known findings to a later review cycle.
+Project safety context:
 
-Report only defects introduced by the diff, using changed-file line numbers and
-a concrete triggering state plus production impact. Trace changed values through
-their consumers and check failure, retry, restart, concurrency, and mixed-mode
-paths.
+- Only `OrderManager` may place exchange orders. `TradeChecker` reconciles
+  positions/protective orders; market intelligence may filter signals only.
+- Core-owned pre-trade LLM review is required and fails closed. Decision and
+  exit reasoning must remain tied to one immutable lifecycle; post-exit review
+  is observational and cannot delay or place orders.
+- `config/strategies.yaml` authorizes each symbol as `testnet` or `live`.
+  Missing/paper modes fail startup. All orders, balances, income, and
+  reconciliation use that symbol's Binance environment; monitored positions
+  also require an explicit mode.
+- State and exchange mutations must be atomic/idempotent across partial fills,
+  retries, restarts, stale mappings, and concurrent workers. Close side must
+  oppose entry; protective orders must not enlarge or reverse a position.
+- Limits: leverage <= 5; notional <= 25% equity; stop risk <= 0.25% equity;
+  daily net loss < 2%; reward/risk >= 1.5. Exchange minimums cannot override a
+  rejection. Income sync fails closed; commission and paid funding are already
+  negative in net P&L.
+- Do not allow safeguards to be silently disabled or credentials to enter code,
+  logs, artifacts, prompts, or untrusted execution.
 
-## Critical invariants
-
-- `OrderManager` is the only exchange-order gateway. `TradeChecker` reconciles
-  positions and protective orders. Market intelligence may filter signals but
-  must never place orders.
-- Every actionable candidate must pass the core-owned pre-trade LLM review before
-  reaching `OrderManager`; unavailable, failed, or malformed reviews fail closed.
-  Entry reasoning, order transitions, broker-confirmed exits, and post-exit
-  reasoning must stay attributable to the same immutable decision lifecycle.
-  Post-exit review is observational and must never delay or initiate exchange
-  mutations.
-- `config/strategies.yaml` is the execution-mode authority. Every configured
-  trading pair must explicitly use `execution_mode: testnet` or `execution_mode:
-  live`; missing or paper modes must fail startup. Orders, balances, income, and
-  reconciliation must use the Binance environment selected for that asset. Do
-  not require or restore an environment-variable live-asset allowlist.
-  Non-strategy symbols monitored for existing positions must also have an
-  explicit mode.
-- Exchange mutations and Redis/MongoDB state must remain atomic, idempotent, and
-  safe across partial fills, retries, restarts, stale mappings, and concurrent
-  workers. Entry and closing sides must remain opposite and protective orders
-  must never enlarge or reverse a position.
-- Pre-trade limits are leverage <= 5, notional <= 25% of equity, stop risk <=
-  0.25% of equity, daily net loss < 2%, and reward/risk >= 1.5. Exchange minimums
-  cannot override rejection. Income synchronization fails closed. Commission and
-  paid funding are already negative when added to net P&L.
-- Worker, configuration, dependency, startup, and deployment changes must not
-  silently disable trading safeguards. Secrets and credentials must not enter
-  code, logs, artifacts, prompts, or untrusted execution.
-
-Focus on concrete correctness, security, concurrency, data-integrity,
-trading-risk, clean-build, startup, and deployment defects. Ignore style,
-formatting, documentation preferences, missing tests alone, speculative concerns,
-and pre-existing issues outside the diff. Do not modify files.
-
-## Verdict
-
-- PASS: no actionable findings; `findings` must be empty.
-- FAIL: include every actionable finding discovered in this complete pass.
-- P0: immediate financial loss, credential compromise, or broad outage.
-- P1: probable crash, incorrect trade, bypassed safety control, or corruption.
-- P2: lower-impact correctness or build/deployment defect that blocks merging.
-
-Return only the JSON object required by the provided output schema.
+Verdict: PASS only when `findings` is empty; otherwise FAIL. P0 is immediate
+financial loss or credential compromise; P1 is an incorrect trade, bypassed
+safety control, or corruption; P2 is a merge-blocking correctness/build/deploy
+defect.
