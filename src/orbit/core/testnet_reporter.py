@@ -683,7 +683,7 @@ class TestnetDailyReporter:
         )
 
     def publish_week(self, week_start: date) -> str:
-        """Publish a completed Monday-through-Sunday UTC reporting window."""
+        """Publish a completed Saturday-through-Friday UTC reporting window."""
         start = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=7)
         if self.futures_client is not None:
@@ -718,10 +718,7 @@ class TestnetDailyReporter:
                     last_daily_published = yesterday
                 except Exception:
                     logger.exception("Failed to publish Testnet daily report")
-            last_scheduled_saturday = today - timedelta(
-                days=(today.weekday() - 5) % 7
-            )
-            previous_week = last_scheduled_saturday - timedelta(days=12)
+            previous_week = today - timedelta(days=7)
             if today.weekday() == 5 and previous_week != last_week_published:
                 try:
                     url = self.publish_week(previous_week)

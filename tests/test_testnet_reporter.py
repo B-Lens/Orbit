@@ -305,7 +305,7 @@ class TestDailyReporter(unittest.TestCase):
             reporter.run_forever(interval_seconds=0)
 
         reporter.publish_date.assert_called_once_with(date(2026, 8, 21))
-        reporter.publish_week.assert_called_once_with(date(2026, 8, 10))
+        reporter.publish_week.assert_called_once_with(date(2026, 8, 15))
 
     def test_reads_only_testnet_window_and_publishes_idempotent_title(self):
         mongo = MagicMock()

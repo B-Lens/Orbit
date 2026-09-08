@@ -117,7 +117,7 @@ current signal filter. Removing any of these collections would change trading,
 risk, or reporting behavior rather than merely removing archival data.
 
 On Saturday UTC, the Testnet reporter also publishes an idempotent report for the
-completed Monday-through-Sunday week. It distinguishes accepted signals,
+completed Saturday-through-Friday week. It distinguishes accepted signals,
 submitted orders, filled orders, order-stage rejections, and realized-PnL
 events. The weekly scorecard includes fee-aware net P&L, realized-PnL profit
 factor, ledger drawdown, protective-order failures, and symbol/strategy
