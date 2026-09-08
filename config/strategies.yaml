@@ -38,3 +38,7 @@ strategies:
   BNBUSDT:
     strategy: orbit.strategies.bnbusdt_strategy.BNBStrategy
     execution_mode: testnet
+
+  LINKUSDT:
+    strategy: orbit.strategies.linkusdt_strategy.LINKUSDTStrategy
+    execution_mode: testnet

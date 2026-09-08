@@ -7,6 +7,7 @@ import pandas as pd
 from orbit.strategies.atomusdt_strategy import ATOMUSDTStrategy
 from orbit.strategies.btc_strategy import BTCStrategy
 from orbit.strategies.eth_strategy import ETHStrategy
+from orbit.strategies.linkusdt_strategy import LINKUSDTStrategy
 from orbit.strategies.skyusdt_strategy import SKYUSDTStrategy
 from orbit.strategies.paxgusdt_strategy import PAXGUSDTStrategy
 from orbit.strategies.reversal_strategy import BollingerAdaptiveReversalStrategyBCH
@@ -24,6 +25,7 @@ class TestProductionStrategyOwnership(unittest.TestCase):
         self.assertIs(STRATEGY_REGISTRY["PAXGUSDT"], PAXGUSDTStrategy)
         self.assertIs(STRATEGY_REGISTRY["SKYUSDT"], SKYUSDTStrategy)
         self.assertIs(STRATEGY_REGISTRY["ATOMUSDT"], ATOMUSDTStrategy)
+        self.assertIs(STRATEGY_REGISTRY["LINKUSDT"], LINKUSDTStrategy)
 
     def test_all_production_strategies_use_orbit_contract(self):
         for strategy_class in (
@@ -33,6 +35,7 @@ class TestProductionStrategyOwnership(unittest.TestCase):
             PAXGUSDTStrategy,
             SKYUSDTStrategy,
             ATOMUSDTStrategy,
+            LINKUSDTStrategy,
         ):
             self.assertTrue(issubclass(strategy_class, Strategy))
             self.assertTrue(strategy_class.__module__.startswith("orbit.strategies."))

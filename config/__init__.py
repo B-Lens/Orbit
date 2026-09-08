@@ -22,6 +22,7 @@ COIN_TRADE_TYPE = {
     "BTCUSDT": TradeType.BRACKET_TRADE,
     "PAXGUSDT": TradeType.BRACKET_TRADE,
     "XRPUSDT": TradeType.BRACKET_TRADE,
+    "LINKUSDT": TradeType.BRACKET_TRADE,
 }
 
 TRAILING_STOPLOSS = {
@@ -36,6 +37,7 @@ TRAILING_STOPLOSS = {
     "ATOMUSDT": False,
     "XRPUSDT": False,
     "PAXGUSDT": False,
+    "LINKUSDT": False,
 }
 
 # Load YAML config independently of the process working directory.
