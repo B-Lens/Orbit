@@ -11,6 +11,7 @@ from orbit.core.command_center import (
     REDIS_KEY_COMMAND_CENTER_LOGS,
     REDIS_KEY_SENTIMENT_HISTORY,
     configured_runtime_id,
+    read_older_exception_count,
     read_observability,
     read_positions,
     read_runtime_state,
@@ -186,6 +187,7 @@ def test_observability_hides_exceptions_older_than_24_hours() -> None:
 
     assert len(exceptions) == 1
     assert exceptions[0]["message"] == "current failure"
+    assert read_older_exception_count(client) == 1
 
 
 def test_observability_writes_do_not_interrupt_trading_on_redis_failure() -> None:

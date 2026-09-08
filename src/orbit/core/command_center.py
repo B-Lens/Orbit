@@ -353,6 +353,16 @@ def read_observability(
     return logs, exceptions[:exception_limit]
 
 
+def read_older_exception_count(client: Any) -> int:
+    """Count exceptions hidden from the current 24-hour operational list."""
+    return sum(
+        not _is_recent_exception(record)
+        for record in _list_records(
+            client, REDIS_KEY_COMMAND_CENTER_EXCEPTIONS, OBSERVABILITY_MAX_RECORDS
+        )
+    )
+
+
 def create_redis_client() -> Any:
     """Create a decoded Redis client using Orbit's standard environment."""
     redis_url = os.getenv("REDIS_URL")

@@ -144,6 +144,7 @@ def test_risk_execution_state_fails_closed_on_invalid_configuration(
 @patch("orbit.api._risk_execution_state")
 @patch("orbit.api._recent_sentiment_history", return_value=[])
 @patch("orbit.api._recent_signals")
+@patch("orbit.api.read_older_exception_count", return_value=2)
 @patch("orbit.api.read_observability")
 @patch("orbit.api.read_sentiment")
 @patch("orbit.api.read_sentiment_history")
@@ -157,6 +158,7 @@ def test_command_center_uses_live_state_not_notification_feed(
     read_sentiment_history_state: MagicMock,
     read_sentiment_state: MagicMock,
     read_observability_state: MagicMock,
+    _older_exception_count: MagicMock,
     recent_signals: MagicMock,
     _recent_sentiments: MagicMock,
     risk_state: MagicMock,
@@ -219,5 +221,6 @@ def test_command_center_uses_live_state_not_notification_feed(
     assert response.positions[0].execution_mode == "testnet"
     assert response.signals[0].outcome == "no_signal"
     assert response.sentiment.effective == "BULLISH"
+    assert response.older_exception_count == 2
     client.ping.assert_called_once_with()
     client.close.assert_called_once_with()
