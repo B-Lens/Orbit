@@ -1,14 +1,15 @@
-# LINKUSDT strategy research — rejected candidate
+# LINKUSDT strategy research and testnet forward validation
 
 ## Decision
 
-No LINKUSDT strategy is registered or authorized for testnet or live execution.
-The best full-sample candidate in this study was profitable after modeled costs, but
-failed the predeclared chronological robustness check. Calling it a profitable
-strategy would overstate the evidence.
+LINKUSDT is registered for **testnet-only forward validation**. It is not
+authorized for live execution. The best full-sample candidate in this study was
+profitable after modeled costs, but failed the predeclared chronological robustness
+check. Calling it a proven profitable strategy would overstate the evidence.
 
-`LINKUSDTResearchStrategy` is retained solely to make this negative result
-reproducible. It is intentionally absent from `config/strategies.yaml`.
+`LINKUSDTStrategy` is registered in `config/strategies.yaml` with
+`execution_mode: testnet`. Testnet activity is intended to measure live-like signal,
+fill, and order-lifecycle behavior; it does not validate or authorize live trading.
 
 ## Research basis and candidate
 
@@ -62,8 +63,10 @@ selection. More importantly, all 108 combinations in the predeclared grid lost
 money in the second half; the least-negative result was −5.70%. The aggregate
 result therefore does not meet the project’s promotion bar.
 
-## Next step
+## Forward-test and live-promotion gate
 
-Keep LINKUSDT disabled. A future proposal needs a separately held-out period and
-a forward test with Futures-native candles, funding, spread/impact estimates, and
-order-lifecycle reconciliation before testnet registration can be considered.
+Keep LINKUSDT in testnet mode. Before a separate live-promotion proposal, collect
+enough forward-test trades to assess profit factor, drawdown, slippage, funding,
+and order reconciliation, and repeat validation on a separately held-out period
+with Futures-native candles and spread/impact estimates. A negative forward result,
+or a material order-lifecycle safety issue, requires disabling this testnet strategy.

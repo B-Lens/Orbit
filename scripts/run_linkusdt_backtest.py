@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backtest the rejected LINKUSDT research candidate on hourly CSV candles."""
+"""Backtest the LINKUSDT testnet-forward-validation strategy on hourly candles."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from orbit.backtesting import WalkForwardBacktester  # noqa: E402
-from orbit.strategies.linkusdt_strategy import LINKUSDTResearchStrategy  # noqa: E402
+from orbit.strategies.linkusdt_strategy import LINKUSDTStrategy  # noqa: E402
 
 
 def load_candles(path: Path) -> pd.DataFrame:
@@ -54,7 +54,7 @@ def metrics(report: object) -> dict[str, float | int | None]:
 def run(data: pd.DataFrame, equity: float, risk: float) -> dict[str, object]:
     """Run one chronological segment with the documented cost assumptions."""
     report = WalkForwardBacktester(
-        LINKUSDTResearchStrategy,
+        LINKUSDTStrategy,
         starting_equity=equity,
         risk_per_trade_pct=risk,
         fee_rate=0.0004,
@@ -82,8 +82,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     data = load_candles(args.csv)
     split = len(data) // 2
     result = {
-        "strategy": "LINKUSDTResearchStrategy",
-        "status": "rejected_not_registered",
+        "strategy": "LINKUSDTStrategy",
+        "status": "testnet_forward_validation_only",
         "symbol": "LINKUSDT",
         "timeframe": "1h",
         "data_start": data.index[0].isoformat(),

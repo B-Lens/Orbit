@@ -27,6 +27,10 @@ strategies:
     strategy: orbit.strategies.atomusdt_strategy.ATOMUSDTStrategy
     execution_mode: testnet
 
+  LINKUSDT:
+    strategy: orbit.strategies.linkusdt_strategy.LINKUSDTStrategy
+    execution_mode: testnet
+
   SOLUSDT:
     strategy: orbit.strategies.solusdt_strategy.SOLUSDTStrategy
     execution_mode: testnet

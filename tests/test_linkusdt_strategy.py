@@ -4,7 +4,8 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from orbit.strategies.linkusdt_strategy import LINKUSDTResearchStrategy
+from config import COIN_TRADE_TYPE, TRAILING_STOPLOSS, TradeType
+from orbit.strategies.linkusdt_strategy import LINKUSDTStrategy
 from orbit.strategies.strategy_registry import STRATEGY_REGISTRY
 
 
@@ -24,18 +25,22 @@ def _hourly_data(direction: str = "flat", bars: int = 220) -> pd.DataFrame:
     )
 
 
-class TestLINKUSDTResearchStrategy(unittest.TestCase):
+class TestLINKUSDTStrategy(unittest.TestCase):
     @patch("orbit.core.discord_manager.DiscordManager.__init__", return_value=None)
-    def test_candidate_is_not_registered_for_execution(self, _mock_discord):
-        self.assertNotIn("LINKUSDT", STRATEGY_REGISTRY)
+    def test_registry_resolves_testnet_strategy(self, _mock_discord):
+        self.assertIs(STRATEGY_REGISTRY["LINKUSDT"], LINKUSDTStrategy)
+
+    def test_testnet_reconciliation_uses_bracket_orders_without_trailing(self):
+        self.assertIs(COIN_TRADE_TYPE["LINKUSDT"], TradeType.BRACKET_TRADE)
+        self.assertFalse(TRAILING_STOPLOSS["LINKUSDT"])
 
     @patch("orbit.core.discord_manager.DiscordManager.__init__", return_value=None)
     def test_insufficient_data_returns_none(self, _mock_discord):
-        self.assertIsNone(LINKUSDTResearchStrategy(_hourly_data(bars=200)).generate_signals())
+        self.assertIsNone(LINKUSDTStrategy(_hourly_data(bars=200)).generate_signals())
 
     @patch("orbit.core.discord_manager.DiscordManager.__init__", return_value=None)
     def test_long_breakout_uses_documented_reward_risk(self, _mock_discord):
-        signal = LINKUSDTResearchStrategy(_hourly_data("up")).generate_signals()
+        signal = LINKUSDTStrategy(_hourly_data("up")).generate_signals()
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertEqual(signal["signal"], "BUY")
@@ -45,7 +50,7 @@ class TestLINKUSDTResearchStrategy(unittest.TestCase):
 
     @patch("orbit.core.discord_manager.DiscordManager.__init__", return_value=None)
     def test_short_breakout_uses_documented_reward_risk(self, _mock_discord):
-        signal = LINKUSDTResearchStrategy(_hourly_data("down")).generate_signals()
+        signal = LINKUSDTStrategy(_hourly_data("down")).generate_signals()
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertEqual(signal["signal"], "SELL")
@@ -55,5 +60,5 @@ class TestLINKUSDTResearchStrategy(unittest.TestCase):
 
     @patch("orbit.core.discord_manager.DiscordManager.__init__", return_value=None)
     def test_open_position_suppresses_entry(self, _mock_discord):
-        strategy = LINKUSDTResearchStrategy(_hourly_data("up"))
+        strategy = LINKUSDTStrategy(_hourly_data("up"))
         self.assertIsNone(strategy.generate_signals(position_side="LONG"))

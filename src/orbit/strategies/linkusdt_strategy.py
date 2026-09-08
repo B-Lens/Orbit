@@ -1,9 +1,4 @@
-"""Research-only hourly Donchian breakout candidate for LINKUSDT.
-
-This module deliberately is not registered in ``config/strategies.yaml``.  Its
-walk-forward results are not sufficiently stable for testnet or live use; it
-exists so the rejected research candidate can be reproduced exactly.
-"""
+"""Testnet-only hourly Donchian breakout strategy for LINKUSDT."""
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -14,12 +9,12 @@ from orbit.strategies.strategies_base import Strategy
 
 
 @dataclass
-class LINKUSDTResearchStrategy(Strategy):
-    """Donchian/EMA/volume candidate evaluated in the LINKUSDT study.
+class LINKUSDTStrategy(Strategy):
+    """Testnet Donchian/EMA/volume strategy evaluated in the LINKUSDT study.
 
     The parameters are fixed to the highest full-sample candidate in the
-    predeclared grid.  They are research parameters, not a recommendation or
-    an authorization to trade LINKUSDT.
+    predeclared grid. It is authorized only for monitored testnet forward
+    validation; live promotion requires a separate reviewed change.
     """
 
     data: pd.DataFrame
@@ -94,7 +89,7 @@ class LINKUSDTResearchStrategy(Strategy):
             "stop_loss": close - direction * risk,
             "take_profit": close + direction * self.reward_risk * risk,
             "pattern": (
-                "RESEARCH ONLY: 1H Donchian72 + EMA200 + volume1.4 "
+                "TESTNET: 1H Donchian72 + EMA200 + volume1.4 "
                 f"| ATR={float(current['atr']):.4f}"
             ),
         }

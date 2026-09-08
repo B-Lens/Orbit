@@ -60,6 +60,7 @@ class TestExecutionSettings(unittest.TestCase):
                 "LTCUSDT",
                 "SOLUSDT",
                 "ATOMUSDT",
+                "LINKUSDT",
                 "XRPUSDT",
             },
         )
