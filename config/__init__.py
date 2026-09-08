@@ -13,6 +13,7 @@ class TradeType(Enum):
 COIN_TRADE_TYPE = {
     "BNBUSDT": TradeType.BRACKET_TRADE,
     "ATOMUSDT": TradeType.BRACKET_TRADE,
+    "LINKUSDT": TradeType.BRACKET_TRADE,
     "MKRUSDT": TradeType.BRACKET_TRADE,
     "SKYUSDT": TradeType.BRACKET_TRADE,
     "BCHUSDT": TradeType.ADAPTIVE_TRADE,
@@ -34,6 +35,7 @@ TRAILING_STOPLOSS = {
     "LTCUSDT": False,
     "SOLUSDT": False,
     "ATOMUSDT": False,
+    "LINKUSDT": False,
     "XRPUSDT": False,
     "PAXGUSDT": False,
 }

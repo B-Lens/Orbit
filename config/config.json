@@ -7,6 +7,7 @@
       "BTCUSDT" : 0,
       "PAXGUSDT" : 0,
       "ATOMUSDT" : 0,
+      "LINKUSDT" : 0,
       "XRPUSDT" : 0,
       "BNBUSDT" : 0
     },
@@ -17,6 +18,7 @@
       "PAXGUSDT": 0.01,
       "SKYUSDT": 0.01,
       "ATOMUSDT": 0.01,
+      "LINKUSDT": 0.01,
       "SOLUSDT": 0.03,
       "XRPUSDT": 0.01,
       "stop_loss_percent":1,
@@ -30,7 +32,7 @@
       "max_daily_loss_pct": 0.02,
       "min_reward_risk_ratio": 1.5
     },
-    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "PAXGUSDT", "SKYUSDT", "ATOMUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT"],
+    "trading_pairs": [ "BTCUSDT", "ETHUSDT", "BCHUSDT", "PAXGUSDT", "SKYUSDT", "ATOMUSDT", "LINKUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT"],
     "trade_checker_pair": [ "BCHUSDT", "BTCUSDT", "BNBUSDT", "ETHUSDT", "MKRUSDT", "SKYUSDT", "LTCUSDT", "SOLUSDT", "ATOMUSDT", "XRPUSDT", "PAXGUSDT"],
     "trading_pairs_precision":{
       "BTCUSDT": 3,
@@ -42,6 +44,7 @@
       "LTCUSDT": 3,
       "SOLUSDT": 2,
       "ATOMUSDT": 3,
+      "LINKUSDT": 3,
       "XRPUSDT": 3,
       "PAXGUSDT": 2
     }
