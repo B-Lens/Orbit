@@ -61,6 +61,7 @@ class TestExecutionSettings(unittest.TestCase):
                 "SOLUSDT",
                 "ATOMUSDT",
                 "XRPUSDT",
+                "LINKUSDT",
             },
         )
         self.assertEqual(set(settings.asset_modes.values()), {ExecutionMode.TESTNET})
