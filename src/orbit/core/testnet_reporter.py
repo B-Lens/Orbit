@@ -481,12 +481,44 @@ class GitHubProjectClient:
         response.raise_for_status()
 
     def _report_issues(self) -> list[Mapping[str, Any]]:
-        issues = self._call(
-            "GET",
-            f"https://api.github.com/repos/{self.repository}/issues",
-            params={"state": "all", "labels": REPORT_LABEL, "per_page": 100},
-        )
-        return list(issues)
+        issues: list[Mapping[str, Any]] = []
+        page = 1
+        while True:
+            current_page = self._call(
+                "GET",
+                f"https://api.github.com/repos/{self.repository}/issues",
+                params={
+                    "state": "all",
+                    "labels": REPORT_LABEL,
+                    "per_page": 100,
+                    "page": page,
+                },
+            )
+            issues.extend(current_page)
+            if len(current_page) < 100:
+                return issues
+            page += 1
+
+    def _published_report_dates(self, title_prefix: str) -> set[date]:
+        """Return report dates already represented by idempotent issue titles."""
+        report_dates: set[date] = set()
+        for issue in self._report_issues():
+            title = str(issue.get("title", ""))
+            if not title.startswith(title_prefix):
+                continue
+            try:
+                report_dates.add(date.fromisoformat(title.removeprefix(title_prefix)))
+            except ValueError:
+                logger.warning("Ignoring report issue with invalid date: %s", title)
+        return report_dates
+
+    def published_daily_report_dates(self) -> set[date]:
+        """Return all daily Testnet report dates already published."""
+        return self._published_report_dates("Orbit Testnet daily report: ")
+
+    def published_weekly_report_dates(self) -> set[date]:
+        """Return all weekly Testnet report start dates already published."""
+        return self._published_report_dates(WEEKLY_TITLE_PREFIX)
 
     def _issue_comments(self, comments_url: str) -> list[Mapping[str, Any]]:
         """Return every issue comment, including comments after the first page."""
@@ -706,26 +738,40 @@ class TestnetDailyReporter:
         )
 
     def run_forever(self, interval_seconds: int = 3600) -> None:
-        last_daily_published: Optional[date] = None
-        last_week_published: Optional[date] = None
         while True:
             today = datetime.now(timezone.utc).date()
             yesterday = today - timedelta(days=1)
-            if yesterday != last_daily_published:
+            published_daily_dates = self.github.published_daily_report_dates()
+            first_daily_date = min(published_daily_dates, default=yesterday)
+            for offset in range((yesterday - first_daily_date).days + 1):
+                report_date = first_daily_date + timedelta(days=offset)
+                if report_date in published_daily_dates:
+                    continue
                 try:
-                    url = self.publish_date(yesterday)
+                    url = self.publish_date(report_date)
                     logger.info("Published Testnet daily report: %s", url)
-                    last_daily_published = yesterday
                 except Exception:
-                    logger.exception("Failed to publish Testnet daily report")
-            previous_week = today - timedelta(days=today.weekday() + 7)
-            if today.weekday() == 5 and previous_week != last_week_published:
+                    logger.exception(
+                        "Failed to publish Testnet daily report for %s", report_date
+                    )
+            last_scheduled_saturday = today - timedelta(
+                days=(today.weekday() - 5) % 7
+            )
+            previous_week = last_scheduled_saturday - timedelta(days=12)
+            published_week_dates = self.github.published_weekly_report_dates()
+            first_week = min(published_week_dates, default=previous_week)
+            weeks_to_publish = (previous_week - first_week).days // 7
+            for week_offset in range(weeks_to_publish + 1):
+                week_start = first_week + timedelta(days=week_offset * 7)
+                if week_start in published_week_dates:
+                    continue
                 try:
-                    url = self.publish_week(previous_week)
+                    url = self.publish_week(week_start)
                     logger.info("Published Testnet weekly report: %s", url)
-                    last_week_published = previous_week
                 except Exception:
-                    logger.exception("Failed to publish Testnet weekly report")
+                    logger.exception(
+                        "Failed to publish Testnet weekly report for %s", week_start
+                    )
             time_module.sleep(interval_seconds)
 
     @classmethod
