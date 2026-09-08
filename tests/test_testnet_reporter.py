@@ -329,9 +329,38 @@ class TestDailyReporter(unittest.TestCase):
 
         self.assertEqual(
             [call.args[0] for call in reporter.publish_date.call_args_list],
-            [date(2026, 8, 30), date(2026, 8, 31), date(2026, 9, 1)],
+            [
+                date(2026, 8, 29),
+                date(2026, 8, 30),
+                date(2026, 8, 31),
+                date(2026, 9, 1),
+            ],
         )
-        reporter.publish_week.assert_called_once_with(date(2026, 8, 17))
+        self.assertEqual(
+            [call.args[0] for call in reporter.publish_week.call_args_list],
+            [date(2026, 8, 10), date(2026, 8, 17)],
+        )
+
+    @patch("orbit.core.testnet_reporter.time_module.sleep")
+    @patch("orbit.core.testnet_reporter.datetime")
+    def test_discovery_failure_is_retried_on_next_interval(
+        self, datetime_mock, sleep_mock
+    ):
+        datetime_mock.now.return_value = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
+        sleep_mock.side_effect = [None, RuntimeError("stop loop")]
+        reporter = DailyReporter(MagicMock(), MagicMock())
+        reporter.github.published_daily_report_dates.side_effect = [
+            RuntimeError("GitHub unavailable"),
+            set(),
+        ]
+        reporter.github.published_weekly_report_dates.return_value = {date(2026, 8, 10)}
+        reporter.publish_date = MagicMock(return_value="daily")
+        reporter.publish_week = MagicMock(return_value="weekly")
+
+        with self.assertRaisesRegex(RuntimeError, "stop loop"):
+            reporter.run_forever(interval_seconds=0)
+
+        reporter.publish_date.assert_called_once_with(date(2026, 8, 24))
 
     def test_reads_only_testnet_window_and_publishes_idempotent_title(self):
         mongo = MagicMock()

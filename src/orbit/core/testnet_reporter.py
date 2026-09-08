@@ -738,40 +738,40 @@ class TestnetDailyReporter:
         )
 
     def run_forever(self, interval_seconds: int = 3600) -> None:
+        last_daily_success: Optional[date] = None
+        last_weekly_success: Optional[date] = None
         while True:
-            today = datetime.now(timezone.utc).date()
-            yesterday = today - timedelta(days=1)
-            published_daily_dates = self.github.published_daily_report_dates()
-            first_daily_date = min(published_daily_dates, default=yesterday)
-            for offset in range((yesterday - first_daily_date).days + 1):
-                report_date = first_daily_date + timedelta(days=offset)
-                if report_date in published_daily_dates:
-                    continue
-                try:
+            try:
+                today = datetime.now(timezone.utc).date()
+                yesterday = today - timedelta(days=1)
+                published_daily_dates = self.github.published_daily_report_dates()
+                if last_daily_success is None:
+                    first_daily_date = min(published_daily_dates, default=yesterday)
+                else:
+                    first_daily_date = last_daily_success + timedelta(days=1)
+                for offset in range((yesterday - first_daily_date).days + 1):
+                    report_date = first_daily_date + timedelta(days=offset)
                     url = self.publish_date(report_date)
                     logger.info("Published Testnet daily report: %s", url)
-                except Exception:
-                    logger.exception(
-                        "Failed to publish Testnet daily report for %s", report_date
-                    )
-            last_scheduled_saturday = today - timedelta(
-                days=(today.weekday() - 5) % 7
-            )
-            previous_week = last_scheduled_saturday - timedelta(days=12)
-            published_week_dates = self.github.published_weekly_report_dates()
-            first_week = min(published_week_dates, default=previous_week)
-            weeks_to_publish = (previous_week - first_week).days // 7
-            for week_offset in range(weeks_to_publish + 1):
-                week_start = first_week + timedelta(days=week_offset * 7)
-                if week_start in published_week_dates:
-                    continue
-                try:
+                    last_daily_success = report_date
+
+                last_scheduled_saturday = today - timedelta(
+                    days=(today.weekday() - 5) % 7
+                )
+                previous_week = last_scheduled_saturday - timedelta(days=12)
+                published_week_dates = self.github.published_weekly_report_dates()
+                if last_weekly_success is None:
+                    first_week = min(published_week_dates, default=previous_week)
+                else:
+                    first_week = last_weekly_success + timedelta(days=7)
+                weeks_to_publish = (previous_week - first_week).days // 7
+                for week_offset in range(weeks_to_publish + 1):
+                    week_start = first_week + timedelta(days=week_offset * 7)
                     url = self.publish_week(week_start)
                     logger.info("Published Testnet weekly report: %s", url)
-                except Exception:
-                    logger.exception(
-                        "Failed to publish Testnet weekly report for %s", week_start
-                    )
+                    last_weekly_success = week_start
+            except Exception:
+                logger.exception("Failed to discover or publish Testnet reports")
             time_module.sleep(interval_seconds)
 
     @classmethod
