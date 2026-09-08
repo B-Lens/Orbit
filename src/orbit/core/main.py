@@ -48,6 +48,7 @@ from orbit.core.testnet_reporter import TestnetDailyReporter
 from orbit.core.execution import ExecutionMode
 from orbit.core.trade_reasoner import TradeReasoner
 from orbit.core.command_center import (
+    configured_runtime_id,
     install_command_center_log_handler,
     record_runtime_activity,
 )
@@ -690,9 +691,7 @@ class BinanceAutomation(ExceptionManager):
             self.workers_to_monitor.append(performance_thread)
 
         heartbeat_stop = threading.Event()
-        heartbeat_key = runtime_heartbeat_key(
-            os.environ.get("ORBIT_RUNTIME_ID", "default")
-        )
+        heartbeat_key = runtime_heartbeat_key(configured_runtime_id())
         heartbeat_thread = threading.Thread(
             target=self.publish_runtime_heartbeat,
             args=(heartbeat_stop, heartbeat_key),

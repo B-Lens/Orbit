@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from config.config import load_config
 from orbit.core.command_center import (
     create_redis_client,
+    read_older_exception_count,
     read_observability,
     read_positions,
     read_runtime_state,
@@ -164,6 +165,7 @@ class CommandCenterResponse(BaseModel):
     risk_execution: RiskExecutionResponse
     logs: List[LogResponse]
     exceptions: List[ExceptionResponse]
+    older_exception_count: int = 0
 
 
 def _expected_runtime_ids() -> List[str]:
@@ -356,6 +358,7 @@ def get_command_center(
             logs, exceptions = read_observability(
                 client, log_limit, exception_limit
             )
+            older_exception_count = read_older_exception_count(client)
     except redis.RedisError as exc:
         raise HTTPException(
             status_code=503,
@@ -385,6 +388,7 @@ def get_command_center(
         risk_execution=RiskExecutionResponse.model_validate(risk_execution),
         logs=[LogResponse.model_validate(item) for item in logs],
         exceptions=[ExceptionResponse.model_validate(item) for item in exceptions],
+        older_exception_count=older_exception_count,
     )
 
 

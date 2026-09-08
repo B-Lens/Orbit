@@ -32,6 +32,7 @@ REDIS_KEY_COMMAND_CENTER_EXCEPTIONS = "orbit:observability:exceptions"
 
 RUNTIME_ACTIVITY_TTL = 3_600
 OBSERVABILITY_MAX_RECORDS = 500
+EXCEPTION_RETENTION_SECONDS = 24 * 3_600
 
 
 def _utc_now() -> str:
@@ -41,6 +42,19 @@ def _utc_now() -> str:
 def runtime_activity_key(runtime_id: str) -> str:
     """Return the current-activity key for one runtime instance."""
     return f"{REDIS_KEY_RUNTIME_ACTIVITY_PREFIX}:{runtime_id}"
+
+
+def configured_runtime_id() -> str:
+    """Return the runtime ID, aligning a single expected runtime by default."""
+    runtime_id = os.getenv("ORBIT_RUNTIME_ID")
+    if runtime_id:
+        return runtime_id
+    expected_ids = [
+        item.strip()
+        for item in os.getenv("ORBIT_EXPECTED_RUNTIME_IDS", "").split(",")
+        if item.strip()
+    ]
+    return expected_ids[0] if len(expected_ids) == 1 else "default"
 
 
 def _json_value(value: Any) -> Any:
@@ -80,7 +94,7 @@ def record_runtime_activity(
         "detail": detail,
         "updated_at": _utc_now(),
     }
-    resolved_runtime_id = runtime_id or os.getenv("ORBIT_RUNTIME_ID") or "default"
+    resolved_runtime_id = runtime_id or configured_runtime_id()
     try:
         client.setex(
             runtime_activity_key(resolved_runtime_id),
@@ -193,6 +207,20 @@ def _list_records(client: Any, key: str, limit: int) -> List[Dict[str, Any]]:
         if parsed is not None:
             records.append(parsed)
     return records
+
+
+def _is_recent_exception(record: Dict[str, Any]) -> bool:
+    """Return whether an exception belongs in the current operational view."""
+    try:
+        created_at = datetime.fromisoformat(str(record.get("created_at")))
+    except (TypeError, ValueError):
+        # An undated record cannot safely be shown as a current failure.
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - created_at).total_seconds() < (
+        EXCEPTION_RETENTION_SECONDS
+    )
 
 
 def _position_from_trade(trade_id: str, trade: Dict[str, Any]) -> Dict[str, Any]:
@@ -314,9 +342,24 @@ def read_observability(
     client: Any, log_limit: int, exception_limit: int
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Return bounded structured logs and exceptions, newest first."""
-    return (
-        _list_records(client, REDIS_KEY_COMMAND_CENTER_LOGS, log_limit),
-        _list_records(client, REDIS_KEY_COMMAND_CENTER_EXCEPTIONS, exception_limit),
+    logs = _list_records(client, REDIS_KEY_COMMAND_CENTER_LOGS, log_limit)
+    exceptions = [
+        record
+        for record in _list_records(
+            client, REDIS_KEY_COMMAND_CENTER_EXCEPTIONS, OBSERVABILITY_MAX_RECORDS
+        )
+        if _is_recent_exception(record)
+    ]
+    return logs, exceptions[:exception_limit]
+
+
+def read_older_exception_count(client: Any) -> int:
+    """Count exceptions hidden from the current 24-hour operational list."""
+    return sum(
+        not _is_recent_exception(record)
+        for record in _list_records(
+            client, REDIS_KEY_COMMAND_CENTER_EXCEPTIONS, OBSERVABILITY_MAX_RECORDS
+        )
     )
 
 
