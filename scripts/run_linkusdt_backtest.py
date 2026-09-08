@@ -60,7 +60,12 @@ def run(data: pd.DataFrame, equity: float, risk: float) -> dict[str, object]:
         fee_rate=0.0004,
         slippage_bps=2.0,
     ).run(data, symbol="LINKUSDT", warmup_bars=250)
-    return metrics(report)
+    return {
+        "start": data.index[0].isoformat(),
+        "end": data.index[-1].isoformat(),
+        "candles": len(data),
+        **metrics(report),
+    }
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

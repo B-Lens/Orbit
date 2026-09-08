@@ -49,16 +49,18 @@ and target, risks 1% of current equity, charges 0.04% per side, and applies two
 basis points of adverse slippage per side. Funding, spread, market impact,
 quantity/tick rounding, latency, taxes, and outages are not modeled.
 
-| Segment | Return | Trades | Profit factor | Maximum drawdown |
-| --- | ---: | ---: | ---: | ---: |
-| Full sample | +26.33% | 233 | 1.13 | 22.93% |
-| First chronological half | +40.15% | 119 | 1.43 | 12.84% |
-| Second chronological half | **−5.98%** | 110 | **0.93** | 17.67% |
+| Segment | UTC period | Candles | Return | Trades | Profit factor | Maximum drawdown |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Full sample | 2024-09-08 00:00 to 2026-09-07 23:00 | 17,520 | +26.33% | 233 | 1.13 | 22.93% |
+| First chronological half | 2024-09-08 00:00 to 2025-09-07 23:00 | 8,760 | +40.15% | 119 | 1.43 | 12.84% |
+| Second chronological half | 2025-09-08 00:00 to 2026-09-07 23:00 | 8,760 | **−5.98%** | 110 | **0.93** | 17.67% |
 
-The split is a robustness screen, not an untouched out-of-sample test, because
-the same sample informed selection. More importantly, all 108 combinations in the
-predeclared grid lost money in the second half; the least-negative result was
-−5.70%. The aggregate result therefore does not meet the project’s promotion bar.
+"Segment" means an equal, contiguous, non-overlapping half of the same candle
+history—not a trade type or a live deployment phase. The split is a robustness
+screen, not an untouched out-of-sample test, because the same sample informed
+selection. More importantly, all 108 combinations in the predeclared grid lost
+money in the second half; the least-negative result was −5.70%. The aggregate
+result therefore does not meet the project’s promotion bar.
 
 ## Next step
 
