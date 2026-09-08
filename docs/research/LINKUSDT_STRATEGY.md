@@ -32,6 +32,15 @@ motivate testing the family. The hourly Binance USD-M Futures kline endpoint is
 the data source; its interval and pagination contract is documented in the
 [Binance API reference](https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Kline-Candlestick-Data).
 
+## Runtime data contract
+
+The production Mongo handler supplies 15-minute OHLCV candles. Before evaluating
+the strategy, `LINKUSDTStrategy` validates native cadence and aggregates each
+complete group of four candles into one hourly candle. An incomplete latest group
+or any cadence gap is ignored, so the live indicators retain the same hourly
+meaning as the backtest. Direct hourly input remains supported by the backtest
+runner.
+
 ## Reproducible backtest
 
 The data file is intentionally not committed. Download 17,520 contiguous
