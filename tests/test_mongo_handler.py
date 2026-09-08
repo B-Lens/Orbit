@@ -62,6 +62,22 @@ def test_get_trade_exit_returns_immutable_lifecycle_record() -> None:
     )
 
 
+def test_get_closed_trades_since_uses_lifecycle_close_time() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.trade_lifecycle_collection = MagicMock()
+    handler.trade_lifecycle_collection.find.return_value.sort.return_value.limit.return_value = []
+    cutoff = datetime(2026, 9, 7, tzinfo=timezone.utc)
+
+    assert handler.get_closed_trades_since(cutoff, 50) == []
+
+    handler.trade_lifecycle_collection.find.assert_called_once_with(
+        {"closed_at": {"$gte": cutoff}, "pnl": {"$exists": True}}, {"_id": 0}
+    )
+    handler.trade_lifecycle_collection.find.return_value.sort.assert_called_once_with(
+        "closed_at", -1
+    )
+
+
 def test_active_trade_decisions_are_resolved_at_historical_cutoff() -> None:
     cutoff = datetime(2026, 8, 22, tzinfo=timezone.utc)
     open_trade = {

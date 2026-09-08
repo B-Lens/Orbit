@@ -1,7 +1,7 @@
 import os
 import logging
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
@@ -107,6 +107,24 @@ class SignalResponse(BaseModel):
     latest_status: Optional[str] = None
 
 
+class ClosedTradeResponse(BaseModel):
+    trade_id: str
+    symbol: str
+    side: Optional[str] = None
+    quantity: Optional[float] = None
+    entry_price: Optional[float] = None
+    exit_price: Optional[float] = None
+    pnl: Optional[float] = None
+    execution_mode: Optional[str] = None
+    entered_at: Optional[str] = None
+    closed_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    pnl_source: Optional[str] = None
+    lifecycle_scope: Optional[str] = None
+    llm_exit_reasoning: Optional[Dict[str, Any]] = None
+    details: Dict[str, Any]
+
+
 class SentimentResponse(BaseModel):
     effective: Optional[str] = None
     observed: Optional[str] = None
@@ -160,6 +178,7 @@ class CommandCenterResponse(BaseModel):
     runtime: RuntimeStateResponse
     positions: List[PositionResponse]
     signals: List[SignalResponse]
+    closed_trades: List[ClosedTradeResponse]
     sentiment: SentimentResponse
     sentiment_history: List[SentimentHistoryResponse]
     risk_execution: RiskExecutionResponse
@@ -214,6 +233,41 @@ def _signal_response(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _json_value(value: Any) -> Any:
+    """Convert Mongo lifecycle values into JSON-safe dashboard details."""
+    if isinstance(value, datetime):
+        return _iso_value(value)
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _closed_trade_response(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Expose a completed lifecycle record with its full durable audit detail."""
+    details = _json_value(record)
+    return {
+        "trade_id": str(record.get("trade_id", "")),
+        "symbol": str(record.get("symbol", "")),
+        "side": record.get("positionSide") or record.get("side"),
+        "quantity": record.get("quantity"),
+        "entry_price": record.get("entry_price", record.get("price")),
+        "exit_price": record.get("exit_price"),
+        "pnl": record.get("pnl"),
+        "execution_mode": record.get("execution_mode"),
+        "entered_at": _iso_value(record.get("entered_at")),
+        "closed_at": _iso_value(record.get("closed_at")),
+        "duration_seconds": record.get("duration_seconds"),
+        "pnl_source": record.get("pnl_source"),
+        "lifecycle_scope": record.get("lifecycle_scope"),
+        "llm_exit_reasoning": _json_value(record.get("llm_exit_reasoning")),
+        "details": details,
+    }
+
+
 @lru_cache(maxsize=1)
 def _command_center_mongo_handler() -> MongoHandler:
     return MongoHandler(read_only=True)
@@ -228,6 +282,20 @@ def _recent_signals(limit: int) -> List[Dict[str, Any]]:
         ]
     except Exception:
         logger.exception("Unable to read recent signal decisions")
+        return []
+
+
+def _closed_trades_last_24_hours(limit: int) -> List[Dict[str, Any]]:
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        return [
+            _closed_trade_response(record)
+            for record in _command_center_mongo_handler().get_closed_trades_since(
+                cutoff, limit
+            )
+        ]
+    except Exception:
+        logger.exception("Unable to read closed trade lifecycle records")
         return []
 
 
@@ -340,11 +408,13 @@ def get_notifications(limit: int = 100) -> NotificationFeedResponse:
 @app.get("/api/command-center", response_model=CommandCenterResponse)
 def get_command_center(
     signal_limit: int = 25,
+    closed_trade_limit: int = 100,
     log_limit: int = 100,
     exception_limit: int = 25,
 ) -> CommandCenterResponse:
     """Return live trading state without using the notification event buffer."""
     signal_limit = min(max(signal_limit, 0), 100)
+    closed_trade_limit = min(max(closed_trade_limit, 0), 250)
     log_limit = min(max(log_limit, 0), 500)
     exception_limit = min(max(exception_limit, 0), 100)
     try:
@@ -379,6 +449,10 @@ def get_command_center(
         signals=[
             SignalResponse.model_validate(item)
             for item in _recent_signals(signal_limit)
+        ],
+        closed_trades=[
+            ClosedTradeResponse.model_validate(item)
+            for item in _closed_trades_last_24_hours(closed_trade_limit)
         ],
         sentiment=SentimentResponse.model_validate(sentiment),
         sentiment_history=[

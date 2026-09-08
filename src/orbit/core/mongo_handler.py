@@ -709,6 +709,29 @@ class MongoHandler(ExceptionManager):
                 self.handle_exception(exc, "Error reading recent trade decisions")
             return []
 
+    def get_closed_trades_since(
+        self, start: datetime, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Return completed lifecycle records closed on or after a UTC cutoff."""
+        lifecycle = getattr(self, "trade_lifecycle_collection", None)
+        if lifecycle is None:
+            return []
+        try:
+            return list(
+                lifecycle.find(
+                    {"closed_at": {"$gte": start}, "pnl": {"$exists": True}},
+                    {"_id": 0},
+                )
+                .sort("closed_at", -1)
+                .limit(max(0, limit))
+            )
+        except Exception as exc:
+            if getattr(self, "read_only", False):
+                logger.warning("Error reading recently closed trades: %s", exc)
+            else:
+                self.handle_exception(exc, "Error reading recently closed trades")
+            return []
+
     def get_active_trade_decisions(
         self, as_of: datetime, execution_mode: Optional[str] = None
     ) -> List[Dict[str, Any]]:
