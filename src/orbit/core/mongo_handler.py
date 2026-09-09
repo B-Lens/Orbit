@@ -584,6 +584,11 @@ class MongoHandler(ExceptionManager):
                 {
                     "execution_mode": execution_mode,
                     "$or": [
+                        {
+                            "metrics_scope_version": {
+                                "$ne": "complete_lifecycles_v1"
+                            }
+                        },
                         {"sample_count": {"$lte": sample_count}},
                         {"sample_count": {"$exists": False}},
                     ],
@@ -592,6 +597,7 @@ class MongoHandler(ExceptionManager):
                     "$set": {
                         "execution_mode": execution_mode,
                         "updated_at": datetime.now(timezone.utc),
+                        "metrics_scope_version": "complete_lifecycles_v1",
                         "sample_count": sample_count,
                         "active_trade_duration_seconds": self._distribution(
                             duration_samples

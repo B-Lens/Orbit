@@ -916,6 +916,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             if fill_key <= last_entry_key:
                 continue
+            if reconstructed and fill_key[0] < reconstruction_ms:
+                continue
             fill_side = str(fill.get("side", "")).upper()
             if fill_side == position_direction:
                 if reconstructed and fill in entry_fills:
