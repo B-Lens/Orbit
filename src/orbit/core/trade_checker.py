@@ -791,11 +791,19 @@ class TradeChecker(AuthenticationManager, RedisManager):
             raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
 
         if reconstructed:
-            reconstructed_entry_fills = [
-                fill
-                for fill in all_fills
-                if str(fill.get("side", "")).upper() == position_direction
-            ]
+            reconstructed_entry_fills: List[Dict[str, Any]] = []
+            closing_fill_seen = False
+            for fill in all_fills:
+                fill_side = str(fill.get("side", "")).upper()
+                if fill_side == closing_side:
+                    closing_fill_seen = True
+                elif fill_side == position_direction:
+                    if closing_fill_seen:
+                        raise TradeReconciliationError(
+                            f"Binance exit fills were ambiguous for {trade_id}",
+                            "ambiguous_exit_fills",
+                        )
+                    reconstructed_entry_fills.append(fill)
             reconstructed_entry_order_ids = {
                 str(fill.get("orderId", "")) for fill in reconstructed_entry_fills
             }

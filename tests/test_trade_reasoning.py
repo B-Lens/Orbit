@@ -560,6 +560,36 @@ def test_reconstructed_exit_rejects_multiple_entry_order_ids() -> None:
     checker.mongo_handler.store_trade_exit.assert_not_called()
 
 
+def test_reconstructed_exit_rejects_new_entry_after_a_closing_fill() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.order_manager = MagicMock()
+    checker.order_manager.get_account_trades.return_value = [
+        {"id": 1, "orderId": 20, "side": "BUY", "qty": "11000", "time": 1000},
+        {"id": 2, "orderId": 30, "side": "SELL", "qty": "11000", "time": 2000},
+        {"id": 3, "orderId": 40, "side": "BUY", "qty": "11000", "time": 3000},
+    ]
+    checker.execution_settings = ExecutionSettings({"SKYUSDT": ExecutionMode.TESTNET})
+    checker.mongo_handler = MagicMock()
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "SKYUSDT",
+            "lifecycle_id": "reconstructed:SKYUSDT:unique",
+            "symbol": "SKYUSDT",
+            "positionSide": "SELL",
+            "quantity": 11000,
+            "entry_source": "broker_reconstruction",
+            "entered_at": "1970-01-01T00:00:00+00:00",
+        }
+    )
+    checker.set_cooldown = MagicMock()
+
+    with pytest.raises(RuntimeError, match="exit fills were ambiguous"):
+        checker._exit_trade("SKYUSDT", "SKYUSDT")
+
+    checker.mongo_handler.store_trade_exit.assert_not_called()
+
+
 def test_exit_reconciliation_is_serialized_per_symbol() -> None:
     checker = TradeChecker.__new__(TradeChecker)
     first_entered = Event()
