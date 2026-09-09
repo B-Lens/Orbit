@@ -9,7 +9,7 @@ import pytest
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.main import BinanceAutomation
 from orbit.core.mongo_handler import MongoHandler
-from orbit.core.trade_checker import TradeChecker
+from orbit.core.trade_checker import TradeChecker, _latest_flat_fill_sequence
 from orbit.core.trade_reasoner import EntryReasoning, ExitReasoning, TradeReasoner
 
 
@@ -150,6 +150,17 @@ def test_trade_metrics_do_not_embed_unbounded_sample_arrays() -> None:
     assert metrics_update["$set"]["active_trade_duration_seconds"]["average"] == 90.0
     assert "$push" not in metrics_update
     assert "duration_samples" in metrics_update["$unset"]
+
+
+def test_latest_flat_fill_sequence_ignores_prior_round_trips() -> None:
+    fills = [
+        {"id": 1, "side": "BUY", "qty": "1"},
+        {"id": 2, "side": "SELL", "qty": "1"},
+        {"id": 3, "side": "BUY", "qty": "2"},
+        {"id": 4, "side": "SELL", "qty": "2"},
+    ]
+
+    assert _latest_flat_fill_sequence(fills) == fills[2:]
 
 
 def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:

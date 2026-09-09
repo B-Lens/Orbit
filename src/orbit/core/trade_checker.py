@@ -122,6 +122,21 @@ def is_take_profit_order(order: Optional[Dict[str, Any]]) -> bool:
     ) or order_type in {"TAKE_PROFIT", "TAKE_PROFIT_MARKET"}
 
 
+def _latest_flat_fill_sequence(
+    fills: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return the final balanced round trip from chronological account fills."""
+    balance = 0.0
+    for index in range(len(fills) - 1, -1, -1):
+        fill = fills[index]
+        quantity = float(fill.get("qty", 0) or 0)
+        signed_quantity = quantity if str(fill.get("side", "")).upper() == "BUY" else -quantity
+        balance -= signed_quantity
+        if index < len(fills) - 1 and math.isclose(balance, 0.0, abs_tol=1e-12):
+            return fills[index:]
+    return fills
+
+
 class TradeChecker(AuthenticationManager, RedisManager):
     """Real-time position monitor and SL/TP lifecycle manager.
 
@@ -830,6 +845,20 @@ class TradeChecker(AuthenticationManager, RedisManager):
             raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
 
         if reconstructed:
+            closing_fill_seen = False
+            reconstruction_ms = int(entered_at.timestamp() * 1000)
+            for fill in all_fills:
+                if int(fill.get("time", 0) or 0) < reconstruction_ms:
+                    continue
+                fill_side = str(fill.get("side", "")).upper()
+                if fill_side == closing_side:
+                    closing_fill_seen = True
+                elif fill_side == position_direction and closing_fill_seen:
+                    raise TradeReconciliationError(
+                        f"Binance exit fills were ambiguous for {trade_id}",
+                        "ambiguous_exit_fills",
+                    )
+            all_fills = _latest_flat_fill_sequence(all_fills)
             reconstructed_entry_fills: List[Dict[str, Any]] = []
             closing_fill_seen = False
             for fill in all_fills:
