@@ -1,6 +1,8 @@
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from threading import Event
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -430,12 +432,163 @@ def test_reconstructed_exit_requires_closing_fills() -> None:
             "symbol": "BTCUSDT",
             "positionSide": "BUY",
             "quantity": 1.0,
+            "entry_source": "broker_reconstruction",
+        }
+    )
+    checker.set_cooldown = MagicMock()
+    checker.merge_existing_trade_fields = MagicMock(return_value=True)
+
+    with patch("orbit.core.trade_checker.uuid4", return_value="unique"):
+        with pytest.raises(RuntimeError, match="exit fills were unavailable"):
+            checker._exit_trade("BTCUSDT", "legacy")
+
+    checker.merge_existing_trade_fields.assert_called_once_with(
+        "legacy", {"lifecycle_id": "reconstructed:BTCUSDT:unique"}
+    )
+    checker.mongo_handler.get_trade_exit.assert_called_once_with(
+        "reconstructed:BTCUSDT:unique"
+    )
+
+
+def test_reconstructed_exit_groups_split_entry_fills_and_stores_exit_price() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.trades = {"SKYUSDT": {"trade_id": "SKYUSDT"}}
+    checker.order_manager = MagicMock()
+    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 120_000
+    checker.order_manager.get_account_trades.return_value = [
+        {
+            "id": 1,
+            "orderId": 162370722,
+            "side": "SELL",
+            "price": "0.06904",
+            "qty": "5000",
+            "time": exit_time_ms - 600_000,
+            "realizedPnl": "0",
+        },
+        {
+            "id": 2,
+            "orderId": 162370722,
+            "side": "SELL",
+            "price": "0.06906",
+            "qty": "6000",
+            "time": exit_time_ms - 599_000,
+            "realizedPnl": "0",
+        },
+        {
+            "id": 3,
+            "orderId": 163130012,
+            "side": "BUY",
+            "price": "0.06471",
+            "qty": "11000",
+            "time": exit_time_ms,
+            "realizedPnl": "47.74",
+        },
+    ]
+    checker.order_manager.future_client_for.return_value.get_income_history.return_value = [
+        {
+            "tranId": 1,
+            "time": exit_time_ms,
+            "symbol": "SKYUSDT",
+            "incomeType": "REALIZED_PNL",
+            "income": "47.74",
+        }
+    ]
+    checker.execution_settings = ExecutionSettings({"SKYUSDT": ExecutionMode.TESTNET})
+    checker.mongo_handler = MagicMock()
+    checker.mongo_handler.store_trade_exit.return_value = True
+    checker._trade_reasoner = MagicMock()
+    checker._trade_reasoner.review_exit.return_value = ExitReasoning(
+        outcome="winning", reasoning="target filled", confidence=1.0
+    )
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "SKYUSDT",
+            "lifecycle_id": "reconstructed:SKYUSDT:unique",
+            "symbol": "SKYUSDT",
+            "positionSide": "SELL",
+            "quantity": 11000,
+            "entry_source": "broker_reconstruction",
+            "entered_at": datetime.fromtimestamp(
+                (exit_time_ms - 900_000) / 1000, tz=timezone.utc
+            ).isoformat(),
+        }
+    )
+    checker.delete_trade_with_orders = MagicMock()
+    checker.set_cooldown = MagicMock()
+
+    assert checker._exit_trade("SKYUSDT", "SKYUSDT") is True
+
+    exit_record = checker.mongo_handler.store_trade_exit.call_args.args[0]
+    assert exit_record["trade_id"] == "reconstructed:SKYUSDT:unique"
+    assert exit_record["redis_trade_id"] == "SKYUSDT"
+    assert exit_record["exit_price"] == pytest.approx(0.06471)
+    assert exit_record["closed_at"] == datetime.fromtimestamp(
+        exit_time_ms / 1000, tz=timezone.utc
+    )
+    checker.mongo_handler.append_decision_event.assert_not_called()
+    checker.delete_trade_with_orders.assert_called_once_with("SKYUSDT")
+
+
+def test_reconstructed_exit_rejects_multiple_entry_order_ids() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.order_manager = MagicMock()
+    checker.order_manager.get_account_trades.return_value = [
+        {"id": 1, "orderId": 10, "side": "SELL", "qty": "5000", "time": 1000},
+        {"id": 2, "orderId": 11, "side": "SELL", "qty": "6000", "time": 2000},
+        {"id": 3, "orderId": 20, "side": "BUY", "qty": "11000", "time": 3000},
+    ]
+    checker.execution_settings = ExecutionSettings({"SKYUSDT": ExecutionMode.TESTNET})
+    checker.mongo_handler = MagicMock()
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "SKYUSDT",
+            "lifecycle_id": "reconstructed:SKYUSDT:unique",
+            "symbol": "SKYUSDT",
+            "positionSide": "SELL",
+            "quantity": 11000,
+            "entry_source": "broker_reconstruction",
+            "entered_at": "1970-01-01T00:00:00+00:00",
         }
     )
     checker.set_cooldown = MagicMock()
 
-    with pytest.raises(RuntimeError, match="exit fills were unavailable"):
-        checker._exit_trade("BTCUSDT", "legacy")
+    with pytest.raises(RuntimeError, match="exit fills were ambiguous"):
+        checker._exit_trade("SKYUSDT", "SKYUSDT")
+
+    checker.mongo_handler.store_trade_exit.assert_not_called()
+
+
+def test_exit_reconciliation_is_serialized_per_symbol() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    first_entered = Event()
+    release_first = Event()
+    second_finished = Event()
+    call_count = 0
+
+    def reconcile(_symbol: str, _trade_id: str) -> bool:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=1)
+        else:
+            second_finished.set()
+        return True
+
+    checker._exit_trade_locked = reconcile
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(checker._exit_trade, "SKYUSDT", "SKYUSDT")
+        assert first_entered.wait(timeout=1)
+        second = executor.submit(checker._exit_trade, "SKYUSDT", "SKYUSDT")
+        assert not second_finished.wait(timeout=0.05)
+        release_first.set()
+        assert first.result(timeout=1) is True
+        assert second.result(timeout=1) is True
+
+    assert second_finished.is_set()
 
 
 def test_exit_defers_cleanup_during_income_settlement_grace_period() -> None:

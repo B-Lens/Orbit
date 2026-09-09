@@ -26,6 +26,7 @@ import time
 import logging
 import math
 import threading
+from uuid import uuid4
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
@@ -648,8 +649,26 @@ class TradeChecker(AuthenticationManager, RedisManager):
         )
 
     def _exit_trade(self, symbol: str, trade_id: str) -> bool:
+        """Serialize terminal reconciliation against entries and other workers."""
+        with position_lifecycle_lock(
+            symbol, getattr(self, "redis_client", None)
+        ):
+            return self._exit_trade_locked(symbol, trade_id)
+
+    def _exit_trade_locked(self, symbol: str, trade_id: str) -> bool:
         """Clean up a trade after broker reconciliation confirms it is flat."""
         persisted_trade = self.load_trade(trade_id) or {}
+        reconstructed = persisted_trade.get("entry_source") == "broker_reconstruction"
+        lifecycle_trade_id = str(persisted_trade.get("lifecycle_id") or trade_id)
+        if reconstructed and "lifecycle_id" not in persisted_trade:
+            lifecycle_trade_id = f"reconstructed:{symbol}:{uuid4()}"
+            if not self.merge_existing_trade_fields(
+                trade_id, {"lifecycle_id": lifecycle_trade_id}
+            ):
+                raise RuntimeError(
+                    f"Could not persist a unique lifecycle ID for {trade_id}"
+                )
+            persisted_trade["lifecycle_id"] = lifecycle_trade_id
         if not self._position_is_flat(symbol):
             logger.info(
                 "[EXIT] Trade %s for %s still has broker exposure; retaining protection.",
@@ -701,7 +720,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             getattr(self, "trades", {}).pop(symbol, None)
             return True
 
-        existing_exit = mongo_handler.get_trade_exit(trade_id)
+        existing_exit = mongo_handler.get_trade_exit(lifecycle_trade_id)
         if isinstance(existing_exit, Mapping) and existing_exit.get("closed_at"):
             # A prior attempt may have durably stored the lifecycle but failed while
             # appending its decision event. Reuse that immutable record so retrying
@@ -711,19 +730,22 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 raise RuntimeError(f"Stored close timestamp was invalid for {trade_id}")
             if closed_at.tzinfo is None:
                 closed_at = closed_at.replace(tzinfo=timezone.utc)
-            if not mongo_handler.append_decision_event(
-                trade_id,
-                {
-                    "event_id": f"trade_closed:{trade_id}",
-                    "status": "trade_closed",
-                    "timestamp": closed_at,
-                    "exit_price": existing_exit.get("exit_price"),
-                    "pnl": existing_exit.get("pnl"),
-                    "duration_seconds": existing_exit.get("duration_seconds"),
-                    "llm_exit_reasoning": existing_exit.get("llm_exit_reasoning"),
-                },
-            ):
-                raise RuntimeError(f"MongoDB close event persistence failed for {trade_id}")
+            if not reconstructed:
+                if not mongo_handler.append_decision_event(
+                    trade_id,
+                    {
+                        "event_id": f"trade_closed:{trade_id}",
+                        "status": "trade_closed",
+                        "timestamp": closed_at,
+                        "exit_price": existing_exit.get("exit_price"),
+                        "pnl": existing_exit.get("pnl"),
+                        "duration_seconds": existing_exit.get("duration_seconds"),
+                        "llm_exit_reasoning": existing_exit.get("llm_exit_reasoning"),
+                    },
+                ):
+                    raise RuntimeError(
+                        f"MongoDB close event persistence failed for {trade_id}"
+                    )
             self.delete_trade_with_orders(trade_id)
             getattr(self, "trades", {}).pop(symbol, None)
             logger.info(
@@ -768,6 +790,23 @@ class TradeChecker(AuthenticationManager, RedisManager):
         if entry_order_id and not entry_fills:
             raise RuntimeError(f"Binance entry fills were unavailable for {trade_id}")
 
+        if reconstructed:
+            reconstructed_entry_fills = [
+                fill
+                for fill in all_fills
+                if str(fill.get("side", "")).upper() == position_direction
+            ]
+            reconstructed_entry_order_ids = {
+                str(fill.get("orderId", "")) for fill in reconstructed_entry_fills
+            }
+            if len(reconstructed_entry_order_ids) > 1:
+                raise TradeReconciliationError(
+                    f"Binance exit fills were ambiguous for {trade_id}",
+                    "ambiguous_exit_fills",
+                )
+            if reconstructed_entry_fills:
+                entry_fills = reconstructed_entry_fills
+
         # Consume exits chronologically from this entry.  Encountering another entry
         # first means the account history no longer provides an unambiguous lifecycle;
         # retain the Redis record for reconciliation instead of borrowing a newer
@@ -790,6 +829,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 continue
             fill_side = str(fill.get("side", "")).upper()
             if fill_side == position_direction:
+                if reconstructed and fill in entry_fills:
+                    continue
                 raise TradeReconciliationError(
                     f"Binance exit fills were ambiguous for {trade_id}",
                     "ambiguous_exit_fills",
@@ -856,7 +897,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
         pnl = realized_pnl + accounting.commission + accounting.funding
         exit_record: Dict[str, Any] = {
             **persisted_trade,
-            "trade_id": trade_id,
+            "trade_id": lifecycle_trade_id,
+            "redis_trade_id": trade_id,
             "symbol": symbol,
             "execution_mode": execution_mode,
             "entered_at": entered_at,
@@ -884,19 +926,22 @@ class TradeChecker(AuthenticationManager, RedisManager):
             }
         if not mongo_handler.store_trade_exit(exit_record):
             raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
-        if not mongo_handler.append_decision_event(
-            trade_id,
-            {
-                "event_id": f"trade_closed:{trade_id}",
-                "status": "trade_closed",
-                "timestamp": closed_at,
-                "exit_price": exit_price,
-                "pnl": pnl,
-                "duration_seconds": duration_seconds,
-                "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
-            },
-        ):
-            raise RuntimeError(f"MongoDB close event persistence failed for {trade_id}")
+        if not reconstructed:
+            if not mongo_handler.append_decision_event(
+                trade_id,
+                {
+                    "event_id": f"trade_closed:{trade_id}",
+                    "status": "trade_closed",
+                    "timestamp": closed_at,
+                    "exit_price": exit_price,
+                    "pnl": pnl,
+                    "duration_seconds": duration_seconds,
+                    "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
+                },
+            ):
+                raise RuntimeError(
+                    f"MongoDB close event persistence failed for {trade_id}"
+                )
 
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
@@ -1343,6 +1388,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
         error: TradeReconciliationError,
     ) -> bool:
         """Archive an unresolvable flat lifecycle before clearing Redis state."""
+        current_trade = self.load_trade(trade_id)
+        if isinstance(current_trade, Mapping):
+            persisted_trade = {**persisted_trade, **current_trade}
         mongo_handler = getattr(self, "mongo_handler", None)
         if mongo_handler is None:
             logger.error(
@@ -1354,9 +1402,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
             )
             return False
 
+        lifecycle_trade_id = str(persisted_trade.get("lifecycle_id") or trade_id)
         block = {
             **persisted_trade,
-            "trade_id": trade_id,
+            "trade_id": lifecycle_trade_id,
+            "redis_trade_id": trade_id,
             "symbol": symbol,
             "status": "reconciliation_blocked",
             "reason": error.reason,
@@ -1441,22 +1491,23 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     symbol,
                 )
                 return False
-            if not mongo_handler.append_decision_event(
-                trade_id,
-                {
-                    "event_id": f"reconciliation_blocked:{trade_id}",
-                    "status": "reconciliation_blocked",
-                    "reason": error.reason,
-                    "error": str(error),
-                },
-            ):
-                logger.error(
-                    "Preserving reconciliation-blocked trade %s for %s because "
-                    "its decision event was not persisted",
+            if persisted_trade.get("entry_source") != "broker_reconstruction":
+                if not mongo_handler.append_decision_event(
                     trade_id,
-                    symbol,
-                )
-                return False
+                    {
+                        "event_id": f"reconciliation_blocked:{trade_id}",
+                        "status": "reconciliation_blocked",
+                        "reason": error.reason,
+                        "error": str(error),
+                    },
+                ):
+                    logger.error(
+                        "Preserving reconciliation-blocked trade %s for %s because "
+                        "its decision event was not persisted",
+                        trade_id,
+                        symbol,
+                    )
+                    return False
             if self._symbol_has_broker_exposure(symbol):
                 logger.error(
                     "Preserving reconciliation-blocked trade %s for %s because "
@@ -1642,6 +1693,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "stop_loss_price",
                     "target",
                     "entered_at",
+                    "lifecycle_id",
                 ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])
@@ -1649,6 +1701,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
             if not persisted.get("orderId"):
                 _dict.setdefault("entered_at", datetime.now(timezone.utc).isoformat())
                 _dict["entry_source"] = "broker_reconstruction"
+                _dict.setdefault(
+                    "lifecycle_id", f"reconstructed:{symbol}:{uuid4()}"
+                )
             else:
                 _dict["orderId"] = persisted["orderId"]
 
