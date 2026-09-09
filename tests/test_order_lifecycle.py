@@ -598,6 +598,13 @@ class TestTradeChecker(unittest.TestCase):
 
         self.assertNotIn("ETHUSDT", trades)
         self.assertEqual(trades["BTCUSDT"]["quantity"], 0.01)
+        reconstructed = trades["BTCUSDT"]
+        self.assertEqual(reconstructed["trade_id"], "BTCUSDT")
+        self.assertTrue(
+            reconstructed["lifecycle_id"].startswith(
+                "reconstructed:BTCUSDT:"
+            )
+        )
 
     def test_position_reconciliation_starts_cooldown_after_offline_exit(self):
         checker = TradeChecker.__new__(TradeChecker)
@@ -768,6 +775,39 @@ class TestTradeChecker(unittest.TestCase):
 
         self.assertFalse(archived)
         checker.delete_trade_with_orders.assert_not_called()
+
+    def test_reconstructed_ambiguous_trade_does_not_require_decision_event(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {"SKYUSDT": {"trade_id": "SKYUSDT"}}
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_open_orders.return_value = []
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker.mongo_handler = MagicMock()
+        checker.mongo_handler.store_trade_reconciliation_block.return_value = True
+        checker._symbol_has_broker_exposure = MagicMock(return_value=False)
+        checker.set_cooldown = MagicMock()
+        checker.delete_trade_with_orders = MagicMock()
+        error = TradeReconciliationError(
+            "Binance exit fills were ambiguous for SKYUSDT",
+            "ambiguous_exit_fills",
+        )
+
+        archived = checker._quarantine_flat_trade(
+            "SKYUSDT",
+            "SKYUSDT",
+            {
+                "trade_id": "SKYUSDT",
+                "symbol": "SKYUSDT",
+                "entry_source": "broker_reconstruction",
+            },
+            error,
+        )
+
+        self.assertTrue(archived)
+        checker.mongo_handler.store_trade_reconciliation_block.assert_called_once()
+        checker.mongo_handler.append_decision_event.assert_not_called()
+        checker.set_cooldown.assert_called_once_with("SKYUSDT")
+        checker.delete_trade_with_orders.assert_called_once_with("SKYUSDT")
 
     def test_ambiguous_trade_cancels_protection_missing_from_redis_mapping(self):
         checker = TradeChecker.__new__(TradeChecker)
