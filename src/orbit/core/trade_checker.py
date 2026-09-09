@@ -653,9 +653,37 @@ class TradeChecker(AuthenticationManager, RedisManager):
         with position_lifecycle_lock(
             symbol, getattr(self, "redis_client", None)
         ):
-            return self._exit_trade_locked(symbol, trade_id)
+            result = self._exit_trade_locked(symbol, trade_id)
+        if isinstance(result, dict):
+            self._review_persisted_exit(result, trade_id)
+            return True
+        return bool(result)
 
-    def _exit_trade_locked(self, symbol: str, trade_id: str) -> bool:
+    def _review_persisted_exit(
+        self, exit_record: Dict[str, Any], trade_id: str
+    ) -> None:
+        """Run observational post-exit review after releasing the lifecycle lock."""
+        try:
+            reasoner = getattr(self, "_trade_reasoner", None)
+            if reasoner is None:
+                reasoner = TradeReasoner(LLM())
+                self._trade_reasoner = reasoner
+            reasoning = TradeReasoner.serialize(
+                reasoner.review_exit(exit_record)
+            )
+        except Exception as error:
+            logger.exception("Post-trade LLM review failed for %s", trade_id)
+            reasoning = {
+                "outcome": "winning" if exit_record["pnl"] >= 0 else "losing",
+                "reasoning": "LLM post-trade review failed",
+                "confidence": 0.0,
+                "error": str(error),
+            }
+        exit_record["llm_exit_reasoning"] = reasoning
+        mongo_handler = self.mongo_handler
+        mongo_handler.update_trade_exit_reasoning(exit_record["trade_id"], reasoning)
+
+    def _exit_trade_locked(self, symbol: str, trade_id: str) -> Any:
         """Clean up a trade after broker reconciliation confirms it is flat."""
         persisted_trade = self.load_trade(trade_id) or {}
         reconstructed = persisted_trade.get("entry_source") == "broker_reconstruction"
@@ -918,45 +946,27 @@ class TradeChecker(AuthenticationManager, RedisManager):
             "lifecycle_scope": "reconstructed" if reconstructed else "complete",
             "income_summary": accounting.to_dict(),
         }
-        try:
-            if getattr(self, "_trade_reasoner", None) is None:
-                self._trade_reasoner = TradeReasoner(LLM())
-            exit_record["llm_exit_reasoning"] = TradeReasoner.serialize(
-                self._trade_reasoner.review_exit(exit_record)
-            )
-        except Exception as error:
-            logger.exception("Post-trade LLM review failed for %s", trade_id)
-            exit_record["llm_exit_reasoning"] = {
-                "outcome": "winning" if pnl >= 0 else "losing",
-                "reasoning": "LLM post-trade review failed",
-                "confidence": 0.0,
-                "error": str(error),
-            }
         if not mongo_handler.store_trade_exit(exit_record):
             raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
-        if not reconstructed:
-            if not mongo_handler.append_decision_event(
-                trade_id,
-                {
-                    "event_id": f"trade_closed:{trade_id}",
-                    "status": "trade_closed",
-                    "timestamp": closed_at,
-                    "exit_price": exit_price,
-                    "pnl": pnl,
-                    "duration_seconds": duration_seconds,
-                    "llm_exit_reasoning": exit_record["llm_exit_reasoning"],
-                },
-            ):
-                raise RuntimeError(
-                    f"MongoDB close event persistence failed for {trade_id}"
-                )
+        if not reconstructed and not mongo_handler.append_decision_event(
+            trade_id,
+            {
+                "event_id": f"trade_closed:{trade_id}",
+                "status": "trade_closed",
+                "timestamp": closed_at,
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "duration_seconds": duration_seconds,
+            },
+        ):
+            raise RuntimeError(f"MongoDB close event persistence failed for {trade_id}")
 
         self.delete_trade_with_orders(trade_id)
         getattr(self, "trades", {}).pop(symbol, None)
         logger.info(
             f"[EXIT] Trade {trade_id} for {symbol} removed from state and Redis mappings."
         )
-        return True
+        return exit_record
 
     # ------------------------------------------------------------------
     # Adaptive / trailing logic

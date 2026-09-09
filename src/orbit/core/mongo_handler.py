@@ -619,6 +619,18 @@ class MongoHandler(ExceptionManager):
             self.handle_exception(exc, "Error storing completed trade metrics")
             return False
 
+    def update_trade_exit_reasoning(
+        self, trade_id: str, reasoning: Dict[str, Any]
+    ) -> bool:
+        """Attach observational LLM reasoning to an existing lifecycle record."""
+        lifecycle = getattr(self, "trade_lifecycle_collection", None)
+        if lifecycle is None:
+            return False
+        result = lifecycle.update_one(
+            {"trade_id": trade_id}, {"$set": {"llm_exit_reasoning": reasoning}}
+        )
+        return bool(result.matched_count)
+
     def get_trade_exit(self, trade_id: str) -> Optional[Dict[str, Any]]:
         """Return the immutable completed lifecycle record for one trade, if present."""
         lifecycle = getattr(self, "trade_lifecycle_collection", None)

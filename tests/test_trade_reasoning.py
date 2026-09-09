@@ -9,7 +9,7 @@ import pytest
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.main import BinanceAutomation
 from orbit.core.mongo_handler import MongoHandler
-from orbit.core.trade_checker import TradeChecker
+from orbit.core.trade_checker import TradeChecker, position_lifecycle_lock
 from orbit.core.trade_reasoner import EntryReasoning, ExitReasoning, TradeReasoner
 
 
@@ -628,6 +628,35 @@ def test_exit_reconciliation_is_serialized_per_symbol() -> None:
         assert second.result(timeout=1) is True
 
     assert second_finished.is_set()
+
+
+def test_exit_review_runs_after_lifecycle_lock_is_released() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    review_entered = Event()
+    release_review = Event()
+    entry_acquired = Event()
+    checker._exit_trade_locked = MagicMock(
+        return_value={"trade_id": "decision-1", "pnl": 1.0}
+    )
+
+    def review(_record: dict, _trade_id: str) -> None:
+        review_entered.set()
+        assert release_review.wait(timeout=1)
+
+    checker._review_persisted_exit = review
+
+    def enter() -> None:
+        with position_lifecycle_lock("BTCUSDT"):
+            entry_acquired.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        exiting = executor.submit(checker._exit_trade, "BTCUSDT", "decision-1")
+        assert review_entered.wait(timeout=1)
+        entering = executor.submit(enter)
+        assert entry_acquired.wait(timeout=1)
+        release_review.set()
+        assert exiting.result(timeout=1) is True
+        entering.result(timeout=1)
 
 
 def test_exit_defers_cleanup_during_income_settlement_grace_period() -> None:
