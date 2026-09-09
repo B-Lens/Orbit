@@ -523,6 +523,15 @@ def test_reconstructed_exit_groups_split_entry_fills_and_stores_exit_price() -> 
     assert exit_record["trade_id"] == "reconstructed:SKYUSDT:unique"
     assert exit_record["redis_trade_id"] == "SKYUSDT"
     assert exit_record["exit_price"] == pytest.approx(0.06471)
+    assert exit_record["lifecycle_scope"] == "reconstructed"
+    assert exit_record["entered_at"] == datetime.fromtimestamp(
+        (exit_time_ms - 900_000) / 1000, tz=timezone.utc
+    )
+    income_query = (
+        checker.order_manager.future_client_for.return_value
+        .get_income_history.call_args.kwargs
+    )
+    assert income_query["startTime"] == exit_time_ms - 900_000
     assert exit_record["closed_at"] == datetime.fromtimestamp(
         exit_time_ms / 1000, tz=timezone.utc
     )

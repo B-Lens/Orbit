@@ -855,7 +855,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             max(int(fill.get("time", 0) or 0) for fill in closing_fills) / 1000,
             tz=timezone.utc,
         )
-        if entry_fills:
+        if entry_fills and not reconstructed:
             entered_at = datetime.fromtimestamp(
                 min(int(fill.get("time", 0) or 0) for fill in entry_fills) / 1000,
                 tz=timezone.utc,
@@ -870,7 +870,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         )
         income_start_ms = (
             min(int(fill.get("time", 0) or 0) for fill in entry_fills)
-            if entry_fills
+            if entry_fills and not reconstructed
             else int(entered_at.timestamp() * 1000)
         )
         exit_end_ms = max(int(fill.get("time", 0) or 0) for fill in closing_fills) + 1
@@ -915,7 +915,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             "duration_seconds": duration_seconds,
             "pnl": pnl,
             "pnl_source": "binance_trade_fills_and_funding",
-            "lifecycle_scope": "complete" if entry_fills else "reconstructed",
+            "lifecycle_scope": "reconstructed" if reconstructed else "complete",
             "income_summary": accounting.to_dict(),
         }
         try:
