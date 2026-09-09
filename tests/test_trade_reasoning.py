@@ -143,6 +143,8 @@ def test_trade_metrics_do_not_embed_unbounded_sample_arrays() -> None:
 
     assert handler.store_trade_exit(record) is True
 
+    lifecycle_query = handler.trade_lifecycle_collection.find.call_args.args[0]
+    assert lifecycle_query["lifecycle_scope"] == {"$ne": "reconstructed"}
     metrics_update = handler.trade_metrics_collection.update_one.call_args.args[1]
     assert metrics_update["$set"]["sample_count"] == 2
     assert metrics_update["$set"]["active_trade_duration_seconds"]["average"] == 90.0
@@ -537,6 +539,79 @@ def test_reconstructed_exit_groups_split_entry_fills_and_stores_exit_price() -> 
     )
     checker.mongo_handler.append_decision_event.assert_not_called()
     checker.delete_trade_with_orders.assert_called_once_with("SKYUSDT")
+
+
+def test_reconstructed_exit_recovers_complete_pre_reconstruction_entry() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.trades = {"BTCUSDT": {"trade_id": "BTCUSDT"}}
+    checker.order_manager = MagicMock()
+    exit_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 120_000
+    entry_time_ms = exit_time_ms - 600_000
+    checker.order_manager.get_account_trades.return_value = [
+        {
+            "id": 1,
+            "orderId": 10,
+            "side": "BUY",
+            "price": "100",
+            "qty": "2",
+            "time": entry_time_ms,
+            "realizedPnl": "0",
+        },
+        {
+            "id": 2,
+            "orderId": 20,
+            "side": "SELL",
+            "price": "110",
+            "qty": "2",
+            "time": exit_time_ms,
+            "realizedPnl": "20",
+        },
+    ]
+    checker.order_manager.future_client_for.return_value.get_income_history.return_value = [
+        {
+            "tranId": 1,
+            "time": entry_time_ms,
+            "symbol": "BTCUSDT",
+            "incomeType": "COMMISSION",
+            "income": "-1",
+        }
+    ]
+    checker.execution_settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
+    checker.mongo_handler = MagicMock()
+    checker.mongo_handler.store_trade_exit.return_value = True
+    checker._trade_reasoner = MagicMock()
+    checker._trade_reasoner.review_exit.return_value = ExitReasoning(
+        outcome="winning", reasoning="recovered", confidence=1.0
+    )
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "BTCUSDT",
+            "lifecycle_id": "reconstructed:BTCUSDT:unique",
+            "symbol": "BTCUSDT",
+            "positionSide": "BUY",
+            "quantity": 2,
+            "entry_source": "broker_reconstruction",
+            "entered_at": datetime.fromtimestamp(
+                (entry_time_ms + 60_000) / 1000, tz=timezone.utc
+            ).isoformat(),
+        }
+    )
+    checker.delete_trade_with_orders = MagicMock()
+    checker.set_cooldown = MagicMock()
+
+    assert checker._exit_trade("BTCUSDT", "BTCUSDT") is True
+
+    exit_record = checker.mongo_handler.store_trade_exit.call_args.args[0]
+    assert exit_record["entered_at"] == datetime.fromtimestamp(
+        entry_time_ms / 1000, tz=timezone.utc
+    )
+    assert exit_record["lifecycle_scope"] == "complete"
+    income_query = (
+        checker.order_manager.future_client_for.return_value
+        .get_income_history.call_args.kwargs
+    )
+    assert income_query["startTime"] == entry_time_ms
 
 
 def test_reconstructed_exit_rejects_multiple_entry_order_ids() -> None:

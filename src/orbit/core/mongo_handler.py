@@ -554,7 +554,10 @@ class MongoHandler(ExceptionManager):
             execution_mode = str(record["execution_mode"])
             completed_trades = list(
                 lifecycle.find(
-                    {"execution_mode": execution_mode},
+                    {
+                        "execution_mode": execution_mode,
+                        "lifecycle_scope": {"$ne": "reconstructed"},
+                    },
                     {"duration_seconds": 1, "pnl": 1},
                 )
             )

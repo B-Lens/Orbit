@@ -793,7 +793,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             raise RuntimeError(f"Trade quantity was unavailable for {trade_id}")
         entry_order_id = str(persisted_trade.get("orderId", ""))
         query_start_ms = None
-        if entered_at_raw:
+        if entered_at_raw and not reconstructed:
             query_start_ms = max(0, int(entered_at.timestamp() * 1000))
         all_fills = sorted(
             self.order_manager.get_account_trades(
@@ -842,6 +842,19 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
             if reconstructed_entry_fills:
                 entry_fills = reconstructed_entry_fills
+
+        reconstructed_entry_complete = False
+        if reconstructed and entry_fills:
+            entry_quantity = sum(float(fill.get("qty", 0) or 0) for fill in entry_fills)
+            earliest_entry_ms = min(int(fill.get("time", 0) or 0) for fill in entry_fills)
+            reconstructed_entry_complete = (
+                math.isclose(entry_quantity, expected_quantity)
+                and earliest_entry_ms < int(entered_at.timestamp() * 1000)
+            )
+            if reconstructed_entry_complete:
+                entered_at = datetime.fromtimestamp(
+                    earliest_entry_ms / 1000, tz=timezone.utc
+                )
 
         # Consume exits chronologically from this entry.  Encountering another entry
         # first means the account history no longer provides an unambiguous lifecycle;
@@ -943,7 +956,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
             "duration_seconds": duration_seconds,
             "pnl": pnl,
             "pnl_source": "binance_trade_fills_and_funding",
-            "lifecycle_scope": "reconstructed" if reconstructed else "complete",
+            "lifecycle_scope": (
+                "complete"
+                if not reconstructed or reconstructed_entry_complete
+                else "reconstructed"
+            ),
             "income_summary": accounting.to_dict(),
         }
         if not mongo_handler.store_trade_exit(exit_record):
