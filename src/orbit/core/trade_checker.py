@@ -655,9 +655,20 @@ class TradeChecker(AuthenticationManager, RedisManager):
         ):
             result = self._exit_trade_locked(symbol, trade_id)
         if isinstance(result, dict):
-            self._review_persisted_exit(result, trade_id)
+            self._dispatch_exit_review(result, trade_id)
             return True
         return bool(result)
+
+    def _dispatch_exit_review(
+        self, exit_record: Dict[str, Any], trade_id: str
+    ) -> None:
+        """Dispatch observational review without blocking trade monitoring."""
+        threading.Thread(
+            target=self._review_persisted_exit,
+            args=(exit_record, trade_id),
+            daemon=True,
+            name=f"ExitReview-{trade_id}",
+        ).start()
 
     def _review_persisted_exit(
         self, exit_record: Dict[str, Any], trade_id: str

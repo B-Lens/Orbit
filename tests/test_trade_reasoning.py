@@ -9,7 +9,7 @@ import pytest
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.main import BinanceAutomation
 from orbit.core.mongo_handler import MongoHandler
-from orbit.core.trade_checker import TradeChecker, position_lifecycle_lock
+from orbit.core.trade_checker import TradeChecker
 from orbit.core.trade_reasoner import EntryReasoning, ExitReasoning, TradeReasoner
 
 
@@ -202,6 +202,7 @@ def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
     checker._trade_reasoner.review_exit.return_value = ExitReasoning(
         outcome="winning", reasoning="momentum continued", confidence=0.9
     )
+    checker._dispatch_exit_review = checker._review_persisted_exit
     checker._position_is_flat = MagicMock(return_value=True)
     persisted = {
         "trade_id": "decision-1",
@@ -705,11 +706,10 @@ def test_exit_reconciliation_is_serialized_per_symbol() -> None:
     assert second_finished.is_set()
 
 
-def test_exit_review_runs_after_lifecycle_lock_is_released() -> None:
+def test_exit_review_does_not_block_trade_monitoring() -> None:
     checker = TradeChecker.__new__(TradeChecker)
     review_entered = Event()
     release_review = Event()
-    entry_acquired = Event()
     checker._exit_trade_locked = MagicMock(
         return_value={"trade_id": "decision-1", "pnl": 1.0}
     )
@@ -720,18 +720,11 @@ def test_exit_review_runs_after_lifecycle_lock_is_released() -> None:
 
     checker._review_persisted_exit = review
 
-    def enter() -> None:
-        with position_lifecycle_lock("BTCUSDT"):
-            entry_acquired.set()
-
     with ThreadPoolExecutor(max_workers=2) as executor:
         exiting = executor.submit(checker._exit_trade, "BTCUSDT", "decision-1")
         assert review_entered.wait(timeout=1)
-        entering = executor.submit(enter)
-        assert entry_acquired.wait(timeout=1)
-        release_review.set()
         assert exiting.result(timeout=1) is True
-        entering.result(timeout=1)
+        release_review.set()
 
 
 def test_exit_defers_cleanup_during_income_settlement_grace_period() -> None:
