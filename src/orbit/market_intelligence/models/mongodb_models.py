@@ -2,7 +2,7 @@
 import os
 import pandas as pd
 from pymongo import MongoClient, ASCENDING, DESCENDING
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from bson import ObjectId
@@ -33,7 +33,7 @@ class PyObjectId(ObjectId):
 class SentimentRecord(BaseModel):
     """Main sentiment record for MongoDB"""
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     # Overall sentiment
     combined_sentiment: Dict[str, Any]  # Store the full combined sentiment result

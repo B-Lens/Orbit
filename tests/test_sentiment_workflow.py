@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from datetime import timezone
 from unittest.mock import MagicMock, patch
 from orbit.llm.llm_endpoint import WebSearchInvocation
 
@@ -37,6 +38,7 @@ def test_web_search_analysis_is_validated_and_persisted():
     assert result["source"] == "live_web_search"
     assert result["provider"] == "Codex"
     record = save_sentiment.call_args.args[0]
+    assert record.timestamp.tzinfo is timezone.utc
     assert record.news_sentiment["source"] == "live_web_search"
     assert record.news_sentiment["provider"] == "Codex"
     assert record.news_sentiment["sources"] == ["https://example.com/market-update"]
