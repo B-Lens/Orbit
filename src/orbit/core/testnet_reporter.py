@@ -716,6 +716,30 @@ class TestnetDailyReporter:
             summary = summary[:content_limit].rstrip() + SUMMARY_TRUNCATION_NOTICE
         return f"{prefix}{summary}"
 
+    def _cutoff_equity(
+        self, tracker: PerformanceTracker, end: datetime, attempts: int = 3
+    ) -> float:
+        """Reconstruct cutoff equity from a wallet snapshot with no crossing income."""
+        end_ms = int(end.timestamp() * 1000)
+        for _ in range(attempts):
+            before_ms = int(tracker.utc_now().timestamp() * 1000)
+            account = self.futures_client.account()
+            after_ms = int(tracker.utc_now().timestamp() * 1000)
+            subsequent_income = tracker.sync_window(end_ms, after_ms)
+            crossing_income = any(
+                before_ms <= int(record.get("time", 0) or 0) < after_ms
+                for record in tracker.last_records
+            )
+            if not crossing_income:
+                return (
+                    float(account["totalWalletBalance"])
+                    - subsequent_income.net_pnl
+                )
+        raise RuntimeError(
+            "Account income changed during every equity snapshot attempt; "
+            "refusing to publish inconsistent historical equity"
+        )
+
     def publish_date(self, report_date: date) -> str:
         start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
@@ -737,14 +761,7 @@ class TestnetDailyReporter:
         title = f"Orbit Testnet daily report: {report_date.isoformat()}"
         cutoff_equity = None
         if self.futures_client is not None and tracker is not None:
-            wallet_equity = float(
-                self.futures_client.account()["totalWalletBalance"]
-            )
-            snapshot_ms = int(tracker.utc_now().timestamp() * 1000)
-            subsequent_income = tracker.sync_window(
-                int(end.timestamp() * 1000), snapshot_ms
-            )
-            cutoff_equity = wallet_equity - subsequent_income.net_pnl
+            cutoff_equity = self._cutoff_equity(tracker, end)
         body = build_report_body(
             report_date, decisions, income, active_trades, cutoff_equity
         )

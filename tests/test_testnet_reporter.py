@@ -399,6 +399,51 @@ class TestDailyReporter(unittest.TestCase):
         self.assertIn("Orbit Testnet daily report", summary_prompt)
         self.assertIn("Equity value: **975.00 USDT**", summary_prompt)
 
+    def test_equity_snapshot_retries_when_income_crosses_account_request(self):
+        futures = MagicMock()
+        futures.account.side_effect = [
+            {"totalWalletBalance": "1000"},
+            {"totalWalletBalance": "1010"},
+        ]
+        futures.get_income_history.side_effect = [
+            [{"incomeType": "REALIZED_PNL", "income": "10", "time": 1500}],
+            [{"incomeType": "REALIZED_PNL", "income": "10", "time": 1500}],
+        ]
+        tracker = PerformanceTracker(futures)
+        tracker.utc_now = MagicMock(side_effect=[
+            datetime.fromtimestamp(1, timezone.utc),
+            datetime.fromtimestamp(2, timezone.utc),
+            datetime.fromtimestamp(2, timezone.utc),
+            datetime.fromtimestamp(3, timezone.utc),
+        ])
+        reporter = DailyReporter(MagicMock(), MagicMock(), futures)
+
+        equity = reporter._cutoff_equity(
+            tracker, datetime.fromtimestamp(0, timezone.utc)
+        )
+
+        self.assertEqual(equity, 1000)
+        self.assertEqual(futures.account.call_count, 2)
+
+    def test_equity_snapshot_fails_closed_during_continuous_income(self):
+        futures = MagicMock()
+        futures.account.return_value = {"totalWalletBalance": "1000"}
+        futures.get_income_history.side_effect = [
+            [{"incomeType": "COMMISSION", "income": "-1", "time": timestamp}]
+            for timestamp in (1500, 3500, 5500)
+        ]
+        tracker = PerformanceTracker(futures)
+        tracker.utc_now = MagicMock(side_effect=[
+            datetime.fromtimestamp(timestamp, timezone.utc)
+            for timestamp in (1, 2, 3, 4, 5, 6)
+        ])
+        reporter = DailyReporter(MagicMock(), MagicMock(), futures)
+
+        with self.assertRaisesRegex(RuntimeError, "refusing to publish"):
+            reporter._cutoff_equity(
+                tracker, datetime.fromtimestamp(0, timezone.utc)
+            )
+
     def test_weekly_report_reads_exact_completed_utc_week(self):
         mongo = MagicMock()
         mongo.get_trade_decisions.return_value = []
