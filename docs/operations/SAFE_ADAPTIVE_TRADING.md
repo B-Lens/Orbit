@@ -66,8 +66,9 @@ one idempotent daily Testnet report for the completed previous UTC day.
 The issue separates strategy rejections from risk/order rejections, shows closed-
 trade performance by asset, and keeps trades active at each historical cutoff in
 a separate ledger-lifecycle section that explicitly distinguishes them from
-exchange position snapshots. Daily reports also show the wallet-equity value at
-generation time and the day's fee-aware equity P&L percentage. No-signal
+exchange position snapshots. Daily reports also reconstruct wallet equity at the
+report cutoff by reconciling subsequent exchange income against a current account
+snapshot, then show the day's fee-aware equity P&L percentage. No-signal
 evaluations are counted but are not trade attempts. Risk/order rejections include
 the decision inputs and recorded risk metrics needed to audit the rejection.
 Before publication, the reporter synchronizes Binance Testnet income from the

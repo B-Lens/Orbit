@@ -112,7 +112,7 @@ def build_report_body(
     decisions: Iterable[Mapping[str, Any]],
     income_records: Iterable[Mapping[str, Any]],
     active_trades: Iterable[Mapping[str, Any]] = (),
-    account_equity: Optional[float] = None,
+    cutoff_equity: Optional[float] = None,
 ) -> str:
     """Render readable daily evidence with closed and active P&L separated."""
     all_decisions = list(decisions)
@@ -122,8 +122,8 @@ def build_report_body(
     # and entry commission cannot safely be attributed to a closed lifecycle.
     account_performance = PerformanceTracker.summarize(income)
     opening_equity = (
-        account_equity - account_performance.net_pnl
-        if account_equity is not None
+        cutoff_equity - account_performance.net_pnl
+        if cutoff_equity is not None
         else None
     )
     equity_return = (
@@ -205,16 +205,17 @@ def build_report_body(
             "",
             "_Whole-account income recorded during this UTC day. These values include "
             "active-position activity and are not attributed to closed trades._",
-            "_Equity value is the wallet-equity snapshot taken when this report is "
-            "generated. Equity P&L is net account income divided by inferred opening "
-            "wallet equity._",
+            "_Equity value is wallet equity reconstructed at the report cutoff by "
+            "reconciling all subsequent exchange income against a current wallet "
+            "snapshot. Equity P&L is net account income divided by opening wallet "
+            "equity._",
             "",
             f"- Realized P&L: **{account_performance.realized_pnl:.8f} USDT**",
             f"- Commission: **{account_performance.commission:.8f} USDT**",
             f"- Funding: **{account_performance.funding:.8f} USDT**",
             f"- Other income: **{account_performance.other_income:.8f} USDT**",
             f"- Net account income: **{account_performance.net_pnl:.8f} USDT**",
-            f"- Equity value: **{_format_metric(account_equity)} USDT**",
+            f"- Equity value: **{_format_metric(cutoff_equity)} USDT**",
             f"- Equity P&L: **{_format_metric(equity_return)}%**",
         ]
     )
@@ -718,10 +719,14 @@ class TestnetDailyReporter:
     def publish_date(self, report_date: date) -> str:
         start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
+        tracker = None
         if self.futures_client is not None:
-            PerformanceTracker(
+            tracker = PerformanceTracker(
                 self.futures_client, self.mongo_handler, "testnet"
-            ).sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
+            )
+            tracker.sync_window(
+                int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+            )
         decisions = self.mongo_handler.get_trade_decisions(
             start, end, "testnet", include_event_window=True
         )
@@ -730,11 +735,18 @@ class TestnetDailyReporter:
         )
         active_trades = self.mongo_handler.get_active_trade_decisions(end, "testnet")
         title = f"Orbit Testnet daily report: {report_date.isoformat()}"
-        account_equity = None
-        if self.futures_client is not None:
-            account_equity = float(self.futures_client.account()["totalWalletBalance"])
+        cutoff_equity = None
+        if self.futures_client is not None and tracker is not None:
+            wallet_equity = float(
+                self.futures_client.account()["totalWalletBalance"]
+            )
+            snapshot_ms = int(tracker.utc_now().timestamp() * 1000)
+            subsequent_income = tracker.sync_window(
+                int(end.timestamp() * 1000), snapshot_ms
+            )
+            cutoff_equity = wallet_equity - subsequent_income.net_pnl
         body = build_report_body(
-            report_date, decisions, income, active_trades, account_equity
+            report_date, decisions, income, active_trades, cutoff_equity
         )
         return self.github.publish(
             title,

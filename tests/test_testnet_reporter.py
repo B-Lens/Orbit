@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 import unittest
 from unittest.mock import MagicMock, patch
 
+from orbit.core.performance import PerformanceTracker
 from orbit.core.testnet_reporter import (
     GITHUB_COMMENT_BODY_LIMIT,
     GitHubProjectClient,
@@ -195,7 +196,7 @@ class TestReportRendering(unittest.TestCase):
         income = [{"incomeType": "REALIZED_PNL", "income": "10"}]
 
         body = build_report_body(
-            date(2026, 8, 21), decisions, income, account_equity=1010
+            date(2026, 8, 21), decisions, income, cutoff_equity=1010
         )
 
         self.assertIn("Equity value: **1010.00 USDT**", body)
@@ -350,12 +351,20 @@ class TestDailyReporter(unittest.TestCase):
         github = MagicMock()
         github.publish.return_value = "https://github.test/report/1"
         futures = MagicMock()
-        futures.get_income_history.return_value = []
+        futures.get_income_history.side_effect = [
+            [],
+            [{"incomeType": "REALIZED_PNL", "income": "25", "time": 1}],
+        ]
         futures.account.return_value = {"totalWalletBalance": "1000"}
         summary_generator = MagicMock(return_value="Two orders filled.")
         reporter = DailyReporter(mongo, github, futures, summary_generator)
 
-        url = reporter.publish_date(date(2026, 8, 21))
+        with patch.object(
+            PerformanceTracker,
+            "utc_now",
+            return_value=datetime(2026, 8, 22, 1, tzinfo=timezone.utc),
+        ):
+            url = reporter.publish_date(date(2026, 8, 21))
 
         self.assertEqual(url, "https://github.test/report/1")
         start, end, mode = mongo.get_trade_decisions.call_args.args
@@ -365,14 +374,16 @@ class TestDailyReporter(unittest.TestCase):
         self.assertTrue(
             mongo.get_trade_decisions.call_args.kwargs["include_event_window"]
         )
-        futures.get_income_history.assert_called_once_with(
-            recvWindow=60000,
-            startTime=int(start.timestamp() * 1000),
-            endTime=int(end.timestamp() * 1000) - 1,
-            limit=1000,
-        )
+        first_income_call = futures.get_income_history.call_args_list[0]
+        self.assertEqual(first_income_call.kwargs, {
+            "recvWindow": 60000,
+            "startTime": int(start.timestamp() * 1000),
+            "endTime": int(end.timestamp() * 1000) - 1,
+            "limit": 1000,
+        })
+        self.assertEqual(futures.get_income_history.call_count, 2)
         futures.account.assert_called_once_with()
-        mongo.store_income_records.assert_called_once_with([], "testnet")
+        self.assertEqual(mongo.store_income_records.call_count, 2)
         mongo.get_income_records.assert_called_once_with(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
@@ -386,6 +397,7 @@ class TestDailyReporter(unittest.TestCase):
         )
         summary_prompt = summary_generator.call_args.args[0]
         self.assertIn("Orbit Testnet daily report", summary_prompt)
+        self.assertIn("Equity value: **975.00 USDT**", summary_prompt)
 
     def test_weekly_report_reads_exact_completed_utc_week(self):
         mongo = MagicMock()
