@@ -69,15 +69,12 @@ class SentimentWorkflow(ExceptionManager):
                     "explanation": result.explanation,
                     "provider": provider,
                 },
-                reddit_sentiment={"source": "removed"},
                 news_sentiment={
                     "source": "live_web_search",
                     "provider": provider,
                     "sources": result.sources,
                     "summary": result.explanation,
                 },
-                market_indicators={},
-                twitter_sentiment={"source": "removed"},
                 processing_time_ms=processing_time,
             )
             record_id = self.mongodb.save_sentiment(record)

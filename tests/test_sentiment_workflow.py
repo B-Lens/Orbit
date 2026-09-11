@@ -39,9 +39,14 @@ def test_web_search_analysis_is_validated_and_persisted():
     assert result["provider"] == "Codex"
     record = save_sentiment.call_args.args[0]
     assert record.timestamp.tzinfo is timezone.utc
+    assert record.version == "3.0"
     assert record.news_sentiment["source"] == "live_web_search"
     assert record.news_sentiment["provider"] == "Codex"
     assert record.news_sentiment["sources"] == ["https://example.com/market-update"]
+    persisted_record = record.model_dump(by_alias=True)
+    assert "reddit_sentiment" not in persisted_record
+    assert "twitter_sentiment" not in persisted_record
+    assert "market_indicators" not in persisted_record
 
 
 def test_web_search_analysis_rejects_missing_sources():
