@@ -300,6 +300,20 @@ class TestRiskGuard(unittest.TestCase):
         self.assertTrue(result.allowed)
         self.assertAlmostEqual(result.metrics["reward_risk_ratio"], 1.5)
 
+    def test_rejects_reward_risk_just_below_minimum(self):
+        result = self.guard.evaluate(
+            equity=100_000,
+            entry_price=100,
+            stop_loss=90,
+            take_profit=114.999999995,
+            quantity=1,
+            leverage=1,
+            side="BUY",
+        )
+
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason, "reward_risk_below_minimum")
+
     def test_rejects_stop_on_wrong_side(self):
         result = self.guard.evaluate(
             equity=1000,

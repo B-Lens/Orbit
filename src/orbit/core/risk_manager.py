@@ -4,8 +4,8 @@ These checks are intentionally independent from strategy code.  A strategy may
 propose a trade; it cannot bypass portfolio safety policy.
 """
 
-import math
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Mapping
 
 
@@ -85,11 +85,11 @@ class PreTradeRiskGuard:
         if take_profit is not None:
             reward_risk = abs(take_profit - entry_price) / stop_distance
             metrics["reward_risk_ratio"] = reward_risk
-            if reward_risk < self.min_reward_risk_ratio and not math.isclose(
-                reward_risk,
-                self.min_reward_risk_ratio,
-                rel_tol=1e-9,
-                abs_tol=1e-12,
+            decimal_entry = Decimal(str(entry_price))
+            decimal_stop_distance = abs(Decimal(str(stop_loss)) - decimal_entry)
+            decimal_reward_distance = abs(Decimal(str(take_profit)) - decimal_entry)
+            if decimal_reward_distance < (
+                Decimal(str(self.min_reward_risk_ratio)) * decimal_stop_distance
             ):
                 return RiskDecision(False, "reward_risk_below_minimum", metrics)
         return RiskDecision(True, "allowed", metrics)
