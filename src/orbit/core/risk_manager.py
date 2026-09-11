@@ -85,6 +85,7 @@ class PreTradeRiskGuard:
         if take_profit is not None:
             reward_risk = abs(take_profit - entry_price) / stop_distance
             metrics["reward_risk_ratio"] = reward_risk
+            metrics["minimum_reward_risk_ratio"] = self.min_reward_risk_ratio
             decimal_entry = Decimal(str(entry_price))
             decimal_stop_distance = abs(Decimal(str(stop_loss)) - decimal_entry)
             decimal_reward_distance = abs(Decimal(str(take_profit)) - decimal_entry)

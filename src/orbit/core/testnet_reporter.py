@@ -112,6 +112,7 @@ def build_report_body(
     decisions: Iterable[Mapping[str, Any]],
     income_records: Iterable[Mapping[str, Any]],
     active_trades: Iterable[Mapping[str, Any]] = (),
+    cutoff_equity: Optional[float] = None,
 ) -> str:
     """Render readable daily evidence with closed and active P&L separated."""
     all_decisions = list(decisions)
@@ -120,6 +121,16 @@ def build_report_body(
     # daily exchange ledger is reported separately because rows such as funding
     # and entry commission cannot safely be attributed to a closed lifecycle.
     account_performance = PerformanceTracker.summarize(income)
+    opening_equity = (
+        cutoff_equity - account_performance.net_pnl
+        if cutoff_equity is not None
+        else None
+    )
+    equity_return = (
+        account_performance.net_pnl / opening_equity * 100
+        if opening_equity is not None and opening_equity > 0
+        else None
+    )
     start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     window_decisions = [
@@ -194,20 +205,29 @@ def build_report_body(
             "",
             "_Whole-account income recorded during this UTC day. These values include "
             "active-position activity and are not attributed to closed trades._",
+            "_Equity value is wallet equity reconstructed at the report cutoff by "
+            "reconciling all subsequent exchange income against a current wallet "
+            "snapshot. Equity P&L is net account income divided by opening wallet "
+            "equity._",
             "",
             f"- Realized P&L: **{account_performance.realized_pnl:.8f} USDT**",
             f"- Commission: **{account_performance.commission:.8f} USDT**",
             f"- Funding: **{account_performance.funding:.8f} USDT**",
             f"- Other income: **{account_performance.other_income:.8f} USDT**",
             f"- Net account income: **{account_performance.net_pnl:.8f} USDT**",
+            f"- Equity value: **{_format_metric(cutoff_equity)} USDT**",
+            f"- Equity P&L: **{_format_metric(equity_return)}%**",
         ]
     )
 
     lines.extend([
-        "", "## Active trades", "",
-        "_These trades were active at the report cutoff. No unrealized P&L is inferred._", "",
-        "| Decision | Asset | Side | Entry | Quantity |",
-        "| :--- | :--- | :--- | ---: | ---: |",
+        "", "## Open trade lifecycles", "",
+        "_These are filled decision-ledger lifecycles with no close recorded before "
+        "the report cutoff. They are not a snapshot of exchange positions: multiple "
+        "rows for one asset may be netted or offset at the exchange. No unrealized "
+        "P&L is inferred._", "",
+        "| Decision | Asset | Side | Opened (UTC) | Entry | Quantity | Stop | Target |",
+        "| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: |",
     ])
     for position in sorted(active, key=lambda row: str(row.get("symbol") or "")):
         fill: Mapping[str, Any] = next(
@@ -227,14 +247,17 @@ def build_report_body(
             position.get("decision_id"),
             position.get("symbol"),
             position.get("signal"),
+            fill.get("timestamp"),
             fill.get("average_price")
             or fill.get("price")
             or position.get("entry_price"),
             fill.get("executed_quantity") or fill.get("quantity"),
+            position.get("stop_loss"),
+            position.get("take_profit"),
         )
         lines.append("| " + " | ".join(_format_value(value) for value in values) + " |")
     if not active:
-        lines.append("| — | — | — | — | — |")
+        lines.append("| — | — | — | — | — | — | — | — |")
 
     lines.extend(["", "## Rejections", "", "### Strategy rejections", ""])
     lines.extend(
@@ -246,6 +269,39 @@ def build_report_body(
         [f"- `{reason}`: {count}" for reason, count in sorted(risk_reasons.items())]
         or ["- None"]
     )
+    rejection_rows = [
+        (row, event)
+        for row in all_decisions
+        for event in row.get("execution_events", [])
+        if event.get("status") == "order_rejected"
+        and _in_window(event.get("timestamp"), start, end)
+    ]
+    if rejection_rows:
+        lines.extend([
+            "",
+            "| Time (UTC) | Decision | Asset | Side | Reason | Entry | Stop | Target | Observed R:R | Required min R:R |",
+            "| :--- | :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |",
+        ])
+        for decision, event in rejection_rows:
+            lines.append(
+                "| "
+                + " | ".join(
+                    _format_value(value)
+                    for value in (
+                        event.get("timestamp"),
+                        decision.get("decision_id"),
+                        decision.get("symbol"),
+                        decision.get("signal"),
+                        event.get("reason"),
+                        decision.get("entry_price"),
+                        decision.get("stop_loss"),
+                        decision.get("take_profit"),
+                        event.get("reward_risk_ratio"),
+                        event.get("minimum_reward_risk_ratio"),
+                    )
+                )
+                + " |"
+            )
     lines.extend(
         [
             "",
@@ -660,13 +716,41 @@ class TestnetDailyReporter:
             summary = summary[:content_limit].rstrip() + SUMMARY_TRUNCATION_NOTICE
         return f"{prefix}{summary}"
 
+    def _cutoff_equity(
+        self, tracker: PerformanceTracker, end: datetime, attempts: int = 3
+    ) -> float:
+        """Reconstruct cutoff equity from a wallet snapshot with no crossing income."""
+        end_ms = int(end.timestamp() * 1000)
+        for _ in range(attempts):
+            before_ms = int(tracker.utc_now().timestamp() * 1000)
+            account = self.futures_client.account()
+            after_ms = int(tracker.utc_now().timestamp() * 1000)
+            subsequent_income = tracker.sync_window(end_ms, after_ms + 1)
+            crossing_income = any(
+                before_ms <= int(record.get("time", 0) or 0) <= after_ms
+                for record in tracker.last_records
+            )
+            if not crossing_income:
+                return (
+                    float(account["totalWalletBalance"])
+                    - subsequent_income.net_pnl
+                )
+        raise RuntimeError(
+            "Account income changed during every equity snapshot attempt; "
+            "refusing to publish inconsistent historical equity"
+        )
+
     def publish_date(self, report_date: date) -> str:
         start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
+        tracker = None
         if self.futures_client is not None:
-            PerformanceTracker(
+            tracker = PerformanceTracker(
                 self.futures_client, self.mongo_handler, "testnet"
-            ).sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
+            )
+            tracker.sync_window(
+                int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+            )
         decisions = self.mongo_handler.get_trade_decisions(
             start, end, "testnet", include_event_window=True
         )
@@ -675,7 +759,12 @@ class TestnetDailyReporter:
         )
         active_trades = self.mongo_handler.get_active_trade_decisions(end, "testnet")
         title = f"Orbit Testnet daily report: {report_date.isoformat()}"
-        body = build_report_body(report_date, decisions, income, active_trades)
+        cutoff_equity = None
+        if self.futures_client is not None and tracker is not None:
+            cutoff_equity = self._cutoff_equity(tracker, end)
+        body = build_report_body(
+            report_date, decisions, income, active_trades, cutoff_equity
+        )
         return self.github.publish(
             title,
             body,

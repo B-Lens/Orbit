@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 import unittest
 from unittest.mock import MagicMock, patch
 
+from orbit.core.performance import PerformanceTracker
 from orbit.core.testnet_reporter import (
     GITHUB_COMMENT_BODY_LIMIT,
     GitHubProjectClient,
@@ -106,7 +107,7 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("Funding: **-0.50000000 USDT**", body)
         self.assertIn("Net account income: **8.50000000 USDT**", body)
         self.assertIn("## Closed-trade performance by asset", body)
-        self.assertIn("## Active trades", body)
+        self.assertIn("## Open trade lifecycles", body)
         self.assertNotIn("quiet-1", body)
         self.assertIn("| prior-day-order | — | order_filled |", body)
 
@@ -142,7 +143,10 @@ class TestReportRendering(unittest.TestCase):
 
         self.assertIn("| BTCUSDT | 1 | 5.00000000 |", body)
         self.assertNotIn("ETHUSDT | 1 |", body)
-        self.assertIn("| active-eth | ETHUSDT | BUY | 100 | 0.5 |", body)
+        self.assertIn(
+            "| active-eth | ETHUSDT | BUY | 2026-08-21T01:00:00+00:00 | 100 | 0.5 | — | — |",
+            body,
+        )
         self.assertIn("Closed-trade net P&L: **5.00000000 USDT**", body)
 
     def test_active_trade_uses_latest_fill_before_report_cutoff(self):
@@ -168,8 +172,40 @@ class TestReportRendering(unittest.TestCase):
 
         body = build_report_body(date(2026, 8, 21), [], [], active)
 
-        self.assertIn("| active-eth | ETHUSDT | BUY | 100 | 0.5 |", body)
-        self.assertNotIn("| active-eth | ETHUSDT | BUY | 110 | 0.25 |", body)
+        self.assertIn("| 2026-08-21T20:00:00+00:00 | 100 | 0.5 |", body)
+        self.assertNotIn("| 2026-08-22T02:00:00+00:00 | 110 | 0.25 |", body)
+
+    def test_reports_equity_value_return_and_risk_rejection_inputs(self):
+        decisions = [{
+            "decision_id": "risk-1",
+            "timestamp": datetime(2026, 8, 21, 1, tzinfo=timezone.utc),
+            "symbol": "ETHUSDT",
+            "signal": "SELL",
+            "entry_price": 100,
+            "stop_loss": 102,
+            "take_profit": 97,
+            "outcome": "accepted",
+            "execution_events": [{
+                "status": "order_rejected",
+                "reason": "reward_risk_below_minimum",
+                "reward_risk_ratio": 1.499,
+                "minimum_reward_risk_ratio": 1.5,
+                "timestamp": datetime(2026, 8, 21, 2, tzinfo=timezone.utc),
+            }],
+        }]
+        income = [{"incomeType": "REALIZED_PNL", "income": "10"}]
+
+        body = build_report_body(
+            date(2026, 8, 21), decisions, income, cutoff_equity=1010
+        )
+
+        self.assertIn("Equity value: **1010.00 USDT**", body)
+        self.assertIn("Equity P&L: **1.00%**", body)
+        self.assertIn(
+            "| 2026-08-21T02:00:00+00:00 | risk-1 | ETHUSDT | SELL | "
+            "reward_risk_below_minimum | 100 | 102 | 97 | 1.499 | 1.5 |",
+            body,
+        )
 
     def test_weekly_report_separates_signals_submissions_and_fills(self):
         decisions = [
@@ -315,11 +351,20 @@ class TestDailyReporter(unittest.TestCase):
         github = MagicMock()
         github.publish.return_value = "https://github.test/report/1"
         futures = MagicMock()
-        futures.get_income_history.return_value = []
+        futures.get_income_history.side_effect = [
+            [],
+            [{"incomeType": "REALIZED_PNL", "income": "25", "time": 1}],
+        ]
+        futures.account.return_value = {"totalWalletBalance": "1000"}
         summary_generator = MagicMock(return_value="Two orders filled.")
         reporter = DailyReporter(mongo, github, futures, summary_generator)
 
-        url = reporter.publish_date(date(2026, 8, 21))
+        with patch.object(
+            PerformanceTracker,
+            "utc_now",
+            return_value=datetime(2026, 8, 22, 1, tzinfo=timezone.utc),
+        ):
+            url = reporter.publish_date(date(2026, 8, 21))
 
         self.assertEqual(url, "https://github.test/report/1")
         start, end, mode = mongo.get_trade_decisions.call_args.args
@@ -329,13 +374,16 @@ class TestDailyReporter(unittest.TestCase):
         self.assertTrue(
             mongo.get_trade_decisions.call_args.kwargs["include_event_window"]
         )
-        futures.get_income_history.assert_called_once_with(
-            recvWindow=60000,
-            startTime=int(start.timestamp() * 1000),
-            endTime=int(end.timestamp() * 1000) - 1,
-            limit=1000,
-        )
-        mongo.store_income_records.assert_called_once_with([], "testnet")
+        first_income_call = futures.get_income_history.call_args_list[0]
+        self.assertEqual(first_income_call.kwargs, {
+            "recvWindow": 60000,
+            "startTime": int(start.timestamp() * 1000),
+            "endTime": int(end.timestamp() * 1000) - 1,
+            "limit": 1000,
+        })
+        self.assertEqual(futures.get_income_history.call_count, 2)
+        futures.account.assert_called_once_with()
+        self.assertEqual(mongo.store_income_records.call_count, 2)
         mongo.get_income_records.assert_called_once_with(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
@@ -349,6 +397,79 @@ class TestDailyReporter(unittest.TestCase):
         )
         summary_prompt = summary_generator.call_args.args[0]
         self.assertIn("Orbit Testnet daily report", summary_prompt)
+        self.assertIn("Equity value: **975.00 USDT**", summary_prompt)
+
+    def test_equity_snapshot_retries_when_income_crosses_account_request(self):
+        futures = MagicMock()
+        futures.account.side_effect = [
+            {"totalWalletBalance": "1000"},
+            {"totalWalletBalance": "1010"},
+        ]
+        futures.get_income_history.side_effect = [
+            [{"incomeType": "REALIZED_PNL", "income": "10", "time": 1500}],
+            [{"incomeType": "REALIZED_PNL", "income": "10", "time": 1500}],
+        ]
+        tracker = PerformanceTracker(futures)
+        tracker.utc_now = MagicMock(side_effect=[
+            datetime.fromtimestamp(1, timezone.utc),
+            datetime.fromtimestamp(2, timezone.utc),
+            datetime.fromtimestamp(2, timezone.utc),
+            datetime.fromtimestamp(3, timezone.utc),
+        ])
+        reporter = DailyReporter(MagicMock(), MagicMock(), futures)
+
+        equity = reporter._cutoff_equity(
+            tracker, datetime.fromtimestamp(0, timezone.utc)
+        )
+
+        self.assertEqual(equity, 1000)
+        self.assertEqual(futures.account.call_count, 2)
+
+    def test_equity_snapshot_fails_closed_during_continuous_income(self):
+        futures = MagicMock()
+        futures.account.return_value = {"totalWalletBalance": "1000"}
+        futures.get_income_history.side_effect = [
+            [{"incomeType": "COMMISSION", "income": "-1", "time": timestamp}]
+            for timestamp in (1500, 3500, 5500)
+        ]
+        tracker = PerformanceTracker(futures)
+        tracker.utc_now = MagicMock(side_effect=[
+            datetime.fromtimestamp(timestamp, timezone.utc)
+            for timestamp in (1, 2, 3, 4, 5, 6)
+        ])
+        reporter = DailyReporter(MagicMock(), MagicMock(), futures)
+
+        with self.assertRaisesRegex(RuntimeError, "refusing to publish"):
+            reporter._cutoff_equity(
+                tracker, datetime.fromtimestamp(0, timezone.utc)
+            )
+
+    def test_equity_snapshot_retries_for_income_at_later_boundary(self):
+        futures = MagicMock()
+        futures.account.return_value = {"totalWalletBalance": "1000"}
+        futures.get_income_history.side_effect = [
+            [{"incomeType": "COMMISSION", "income": "-1", "time": 2000}],
+            [],
+        ]
+        tracker = PerformanceTracker(futures)
+        tracker.utc_now = MagicMock(side_effect=[
+            datetime.fromtimestamp(1, timezone.utc),
+            datetime.fromtimestamp(2, timezone.utc),
+            datetime.fromtimestamp(2, timezone.utc),
+            datetime.fromtimestamp(3, timezone.utc),
+        ])
+        reporter = DailyReporter(MagicMock(), MagicMock(), futures)
+
+        equity = reporter._cutoff_equity(
+            tracker, datetime.fromtimestamp(0, timezone.utc)
+        )
+
+        self.assertEqual(equity, 1000)
+        self.assertEqual(futures.account.call_count, 2)
+        self.assertEqual(
+            futures.get_income_history.call_args_list[0].kwargs["endTime"],
+            2000,
+        )
 
     def test_weekly_report_reads_exact_completed_utc_week(self):
         mongo = MagicMock()

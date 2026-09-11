@@ -313,6 +313,7 @@ class TestRiskGuard(unittest.TestCase):
 
         self.assertFalse(result.allowed)
         self.assertEqual(result.reason, "reward_risk_below_minimum")
+        self.assertEqual(result.metrics["minimum_reward_risk_ratio"], 1.5)
 
     def test_rejects_stop_on_wrong_side(self):
         result = self.guard.evaluate(
