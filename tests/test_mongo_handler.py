@@ -222,6 +222,46 @@ def test_read_only_handler_does_not_create_or_modify_indexes() -> None:
     handler.income_collection.drop_index.assert_not_called()
 
 
+@patch("orbit.core.mongo_handler.MongoClient")
+def test_handler_uses_mongodb_credentials_from_environment(
+    mongo_client_class: MagicMock,
+) -> None:
+    with patch.dict(
+        "os.environ",
+        {
+            "MONGODB_URI": "mongodb://database.internal:27017",
+            "MONGODB_USERNAME": "orbit-user",
+            "MONGODB_PASSWORD": "secret-value",
+            "MONGODB_AUTH_SOURCE": "orbit-auth",
+        },
+        clear=True,
+    ):
+        MongoHandler(read_only=True)
+
+    mongo_client_class.assert_called_once_with(
+        "mongodb://database.internal:27017",
+        serverSelectionTimeoutMS=1000,
+        username="orbit-user",
+        password="secret-value",
+        authSource="orbit-auth",
+    )
+
+
+@patch("orbit.core.mongo_handler.MongoClient")
+def test_handler_disables_mongodb_when_credentials_are_incomplete(
+    mongo_client_class: MagicMock,
+) -> None:
+    with patch.dict(
+        "os.environ",
+        {"MONGODB_USERNAME": "orbit-user"},
+        clear=True,
+    ):
+        handler = MongoHandler()
+
+    assert handler.collection is None
+    mongo_client_class.assert_not_called()
+
+
 @patch("orbit.core.mongo_handler.requests.get")
 def test_testnet_klines_use_futures_testnet_endpoint(mock_get: MagicMock) -> None:
     handler = MongoHandler.__new__(MongoHandler)
