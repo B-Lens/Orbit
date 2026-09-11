@@ -38,13 +38,8 @@ class SentimentRecord(BaseModel):
     # Overall sentiment
     combined_sentiment: Dict[str, Any]  # Store the full combined sentiment result
     
-    # Reddit Analysis
-    reddit_sentiment: Dict[str, Any]
-    
-    # Legacy Sources
+    # Live web-search evidence
     news_sentiment: Dict[str, Any]
-    market_indicators: Dict[str, Any]
-    twitter_sentiment: Dict[str, Any] 
     
     # Market Context
     prices: Dict[str, float] = Field(default_factory=dict)
@@ -55,7 +50,7 @@ class SentimentRecord(BaseModel):
 
     
     # Metadata
-    version: str = "2.0"
+    version: str = "3.0"
     processing_time_ms: int
     
     class Config:
