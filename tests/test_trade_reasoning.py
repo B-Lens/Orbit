@@ -25,6 +25,19 @@ def _signal() -> dict:
     }
 
 
+def _automation(review: EntryReasoning, leverage: int = 5) -> BinanceAutomation:
+    automation = BinanceAutomation.__new__(BinanceAutomation)
+    automation.order_manager = MagicMock()
+    automation.order_manager.place_order.return_value = (None, None, None)
+    automation._trade_reasoner = MagicMock()
+    automation._trade_reasoner.review_entry.return_value = review
+    automation.future_leverage = leverage
+    automation.risk_management = {}
+    automation.send_logs = MagicMock()
+    automation.send_alerts = MagicMock()
+    return automation
+
+
 def test_trade_reasoner_parses_entry_decision() -> None:
     llm = MagicMock()
     llm.invoke.return_value = (
@@ -38,45 +51,26 @@ def test_trade_reasoner_parses_entry_decision() -> None:
 
 
 def test_core_blocks_llm_rejected_trade_and_persists_reasoning() -> None:
-    order_manager = MagicMock()
-    trade_reasoner = MagicMock()
-    trade_reasoner.review_entry.return_value = EntryReasoning(False, "weak setup", 0.8)
-    automation = BinanceAutomation.__new__(BinanceAutomation)
-    automation.order_manager = order_manager
-    automation._trade_reasoner = trade_reasoner
-    automation.future_leverage = 2
-    automation.risk_management = {}
-    automation.send_logs = MagicMock()
-    automation.send_alerts = MagicMock()
+    automation = _automation(EntryReasoning(False, "weak setup", 0.8), leverage=2)
 
     automation.process_signal(_signal())
 
-    order_manager.place_order.assert_not_called()
-    order_manager.mongo_handler.append_decision_event.assert_called_once()
-    event = order_manager.mongo_handler.append_decision_event.call_args.args[1]
+    automation.order_manager.place_order.assert_not_called()
+    automation.order_manager.mongo_handler.append_decision_event.assert_called_once()
+    event = automation.order_manager.mongo_handler.append_decision_event.call_args.args[1]
     assert event["status"] == "llm_entry_rejected"
     assert event["llm_reasoning"]["reasoning"] == "weak setup"
 
 
 def test_core_uses_configured_leverage_for_every_asset() -> None:
-    order_manager = MagicMock()
-    order_manager.place_order.return_value = (None, None, None)
-    trade_reasoner = MagicMock()
-    trade_reasoner.review_entry.return_value = EntryReasoning(True, "aligned", 0.9)
-    automation = BinanceAutomation.__new__(BinanceAutomation)
-    automation.order_manager = order_manager
-    automation._trade_reasoner = trade_reasoner
-    automation.future_leverage = 5
-    automation.risk_management = {}
-    automation.send_logs = MagicMock()
-    automation.send_alerts = MagicMock()
+    automation = _automation(EntryReasoning(True, "aligned", 0.9))
 
     signal = {**_signal(), "symbol": "ETHUSDT"}
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr("orbit.core.main.time.sleep", lambda _seconds: None)
         automation.process_signal(signal)
 
-    assert order_manager.place_order.call_args.args[6] == 5
+    assert automation.order_manager.place_order.call_args.args[6] == 5
 
 
 def test_entry_order_is_serialized_with_position_cleanup() -> None:
@@ -88,19 +82,10 @@ def test_entry_order_is_serialized_with_position_cleanup() -> None:
         yield
         events.append("lock_released")
 
-    order_manager = MagicMock()
-    order_manager.place_order.side_effect = lambda *_args, **_kwargs: (
+    automation = _automation(EntryReasoning(True, "aligned", 0.9))
+    automation.order_manager.place_order.side_effect = lambda *_args, **_kwargs: (
         events.append("order_placed") or (None, None, None)
     )
-    trade_reasoner = MagicMock()
-    trade_reasoner.review_entry.return_value = EntryReasoning(True, "aligned", 0.9)
-    automation = BinanceAutomation.__new__(BinanceAutomation)
-    automation.order_manager = order_manager
-    automation._trade_reasoner = trade_reasoner
-    automation.future_leverage = 5
-    automation.risk_management = {}
-    automation.send_logs = MagicMock()
-    automation.send_alerts = MagicMock()
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
