@@ -285,13 +285,14 @@ def _recent_signals(limit: int) -> List[Dict[str, Any]]:
         return []
 
 
-def _closed_trades_last_24_hours(limit: int) -> List[Dict[str, Any]]:
+def _closed_trades_between(
+    start: datetime, end: datetime, limit: int
+) -> List[Dict[str, Any]]:
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         return [
             _closed_trade_response(record)
-            for record in _command_center_mongo_handler().get_closed_trades_since(
-                cutoff, limit
+            for record in _command_center_mongo_handler().get_closed_trades_between(
+                start, end, limit
             )
         ]
     except Exception:
@@ -409,6 +410,8 @@ def get_notifications(limit: int = 100) -> NotificationFeedResponse:
 def get_command_center(
     signal_limit: int = 25,
     closed_trade_limit: int = 100,
+    closed_trade_start: Optional[datetime] = None,
+    closed_trade_end: Optional[datetime] = None,
     log_limit: int = 100,
     exception_limit: int = 25,
 ) -> CommandCenterResponse:
@@ -417,6 +420,24 @@ def get_command_center(
     closed_trade_limit = min(max(closed_trade_limit, 0), 250)
     log_limit = min(max(log_limit, 0), 500)
     exception_limit = min(max(exception_limit, 0), 100)
+    if (closed_trade_start is None) != (closed_trade_end is None):
+        raise HTTPException(
+            status_code=422,
+            detail="closed_trade_start and closed_trade_end must be provided together",
+        )
+    if closed_trade_start is None:
+        closed_trade_end = datetime.now(timezone.utc)
+        closed_trade_start = closed_trade_end - timedelta(hours=24)
+    if closed_trade_start.tzinfo is None or closed_trade_end.tzinfo is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Closed-trade boundaries must include a timezone",
+        )
+    if closed_trade_start >= closed_trade_end:
+        raise HTTPException(
+            status_code=422,
+            detail="closed_trade_start must be before closed_trade_end",
+        )
     try:
         client = create_redis_client()
         with closing(client):
@@ -452,7 +473,9 @@ def get_command_center(
         ],
         closed_trades=[
             ClosedTradeResponse.model_validate(item)
-            for item in _closed_trades_last_24_hours(closed_trade_limit)
+            for item in _closed_trades_between(
+                closed_trade_start, closed_trade_end, closed_trade_limit
+            )
         ],
         sentiment=SentimentResponse.model_validate(sentiment),
         sentiment_history=[

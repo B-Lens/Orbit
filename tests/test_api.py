@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from orbit.api import (
+    _closed_trades_between,
     _closed_trade_response,
     _recent_sentiment_history,
     _risk_execution_state,
@@ -109,6 +110,20 @@ def test_closed_trade_dashboard_response_keeps_full_lifecycle_details() -> None:
     assert response["entry_price"] == 100.0
     assert response["closed_at"] == "2026-09-07T10:00:00+00:00"
     assert response["details"]["llm_exit_reasoning"]["reasoning"] == "Target reached"
+
+
+@patch("orbit.api._command_center_mongo_handler")
+def test_closed_trades_are_read_for_the_requested_calendar_range(
+    mongo_handler: MagicMock,
+) -> None:
+    start = datetime.fromisoformat("2026-09-10T18:30:00+00:00")
+    end = datetime.fromisoformat("2026-09-11T18:30:00+00:00")
+    mongo_handler.return_value.get_closed_trades_between.return_value = []
+
+    assert _closed_trades_between(start, end, 250) == []
+    mongo_handler.return_value.get_closed_trades_between.assert_called_once_with(
+        start, end, 250
+    )
 
 
 @patch("orbit.api._command_center_mongo_handler")
