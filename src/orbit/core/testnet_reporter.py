@@ -725,9 +725,9 @@ class TestnetDailyReporter:
             before_ms = int(tracker.utc_now().timestamp() * 1000)
             account = self.futures_client.account()
             after_ms = int(tracker.utc_now().timestamp() * 1000)
-            subsequent_income = tracker.sync_window(end_ms, after_ms)
+            subsequent_income = tracker.sync_window(end_ms, after_ms + 1)
             crossing_income = any(
-                before_ms <= int(record.get("time", 0) or 0) < after_ms
+                before_ms <= int(record.get("time", 0) or 0) <= after_ms
                 for record in tracker.last_records
             )
             if not crossing_income:

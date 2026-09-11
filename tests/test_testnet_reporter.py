@@ -444,6 +444,33 @@ class TestDailyReporter(unittest.TestCase):
                 tracker, datetime.fromtimestamp(0, timezone.utc)
             )
 
+    def test_equity_snapshot_retries_for_income_at_later_boundary(self):
+        futures = MagicMock()
+        futures.account.return_value = {"totalWalletBalance": "1000"}
+        futures.get_income_history.side_effect = [
+            [{"incomeType": "COMMISSION", "income": "-1", "time": 2000}],
+            [],
+        ]
+        tracker = PerformanceTracker(futures)
+        tracker.utc_now = MagicMock(side_effect=[
+            datetime.fromtimestamp(1, timezone.utc),
+            datetime.fromtimestamp(2, timezone.utc),
+            datetime.fromtimestamp(2, timezone.utc),
+            datetime.fromtimestamp(3, timezone.utc),
+        ])
+        reporter = DailyReporter(MagicMock(), MagicMock(), futures)
+
+        equity = reporter._cutoff_equity(
+            tracker, datetime.fromtimestamp(0, timezone.utc)
+        )
+
+        self.assertEqual(equity, 1000)
+        self.assertEqual(futures.account.call_count, 2)
+        self.assertEqual(
+            futures.get_income_history.call_args_list[0].kwargs["endTime"],
+            2000,
+        )
+
     def test_weekly_report_reads_exact_completed_utc_week(self):
         mongo = MagicMock()
         mongo.get_trade_decisions.return_value = []
