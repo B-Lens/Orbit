@@ -106,7 +106,7 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("Funding: **-0.50000000 USDT**", body)
         self.assertIn("Net account income: **8.50000000 USDT**", body)
         self.assertIn("## Closed-trade performance by asset", body)
-        self.assertIn("## Active trades", body)
+        self.assertIn("## Open trade lifecycles", body)
         self.assertNotIn("quiet-1", body)
         self.assertIn("| prior-day-order | — | order_filled |", body)
 
@@ -142,7 +142,10 @@ class TestReportRendering(unittest.TestCase):
 
         self.assertIn("| BTCUSDT | 1 | 5.00000000 |", body)
         self.assertNotIn("ETHUSDT | 1 |", body)
-        self.assertIn("| active-eth | ETHUSDT | BUY | 100 | 0.5 |", body)
+        self.assertIn(
+            "| active-eth | ETHUSDT | BUY | 2026-08-21T01:00:00+00:00 | 100 | 0.5 | — | — |",
+            body,
+        )
         self.assertIn("Closed-trade net P&L: **5.00000000 USDT**", body)
 
     def test_active_trade_uses_latest_fill_before_report_cutoff(self):
@@ -168,8 +171,40 @@ class TestReportRendering(unittest.TestCase):
 
         body = build_report_body(date(2026, 8, 21), [], [], active)
 
-        self.assertIn("| active-eth | ETHUSDT | BUY | 100 | 0.5 |", body)
-        self.assertNotIn("| active-eth | ETHUSDT | BUY | 110 | 0.25 |", body)
+        self.assertIn("| 2026-08-21T20:00:00+00:00 | 100 | 0.5 |", body)
+        self.assertNotIn("| 2026-08-22T02:00:00+00:00 | 110 | 0.25 |", body)
+
+    def test_reports_equity_value_return_and_risk_rejection_inputs(self):
+        decisions = [{
+            "decision_id": "risk-1",
+            "timestamp": datetime(2026, 8, 21, 1, tzinfo=timezone.utc),
+            "symbol": "ETHUSDT",
+            "signal": "SELL",
+            "entry_price": 100,
+            "stop_loss": 102,
+            "take_profit": 97,
+            "outcome": "accepted",
+            "execution_events": [{
+                "status": "order_rejected",
+                "reason": "reward_risk_below_minimum",
+                "reward_risk_ratio": 1.499,
+                "minimum_reward_risk_ratio": 1.5,
+                "timestamp": datetime(2026, 8, 21, 2, tzinfo=timezone.utc),
+            }],
+        }]
+        income = [{"incomeType": "REALIZED_PNL", "income": "10"}]
+
+        body = build_report_body(
+            date(2026, 8, 21), decisions, income, account_equity=1010
+        )
+
+        self.assertIn("Equity value: **1010.00 USDT**", body)
+        self.assertIn("Equity P&L: **1.00%**", body)
+        self.assertIn(
+            "| 2026-08-21T02:00:00+00:00 | risk-1 | ETHUSDT | SELL | "
+            "reward_risk_below_minimum | 100 | 102 | 97 | 1.499 | 1.5 |",
+            body,
+        )
 
     def test_weekly_report_separates_signals_submissions_and_fills(self):
         decisions = [
@@ -316,6 +351,7 @@ class TestDailyReporter(unittest.TestCase):
         github.publish.return_value = "https://github.test/report/1"
         futures = MagicMock()
         futures.get_income_history.return_value = []
+        futures.account.return_value = {"totalWalletBalance": "1000"}
         summary_generator = MagicMock(return_value="Two orders filled.")
         reporter = DailyReporter(mongo, github, futures, summary_generator)
 
@@ -335,6 +371,7 @@ class TestDailyReporter(unittest.TestCase):
             endTime=int(end.timestamp() * 1000) - 1,
             limit=1000,
         )
+        futures.account.assert_called_once_with()
         mongo.store_income_records.assert_called_once_with([], "testnet")
         mongo.get_income_records.assert_called_once_with(
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"

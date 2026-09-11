@@ -112,6 +112,7 @@ def build_report_body(
     decisions: Iterable[Mapping[str, Any]],
     income_records: Iterable[Mapping[str, Any]],
     active_trades: Iterable[Mapping[str, Any]] = (),
+    account_equity: Optional[float] = None,
 ) -> str:
     """Render readable daily evidence with closed and active P&L separated."""
     all_decisions = list(decisions)
@@ -120,6 +121,16 @@ def build_report_body(
     # daily exchange ledger is reported separately because rows such as funding
     # and entry commission cannot safely be attributed to a closed lifecycle.
     account_performance = PerformanceTracker.summarize(income)
+    opening_equity = (
+        account_equity - account_performance.net_pnl
+        if account_equity is not None
+        else None
+    )
+    equity_return = (
+        account_performance.net_pnl / opening_equity * 100
+        if opening_equity is not None and opening_equity > 0
+        else None
+    )
     start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     window_decisions = [
@@ -194,20 +205,28 @@ def build_report_body(
             "",
             "_Whole-account income recorded during this UTC day. These values include "
             "active-position activity and are not attributed to closed trades._",
+            "_Equity value is the wallet-equity snapshot taken when this report is "
+            "generated. Equity P&L is net account income divided by inferred opening "
+            "wallet equity._",
             "",
             f"- Realized P&L: **{account_performance.realized_pnl:.8f} USDT**",
             f"- Commission: **{account_performance.commission:.8f} USDT**",
             f"- Funding: **{account_performance.funding:.8f} USDT**",
             f"- Other income: **{account_performance.other_income:.8f} USDT**",
             f"- Net account income: **{account_performance.net_pnl:.8f} USDT**",
+            f"- Equity value: **{_format_metric(account_equity)} USDT**",
+            f"- Equity P&L: **{_format_metric(equity_return)}%**",
         ]
     )
 
     lines.extend([
-        "", "## Active trades", "",
-        "_These trades were active at the report cutoff. No unrealized P&L is inferred._", "",
-        "| Decision | Asset | Side | Entry | Quantity |",
-        "| :--- | :--- | :--- | ---: | ---: |",
+        "", "## Open trade lifecycles", "",
+        "_These are filled decision-ledger lifecycles with no close recorded before "
+        "the report cutoff. They are not a snapshot of exchange positions: multiple "
+        "rows for one asset may be netted or offset at the exchange. No unrealized "
+        "P&L is inferred._", "",
+        "| Decision | Asset | Side | Opened (UTC) | Entry | Quantity | Stop | Target |",
+        "| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: |",
     ])
     for position in sorted(active, key=lambda row: str(row.get("symbol") or "")):
         fill: Mapping[str, Any] = next(
@@ -227,14 +246,17 @@ def build_report_body(
             position.get("decision_id"),
             position.get("symbol"),
             position.get("signal"),
+            fill.get("timestamp"),
             fill.get("average_price")
             or fill.get("price")
             or position.get("entry_price"),
             fill.get("executed_quantity") or fill.get("quantity"),
+            position.get("stop_loss"),
+            position.get("take_profit"),
         )
         lines.append("| " + " | ".join(_format_value(value) for value in values) + " |")
     if not active:
-        lines.append("| — | — | — | — | — |")
+        lines.append("| — | — | — | — | — | — | — | — |")
 
     lines.extend(["", "## Rejections", "", "### Strategy rejections", ""])
     lines.extend(
@@ -246,6 +268,39 @@ def build_report_body(
         [f"- `{reason}`: {count}" for reason, count in sorted(risk_reasons.items())]
         or ["- None"]
     )
+    rejection_rows = [
+        (row, event)
+        for row in all_decisions
+        for event in row.get("execution_events", [])
+        if event.get("status") == "order_rejected"
+        and _in_window(event.get("timestamp"), start, end)
+    ]
+    if rejection_rows:
+        lines.extend([
+            "",
+            "| Time (UTC) | Decision | Asset | Side | Reason | Entry | Stop | Target | Observed R:R | Required min R:R |",
+            "| :--- | :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |",
+        ])
+        for decision, event in rejection_rows:
+            lines.append(
+                "| "
+                + " | ".join(
+                    _format_value(value)
+                    for value in (
+                        event.get("timestamp"),
+                        decision.get("decision_id"),
+                        decision.get("symbol"),
+                        decision.get("signal"),
+                        event.get("reason"),
+                        decision.get("entry_price"),
+                        decision.get("stop_loss"),
+                        decision.get("take_profit"),
+                        event.get("reward_risk_ratio"),
+                        event.get("minimum_reward_risk_ratio"),
+                    )
+                )
+                + " |"
+            )
     lines.extend(
         [
             "",
@@ -675,7 +730,12 @@ class TestnetDailyReporter:
         )
         active_trades = self.mongo_handler.get_active_trade_decisions(end, "testnet")
         title = f"Orbit Testnet daily report: {report_date.isoformat()}"
-        body = build_report_body(report_date, decisions, income, active_trades)
+        account_equity = None
+        if self.futures_client is not None:
+            account_equity = float(self.futures_client.account()["totalWalletBalance"])
+        body = build_report_body(
+            report_date, decisions, income, active_trades, account_equity
+        )
         return self.github.publish(
             title,
             body,
