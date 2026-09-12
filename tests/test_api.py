@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,8 +11,10 @@ from orbit.api import (
     _risk_execution_state,
     _signal_response,
     get_command_center,
+    get_daily_report,
     get_notifications,
     get_status,
+    get_weekly_report,
 )
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.redis_manager import runtime_heartbeat_key
@@ -124,6 +126,73 @@ def test_closed_trades_are_read_for_the_requested_calendar_range(
     mongo_handler.return_value.get_closed_trades_between.assert_called_once_with(
         start, end, 250
     )
+
+
+@patch("orbit.api._command_center_mongo_handler")
+def test_daily_report_uses_one_midnight_to_midnight_utc_window(
+    mongo_handler: MagicMock,
+) -> None:
+    mongo_handler.return_value.get_finalized_report.return_value = {
+        "report_type": "daily",
+        "period_start": datetime.fromisoformat("2026-09-11T00:00:00+00:00"),
+        "period_end": datetime.fromisoformat("2026-09-12T00:00:00+00:00"),
+        "timezone": "UTC",
+        "body": "finalized daily body",
+    }
+
+    response = get_daily_report(date(2026, 9, 11))
+
+    assert response.period_start == "2026-09-11T00:00:00+00:00"
+    assert response.period_end == "2026-09-12T00:00:00+00:00"
+    assert response.body == "finalized daily body"
+    mongo_handler.return_value.get_finalized_report.assert_called_once_with(
+        "daily", datetime.fromisoformat(response.period_start)
+    )
+
+
+@patch("orbit.api._command_center_mongo_handler")
+def test_weekly_report_uses_saturday_to_saturday_midnight_utc_window(
+    mongo_handler: MagicMock,
+) -> None:
+    mongo_handler.return_value.get_finalized_report.return_value = {
+        "report_type": "weekly",
+        "period_start": datetime.fromisoformat("2025-09-06T00:00:00+00:00"),
+        "period_end": datetime.fromisoformat("2025-09-13T00:00:00+00:00"),
+        "timezone": "UTC",
+        "body": "finalized weekly body",
+    }
+
+    response = get_weekly_report(date(2025, 9, 6))
+
+    assert response.period_start == "2025-09-06T00:00:00+00:00"
+    assert response.period_end == "2025-09-13T00:00:00+00:00"
+    assert response.body == "finalized weekly body"
+
+
+@patch("orbit.api._command_center_mongo_handler")
+def test_daily_report_fails_closed_without_finalized_snapshot(
+    mongo_handler: MagicMock,
+) -> None:
+    mongo_handler.return_value.get_finalized_report.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_daily_report(date(2026, 9, 11))
+
+    assert exc_info.value.status_code == 404
+
+
+def test_weekly_report_rejects_non_saturday_start() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        get_weekly_report(date(2026, 9, 7))
+
+    assert exc_info.value.status_code == 422
+
+
+def test_daily_report_rejects_incomplete_utc_day() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        get_daily_report(datetime.now(timezone.utc).date())
+
+    assert exc_info.value.status_code == 422
 
 
 @patch("orbit.api._command_center_mongo_handler")

@@ -1,7 +1,7 @@
 import os
 import logging
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
@@ -185,6 +185,14 @@ class CommandCenterResponse(BaseModel):
     logs: List[LogResponse]
     exceptions: List[ExceptionResponse]
     older_exception_count: int = 0
+
+
+class ReportResponse(BaseModel):
+    report_type: str
+    period_start: str
+    period_end: str
+    timezone: str
+    body: str
 
 
 def _expected_runtime_ids() -> List[str]:
@@ -404,6 +412,50 @@ def get_notifications(limit: int = 100) -> NotificationFeedResponse:
             status_code=503,
             detail="Service Unavailable: notification feed unavailable",
         ) from exc
+
+
+@app.get("/api/reports/daily", response_model=ReportResponse)
+def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
+    """Return the GitHub daily report for one completed UTC calendar day."""
+    today = datetime.now(timezone.utc).date()
+    selected_date = report_date or (today - timedelta(days=1))
+    if selected_date >= today:
+        raise HTTPException(status_code=422, detail="report_date must be completed")
+    start = datetime.combine(selected_date, time.min, tzinfo=timezone.utc)
+    report = _command_center_mongo_handler().get_finalized_report("daily", start)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Finalized daily report not found")
+    return ReportResponse(
+        report_type="daily",
+        period_start=_iso_value(report.get("period_start")) or start.isoformat(),
+        period_end=_iso_value(report.get("period_end")) or "",
+        timezone=str(report.get("timezone") or "UTC"),
+        body=str(report.get("body") or ""),
+    )
+
+
+@app.get("/api/reports/weekly", response_model=ReportResponse)
+def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
+    """Return the GitHub weekly report for a Saturday-through-Friday UTC week."""
+    today = datetime.now(timezone.utc).date()
+    latest_saturday = today - timedelta(days=(today.weekday() - 5) % 7)
+    selected_start = week_start or (latest_saturday - timedelta(days=7))
+    if selected_start.weekday() != 5:
+        raise HTTPException(status_code=422, detail="week_start must be a Saturday")
+    start = datetime.combine(selected_start, time.min, tzinfo=timezone.utc)
+    end = start + timedelta(days=7)
+    if end.date() > today:
+        raise HTTPException(status_code=422, detail="week_start must identify a completed week")
+    report = _command_center_mongo_handler().get_finalized_report("weekly", start)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Finalized weekly report not found")
+    return ReportResponse(
+        report_type="weekly",
+        period_start=_iso_value(report.get("period_start")) or start.isoformat(),
+        period_end=_iso_value(report.get("period_end")) or end.isoformat(),
+        timezone=str(report.get("timezone") or "UTC"),
+        body=str(report.get("body") or ""),
+    )
 
 
 @app.get("/api/command-center", response_model=CommandCenterResponse)

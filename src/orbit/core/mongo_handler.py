@@ -92,6 +92,7 @@ class MongoHandler(ExceptionManager):
             self.trade_lifecycle_collection = self.db["trade_lifecycle"]
             self.trade_metrics_collection = self.db["trade_metrics"]
             self.income_collection = self.db["futures_income"]
+            self.testnet_report_collection = self.db["testnet_reports"]
             self.sentiment_history_collection = self._mongo_client[
                 "crypto_sentiment"
             ]["sentiment_history"]
@@ -135,6 +136,10 @@ class MongoHandler(ExceptionManager):
             )
             self.income_collection.create_index(
                 [("execution_mode", ASCENDING), ("time", ASCENDING)]
+            )
+            self.testnet_report_collection.create_index(
+                [("report_type", ASCENDING), ("period_start", ASCENDING)],
+                unique=True,
             )
         except Exception as exc:
             logger.exception(f"Error initializing MongoDB: {exc}")
@@ -652,6 +657,45 @@ class MongoHandler(ExceptionManager):
             return cast(Optional[Dict[str, Any]], record)
         except Exception as exc:
             self.handle_exception(exc, "Error reading completed trade lifecycle")
+            raise
+
+    def store_finalized_report(self, record: Dict[str, Any]) -> bool:
+        """Persist the exact report body only after successful publication."""
+        collection = getattr(self, "testnet_report_collection", None)
+        if collection is None:
+            return False
+        try:
+            result = collection.update_one(
+                {
+                    "report_type": record["report_type"],
+                    "period_start": record["period_start"],
+                },
+                {"$set": record},
+                upsert=True,
+            )
+            return bool(getattr(result, "acknowledged", True))
+        except Exception as exc:
+            self.handle_exception(exc, "Error storing finalized Testnet report")
+            return False
+
+    def get_finalized_report(
+        self, report_type: str, period_start: datetime
+    ) -> Optional[Dict[str, Any]]:
+        """Return one successfully published report snapshot."""
+        collection = getattr(self, "testnet_report_collection", None)
+        if collection is None:
+            return None
+        try:
+            record = collection.find_one(
+                {"report_type": report_type, "period_start": period_start},
+                {"_id": 0},
+            )
+            return cast(Optional[Dict[str, Any]], record)
+        except Exception as exc:
+            if getattr(self, "read_only", False):
+                logger.warning("Error reading finalized Testnet report: %s", exc)
+                return None
+            self.handle_exception(exc, "Error reading finalized Testnet report")
             raise
 
     def store_trade_reconciliation_block(self, record: Dict[str, Any]) -> bool:
