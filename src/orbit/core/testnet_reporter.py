@@ -115,6 +115,8 @@ def build_report_body(
     income_records: Iterable[Mapping[str, Any]],
     active_trades: Iterable[Mapping[str, Any]] = (),
     cutoff_equity: Optional[float] = None,
+    *,
+    include_automation_task: bool = True,
 ) -> str:
     """Render readable daily evidence with closed and active P&L separated."""
     all_decisions = list(decisions)
@@ -365,17 +367,18 @@ def build_report_body(
     if not execution_rows:
         lines.append("| — | — | — | — | No execution events recorded |")
     lines.extend(["", "</details>"])
-    lines.extend(
-        [
-            "",
-            "## Codex task",
-            "",
-            "Analyze repeated rejections and errors against the code and tests. Fix only "
-            "a demonstrated software defect. Do not relax risk limits, bypass sentiment, "
-            "change an asset to live mode, or expose credentials. If behavior is intentional, "
-            "make no code change and explain that conclusion in the workflow artifact.",
-        ]
-    )
+    if include_automation_task:
+        lines.extend(
+            [
+                "",
+                "## Codex task",
+                "",
+                "Analyze repeated rejections and errors against the code and tests. Fix only "
+                "a demonstrated software defect. Do not relax risk limits, bypass sentiment, "
+                "change an asset to live mode, or expose credentials. If behavior is intentional, "
+                "make no code change and explain that conclusion in the workflow artifact.",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -514,11 +517,10 @@ class GitHubProjectClient:
         self.project_id = project_id
         self._request = request
         self._headers = {
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        if token:
-            self._headers["Authorization"] = f"Bearer {token}"
 
     def _call(self, method: str, url: str, **kwargs: Any) -> Any:
         response = self._request(
@@ -559,52 +561,6 @@ class GitHubProjectClient:
             if len(current_page) < 100:
                 return comments
             page += 1
-
-    def published_report(self, title: str) -> Optional[str]:
-        """Return an exact report issue, including marker-owned overflow parts."""
-        result = self._call(
-            "GET",
-            "https://api.github.com/search/issues",
-            params={
-                "q": (
-                    f'repo:{self.repository} is:issue in:title "{title}" '
-                    f"label:{REPORT_LABEL}"
-                ),
-                "per_page": 10,
-            },
-        )
-        issue = next(
-            (item for item in result.get("items", []) if item.get("title") == title),
-            None,
-        )
-        if issue is None:
-            return None
-        comments = self._issue_comments(str(issue["comments_url"]))
-        issue_author = str(issue.get("user", {}).get("login", ""))
-        overflow_parts: dict[int, str] = {}
-        for comment in comments:
-            body = str(comment.get("body", ""))
-            marker = body.splitlines()[0] if body else ""
-            prefix = "<!-- orbit-testnet-report-part:"
-            if not marker.startswith(prefix) or not marker.endswith(" -->"):
-                continue
-            comment_author = str(comment.get("user", {}).get("login", ""))
-            if not issue_author or comment_author != issue_author:
-                continue
-            try:
-                part_number = int(marker[len(prefix) : -len(" -->")])
-            except ValueError:
-                continue
-            if part_number < 2 or part_number in overflow_parts:
-                return None
-            overflow_parts[part_number] = body.removeprefix(f"{marker}\n")
-        if overflow_parts and sorted(overflow_parts) != list(
-            range(2, max(overflow_parts) + 1)
-        ):
-            return None
-        parts = [str(issue.get("body") or "")]
-        parts.extend(overflow_parts[number] for number in sorted(overflow_parts))
-        return "\n".join(parts)
 
     def publish(
         self,
