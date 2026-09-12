@@ -398,6 +398,12 @@ class TestDailyReporter(unittest.TestCase):
         summary_prompt = summary_generator.call_args.args[0]
         self.assertIn("Orbit Testnet daily report", summary_prompt)
         self.assertIn("Equity value: **975.00 USDT**", summary_prompt)
+        finalized = mongo.store_finalized_report.call_args.args[0]
+        self.assertEqual(finalized["report_type"], "daily")
+        self.assertEqual(finalized["period_start"], start)
+        self.assertEqual(finalized["period_end"], end)
+        self.assertEqual(finalized["github_url"], url)
+        self.assertIn("Equity value: **975.00 USDT**", finalized["body"])
 
     def test_equity_snapshot_retries_when_income_crosses_account_request(self):
         futures = MagicMock()
@@ -498,6 +504,24 @@ class TestDailyReporter(unittest.TestCase):
             "## LLM report explanation",
             github.publish.call_args.kwargs["summary_comment"],
         )
+        finalized = mongo.store_finalized_report.call_args.args[0]
+        self.assertEqual(finalized["report_type"], "weekly")
+        self.assertEqual(finalized["period_start"], start)
+        self.assertEqual(finalized["period_end"], end)
+        self.assertEqual(finalized["github_url"], url)
+
+    def test_report_fails_when_finalized_snapshot_cannot_be_persisted(self):
+        mongo = MagicMock()
+        mongo.get_trade_decisions.return_value = []
+        mongo.get_income_records.return_value = []
+        mongo.get_active_trade_decisions.return_value = []
+        mongo.store_finalized_report.return_value = False
+        github = MagicMock()
+        github.publish.return_value = "https://github.test/report/1"
+        reporter = DailyReporter(mongo, github)
+
+        with self.assertRaisesRegex(RuntimeError, "persistence failed"):
+            reporter.publish_date(date(2026, 8, 21))
 
 
 class TestGitHubProjectClient(unittest.TestCase):

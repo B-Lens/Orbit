@@ -80,6 +80,33 @@ def test_get_closed_trades_between_uses_lifecycle_close_time() -> None:
     )
 
 
+def test_finalized_report_is_read_by_type_and_period_start() -> None:
+    start = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.testnet_report_collection = MagicMock()
+    handler.testnet_report_collection.find_one.return_value = {"body": "report"}
+
+    assert handler.get_finalized_report("weekly", start) == {"body": "report"}
+    handler.testnet_report_collection.find_one.assert_called_once_with(
+        {"report_type": "weekly", "period_start": start}, {"_id": 0}
+    )
+
+
+def test_finalized_report_persistence_is_upserted_by_period() -> None:
+    start = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    record = {"report_type": "weekly", "period_start": start, "body": "report"}
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.testnet_report_collection = MagicMock()
+    handler.testnet_report_collection.update_one.return_value.acknowledged = True
+
+    assert handler.store_finalized_report(record) is True
+    handler.testnet_report_collection.update_one.assert_called_once_with(
+        {"report_type": "weekly", "period_start": start},
+        {"$set": record},
+        upsert=True,
+    )
+
+
 def test_active_trade_decisions_are_resolved_at_historical_cutoff() -> None:
     cutoff = datetime(2026, 8, 22, tzinfo=timezone.utc)
     open_trade = {

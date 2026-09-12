@@ -765,11 +765,24 @@ class TestnetDailyReporter:
         body = build_report_body(
             report_date, decisions, income, active_trades, cutoff_equity
         )
-        return self.github.publish(
+        url = self.github.publish(
             title,
             body,
             summary_comment=self._summary_comment(body),
         )
+        if not self.mongo_handler.store_finalized_report(
+            {
+                "report_type": "daily",
+                "period_start": start,
+                "period_end": end,
+                "timezone": "UTC",
+                "body": body,
+                "github_url": url,
+                "finalized_at": datetime.now(timezone.utc),
+            }
+        ):
+            raise RuntimeError("Finalized daily report persistence failed")
+        return url
 
     def publish_week(self, week_start: date) -> str:
         """Publish a completed Saturday-through-Friday UTC reporting window."""
@@ -787,12 +800,25 @@ class TestnetDailyReporter:
         )
         title = f"{WEEKLY_TITLE_PREFIX}{week_start.isoformat()}"
         body = build_weekly_report_body(week_start, decisions, income)
-        return self.github.publish(
+        url = self.github.publish(
             title,
             body,
             autonomous=False,
             summary_comment=self._summary_comment(body),
         )
+        if not self.mongo_handler.store_finalized_report(
+            {
+                "report_type": "weekly",
+                "period_start": start,
+                "period_end": end,
+                "timezone": "UTC",
+                "body": body,
+                "github_url": url,
+                "finalized_at": datetime.now(timezone.utc),
+            }
+        ):
+            raise RuntimeError("Finalized weekly report persistence failed")
+        return url
 
     def run_forever(self, interval_seconds: int = 3600) -> None:
         last_daily_published: Optional[date] = None
