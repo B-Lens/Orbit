@@ -541,19 +541,84 @@ class TestGitHubProjectClient(unittest.TestCase):
                         "title": "daily",
                         "body": "part one",
                         "comments_url": "https://api.github.test/issues/7/comments",
+                        "user": {"login": "reporter"},
                     }
                 ]
             }
         )
         client._issue_comments = MagicMock(
             return_value=[
-                {"body": "<!-- orbit-testnet-report-part:3 -->\npart three"},
+                {
+                    "body": "<!-- orbit-testnet-report-part:3 -->\npart three",
+                    "user": {"login": "reporter"},
+                },
                 {"body": "discussion"},
-                {"body": "<!-- orbit-testnet-report-part:2 -->\npart two"},
+                {
+                    "body": "<!-- orbit-testnet-report-part:2 -->\npart two",
+                    "user": {"login": "reporter"},
+                },
             ]
         )
 
         assert client.published_report("daily") == "part one\npart two\npart three"
+
+    def test_published_report_ignores_marker_comments_from_other_authors(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "B-Lens/Orbit"
+        client._call = MagicMock(
+            return_value={
+                "items": [
+                    {
+                        "title": "daily",
+                        "body": "trusted body",
+                        "comments_url": "comments",
+                        "user": {"login": "reporter"},
+                    }
+                ]
+            }
+        )
+        client._issue_comments = MagicMock(
+            return_value=[
+                {
+                    "body": "<!-- orbit-testnet-report-part:2 -->\nfabricated",
+                    "user": {"login": "attacker"},
+                }
+            ]
+        )
+
+        assert client.published_report("daily") == "trusted body"
+
+    def test_published_report_rejects_duplicate_or_non_contiguous_parts(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "B-Lens/Orbit"
+        issue = {
+            "title": "daily",
+            "body": "part one",
+            "comments_url": "comments",
+            "user": {"login": "reporter"},
+        }
+        client._call = MagicMock(return_value={"items": [issue]})
+        client._issue_comments = MagicMock(
+            return_value=[
+                {
+                    "body": "<!-- orbit-testnet-report-part:2 -->\nfirst",
+                    "user": {"login": "reporter"},
+                },
+                {
+                    "body": "<!-- orbit-testnet-report-part:2 -->\nduplicate",
+                    "user": {"login": "reporter"},
+                },
+            ]
+        )
+        self.assertIsNone(client.published_report("daily"))
+
+        client._issue_comments.return_value = [
+            {
+                "body": "<!-- orbit-testnet-report-part:3 -->\nmissing part two",
+                "user": {"login": "reporter"},
+            }
+        ]
+        self.assertIsNone(client.published_report("daily"))
 
     def test_published_report_requires_an_exact_title_match(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)

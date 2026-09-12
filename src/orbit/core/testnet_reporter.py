@@ -580,20 +580,30 @@ class GitHubProjectClient:
         if issue is None:
             return None
         comments = self._issue_comments(str(issue["comments_url"]))
-        overflow_parts: list[tuple[int, str]] = []
+        issue_author = str(issue.get("user", {}).get("login", ""))
+        overflow_parts: dict[int, str] = {}
         for comment in comments:
             body = str(comment.get("body", ""))
             marker = body.splitlines()[0] if body else ""
             prefix = "<!-- orbit-testnet-report-part:"
             if not marker.startswith(prefix) or not marker.endswith(" -->"):
                 continue
+            comment_author = str(comment.get("user", {}).get("login", ""))
+            if not issue_author or comment_author != issue_author:
+                continue
             try:
                 part_number = int(marker[len(prefix) : -len(" -->")])
             except ValueError:
                 continue
-            overflow_parts.append((part_number, body.removeprefix(f"{marker}\n")))
+            if part_number < 2 or part_number in overflow_parts:
+                return None
+            overflow_parts[part_number] = body.removeprefix(f"{marker}\n")
+        if overflow_parts and sorted(overflow_parts) != list(
+            range(2, max(overflow_parts) + 1)
+        ):
+            return None
         parts = [str(issue.get("body") or "")]
-        parts.extend(body for _, body in sorted(overflow_parts))
+        parts.extend(overflow_parts[number] for number in sorted(overflow_parts))
         return "\n".join(parts)
 
     def publish(
