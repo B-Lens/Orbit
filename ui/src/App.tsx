@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Activity, AlertTriangle, BrainCircuit, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock3, FileWarning, Gauge, ListFilter, Moon, Radio, RefreshCw, Search, ShieldCheck, Sun, TerminalSquare, WalletCards, Wifi, Zap } from "lucide-react";
 import "./App.css";
+import { ReportPage } from "./Reports";
 
 type RuntimeNode = { runtime_id: string; status: string; heartbeat_at: string | null };
 type RuntimeState = { status: string; current_activity: string | null; detail: string | null; updated_at: string | null; runtimes: RuntimeNode[] };
@@ -30,7 +31,7 @@ const dayLabel = (value: Date) => { const today = startOfDay(new Date()); const 
 
 function Empty({ children, title = "No live data" }: { children: ReactNode; title?: string }) { return <div className="empty"><Radio size={19} /><strong>{title}</strong><span>{children}</span></div>; }
 
-function App() {
+function CommandCenterPage() {
   const [snapshot, setSnapshot] = useState<CommandCenter | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -73,6 +74,8 @@ function App() {
         <a className="nav-item" href="#sentiment"><BrainCircuit size={17} />Intelligence</a>
         <a className="nav-item" href="#logs"><TerminalSquare size={17} />Logs</a>
         <a className="nav-item" href="#exceptions"><FileWarning size={17} />Exceptions <b className={snapshot?.exceptions.length ? "warn" : ""}>{snapshot?.exceptions.length ?? 0}</b></a>
+        <a className="nav-item" href="/daily"><CalendarDays size={17} />Daily report</a>
+        <a className="nav-item" href="/weekly"><FileWarning size={17} />Weekly report</a>
       </nav>
       <div className="system-status"><small>SYSTEM STATUS</small>{(snapshot?.runtime.runtimes ?? []).map((node) => <div key={node.runtime_id}><i className={tone(node.status)} /><span>{node.runtime_id}</span><strong className={tone(node.status)}>{node.status}</strong></div>)}<div><i className={apiConnected ? "positive" : loading ? "warning" : "negative"} /><span>Data API</span><strong className={apiConnected ? "positive" : loading ? "warning" : "negative"}>{apiConnected ? "Connected" : loading ? "Connecting" : "Unavailable"}</strong></div></div>
     </aside>
@@ -91,7 +94,7 @@ function App() {
 
           <article className="panel signals-panel" id="signals"><header className="panel-header"><div><Activity size={17} /><span><h2>Signals analyzed</h2><p>Persisted strategy decisions—not delivery events</p></span></div><strong>{snapshot?.signals.length ?? 0} recent</strong></header>{!snapshot?.signals.length ? <Empty>No strategy decisions were found in MongoDB.</Empty> : <div className="table-scroll permanent-scroll"><table><thead><tr><th>Market</th><th>Signal</th><th>Pattern</th><th>Sentiment</th><th>Decision</th><th>Reason</th><th>Analyzed</th></tr></thead><tbody>{snapshot.signals.map((item) => <tr key={item.decision_id}><td><strong>{item.symbol}</strong><span>{item.execution_mode}</span></td><td className={tone(item.signal)}>{item.signal ?? "—"}</td><td>{item.pattern ?? "—"}</td><td><span className={`status-chip ${tone(item.sentiment)}`}>{item.sentiment ?? "unknown"}</span></td><td><strong className={tone(item.latest_status ?? item.outcome)}>{item.latest_status ?? item.outcome ?? "analyzed"}</strong></td><td className="reason-cell" title={item.reason ?? ""}>{item.reason ?? "—"}</td><td>{time(item.analyzed_at)}</td></tr>)}</tbody></table></div>}</article>
 
-          <article className="panel closed-trades-panel" id="closed-trades"><header className="panel-header closed-trades-header"><div><CheckCircle2 size={17} /><span><h2>Closed trades · {dayLabel(closedTradeDay)}</h2><p>Midnight to midnight in your local time</p></span></div><div className="day-navigation"><button onClick={() => moveClosedTradeDay(-1)} aria-label="Previous day"><ChevronLeft size={15} /></button><label><CalendarDays size={13} /><input type="date" value={dateInputValue(closedTradeDay)} max={dateInputValue(new Date())} aria-label="Closed trades date" onChange={(event) => { const [year, month, day] = event.target.value.split("-").map(Number); if (year && month && day) selectClosedTradeDay(new Date(year, month - 1, day)); }} /></label><button onClick={() => moveClosedTradeDay(1)} disabled={isToday} aria-label="Next day"><ChevronRight size={15} /></button><strong>{closedTradesLoading ? "…" : closedTrades.length} closed</strong></div></header>{closedTradesLoading ? <Empty title="Loading trades">Loading closed trades for {dayLabel(closedTradeDay).toLowerCase()}.</Empty> : !closedTrades.length ? <Empty>No completed trades were closed on {dayLabel(closedTradeDay).toLowerCase()}.</Empty> : <div className="table-scroll permanent-scroll"><table><thead><tr><th>Trade</th><th>Size</th><th>Entry / Exit</th><th>Net P&amp;L</th><th>Duration</th><th>Closed</th><th>Complete record</th></tr></thead><tbody>{closedTrades.map((item) => <tr key={item.trade_id}><td><strong>{item.symbol}</strong><span className={tone(item.side)}>{item.side ?? "—"} · {item.execution_mode ?? "unknown"}</span><span title={item.trade_id}>ID: {item.trade_id}</span></td><td>{number(item.quantity, 6)}</td><td><strong>{price(item.entry_price)}</strong><span>{price(item.exit_price)}</span></td><td className={(item.pnl ?? 0) >= 0 ? "positive" : "negative"}><strong>{item.pnl != null && item.pnl >= 0 ? "+" : ""}{number(item.pnl)} USDT</strong><span>{item.pnl_source ?? "Source not recorded"}</span></td><td>{item.duration_seconds == null ? "—" : `${Math.round(item.duration_seconds / 60)}m`}</td><td><strong>{time(item.closed_at)}</strong><span>{age(item.closed_at)} ago</span></td><td><details className="trade-details"><summary>View all fields</summary><pre>{JSON.stringify(item.details, null, 2)}</pre></details></td></tr>)}</tbody></table></div>}</article>
+          <article className="panel closed-trades-panel" id="closed-trades"><header className="panel-header closed-trades-header"><div><CheckCircle2 size={17} /><span><h2>Closed trades · {dayLabel(closedTradeDay)}</h2><p>Midnight to midnight in your local time</p></span></div><div className="day-navigation"><button onClick={() => moveClosedTradeDay(-1)} aria-label="Previous day"><ChevronLeft size={15} /></button><label><CalendarDays size={13} /><input type="date" value={dateInputValue(closedTradeDay)} max={dateInputValue(new Date())} aria-label="Closed trades date" onChange={(event) => { const [year, month, day] = event.target.value.split("-").map(Number); if (year && month && day) selectClosedTradeDay(new Date(year, month - 1, day)); }} /></label><button onClick={() => moveClosedTradeDay(1)} disabled={isToday} aria-label="Next day"><ChevronRight size={15} /></button><strong>{closedTradesLoading ? "…" : closedTrades.length} closed</strong></div></header>{closedTradesLoading ? <Empty title="Loading trades">Loading closed trades for {dayLabel(closedTradeDay).toLowerCase()}.</Empty> : !closedTrades.length ? <Empty>No completed trades were closed on {dayLabel(closedTradeDay).toLowerCase()}.</Empty> : <div className="table-scroll permanent-scroll"><table><thead><tr><th>Trade</th><th>Size</th><th>Entry / Exit</th><th>Net P&amp;L</th><th>Duration</th><th>Closed</th><th>Complete record</th></tr></thead><tbody>{closedTrades.map((item) => <tr key={item.trade_id}><td><strong>{item.symbol}</strong><span className={tone(item.side)}>{item.side ?? "—"} · {item.execution_mode ?? "unknown"}</span><span title={item.trade_id}>ID: {item.trade_id}</span></td><td>{number(item.quantity, 6)}</td><td><strong>{price(item.entry_price)}</strong><span>{price(item.exit_price)}</span></td><td className={(item.pnl ?? 0) >= 0 ? "positive" : "negative"}><strong>{item.pnl != null && item.pnl >= 0 ? "+" : ""}{number(item.pnl, 8)} USDT</strong><span>{item.pnl_source ?? "Source not recorded"}</span></td><td>{item.duration_seconds == null ? "—" : `${Math.round(item.duration_seconds / 60)}m`}</td><td><strong>{time(item.closed_at)}</strong><span>{age(item.closed_at)} ago</span></td><td><details className="trade-details"><summary>View all fields</summary><pre>{JSON.stringify(item.details, null, 2)}</pre></details></td></tr>)}</tbody></table></div>}</article>
 
           <article className="panel risk-panel"><header className="panel-header"><div><Gauge size={17} /><span><h2>Risk &amp; execution</h2><p>Current safety posture</p></span></div><Wifi size={15} /></header><div className="risk-grid"><div><small>ORDER SUBMISSION</small><strong className={snapshot?.risk_execution.can_submit_orders ? "positive" : "negative"}>{snapshot?.risk_execution.can_submit_orders ? "Enabled" : "Blocked"}</strong></div><div><small>STOP-LOSS CONFIGURED</small><strong className={configuredProtectionCount === (snapshot?.positions.length ?? 0) ? "positive" : "warning"}>{configuredProtectionCount} / {snapshot?.positions.length ?? 0}</strong><p>{protectedCount} broker verified</p></div><div><small>UNREALIZED P&amp;L</small><strong className={pnl >= 0 ? "positive" : "negative"}>{pnl >= 0 ? "+" : ""}{number(pnl)}</strong></div><div><small>ACTIVE MODE</small><strong>{modes.join(", ") || "Unknown"}</strong></div></div><div className="limits"><small>CONFIGURED LIMITS</small>{Object.entries(snapshot?.risk_execution.risk_limits ?? {}).length ? Object.entries(snapshot?.risk_execution.risk_limits ?? {}).map(([key, value]) => <div key={key}><span>{key.replace(/_/g, " ")}</span><strong>{String(value)}</strong></div>) : <p>No risk limits were exposed by configuration.</p>}</div></article>
 
@@ -102,6 +105,14 @@ function App() {
       </main>
     </div>
   </div>;
+}
+
+function App() {
+  const reportPath = window.location.pathname.replace(/\/$/, "");
+  if (reportPath === "/daily" || reportPath === "/weekly") {
+    return <ReportPage kind={reportPath.slice(1) as "daily" | "weekly"} />;
+  }
+  return <CommandCenterPage />;
 }
 
 export default App;

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,8 +11,10 @@ from orbit.api import (
     _risk_execution_state,
     _signal_response,
     get_command_center,
+    get_daily_report,
     get_notifications,
     get_status,
+    get_weekly_report,
 )
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.redis_manager import runtime_heartbeat_key
@@ -124,6 +126,68 @@ def test_closed_trades_are_read_for_the_requested_calendar_range(
     mongo_handler.return_value.get_closed_trades_between.assert_called_once_with(
         start, end, 250
     )
+
+
+@patch("orbit.api._command_center_mongo_handler")
+def test_daily_report_uses_one_midnight_to_midnight_utc_window(
+    mongo_handler: MagicMock,
+) -> None:
+    mongo_handler.return_value.get_trade_decisions.return_value = []
+    mongo_handler.return_value.get_income_records.return_value = []
+    mongo_handler.return_value.get_active_trade_decisions.return_value = []
+
+    response = get_daily_report(date(2026, 9, 11))
+
+    assert response.period_start == "2026-09-11T00:00:00+00:00"
+    assert response.period_end == "2026-09-12T00:00:00+00:00"
+    mongo_handler.return_value.get_trade_decisions.assert_called_once_with(
+        datetime.fromisoformat(response.period_start),
+        datetime.fromisoformat(response.period_end),
+        "testnet",
+        include_event_window=True,
+    )
+    mongo_handler.return_value.get_income_records.assert_called_once_with(
+        int(datetime.fromisoformat(response.period_start).timestamp() * 1000),
+        int(datetime.fromisoformat(response.period_end).timestamp() * 1000),
+        "testnet",
+    )
+    mongo_handler.return_value.get_active_trade_decisions.assert_called_once_with(
+        datetime.fromisoformat(response.period_end), "testnet"
+    )
+
+
+@patch("orbit.api.datetime", wraps=datetime)
+@patch("orbit.api._command_center_mongo_handler")
+def test_weekly_report_uses_saturday_to_saturday_midnight_utc_window(
+    mongo_handler: MagicMock,
+    now: MagicMock,
+) -> None:
+    now.now.return_value = datetime.fromisoformat("2026-09-12T10:00:00+00:00")
+    mongo_handler.return_value.get_trade_decisions.return_value = []
+    mongo_handler.return_value.get_income_records.return_value = []
+
+    response = get_weekly_report(date(2026, 9, 5))
+
+    assert response.period_start == "2026-09-05T00:00:00+00:00"
+    assert response.period_end == "2026-09-12T00:00:00+00:00"
+    assert "2026-09-05 to 2026-09-11" in response.body
+
+
+def test_weekly_report_rejects_non_saturday_start() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        get_weekly_report(date(2026, 9, 7))
+
+    assert exc_info.value.status_code == 422
+
+
+@patch("orbit.api.datetime", wraps=datetime)
+def test_daily_report_rejects_incomplete_utc_day(now: MagicMock) -> None:
+    now.now.return_value = datetime.fromisoformat("2026-09-12T10:00:00+00:00")
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_daily_report(date(2026, 9, 12))
+
+    assert exc_info.value.status_code == 422
 
 
 @patch("orbit.api._command_center_mongo_handler")

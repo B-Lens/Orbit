@@ -1,7 +1,7 @@
 import os
 import logging
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +25,7 @@ from orbit.core.execution import ExecutionSettings
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.notification_feed import list_notifications
+from orbit.core.testnet_reporter import build_report_body, build_weekly_report_body
 
 logger = logging.getLogger("Orbit")
 
@@ -187,6 +188,14 @@ class CommandCenterResponse(BaseModel):
     older_exception_count: int = 0
 
 
+class ReportResponse(BaseModel):
+    report_type: str
+    period_start: str
+    period_end: str
+    timezone: str
+    body: str
+
+
 def _expected_runtime_ids() -> List[str]:
     configured = os.environ.get(
         "ORBIT_EXPECTED_RUNTIME_IDS", os.environ.get("ORBIT_RUNTIME_ID", "default")
@@ -300,6 +309,20 @@ def _closed_trades_between(
         return []
 
 
+def _report_records(
+    start: datetime, end: datetime
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Read the same immutable Testnet ledgers used by GitHub reports."""
+    handler = _command_center_mongo_handler()
+    decisions = handler.get_trade_decisions(
+        start, end, "testnet", include_event_window=True
+    )
+    income = handler.get_income_records(
+        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
+    )
+    return decisions, income
+
+
 def _recent_sentiment_history() -> List[Dict[str, Any]]:
     try:
         records = _command_center_mongo_handler().get_recent_sentiment_history(24)
@@ -404,6 +427,50 @@ def get_notifications(limit: int = 100) -> NotificationFeedResponse:
             status_code=503,
             detail="Service Unavailable: notification feed unavailable",
         ) from exc
+
+
+@app.get("/api/reports/daily", response_model=ReportResponse)
+def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
+    """Return the GitHub daily report for one completed UTC calendar day."""
+    today = datetime.now(timezone.utc).date()
+    selected_date = report_date or (today - timedelta(days=1))
+    if selected_date >= today:
+        raise HTTPException(status_code=422, detail="report_date must be completed")
+    start = datetime.combine(selected_date, time.min, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    decisions, income = _report_records(start, end)
+    active_trades = _command_center_mongo_handler().get_active_trade_decisions(
+        end, "testnet"
+    )
+    return ReportResponse(
+        report_type="daily",
+        period_start=start.isoformat(),
+        period_end=end.isoformat(),
+        timezone="UTC",
+        body=build_report_body(selected_date, decisions, income, active_trades),
+    )
+
+
+@app.get("/api/reports/weekly", response_model=ReportResponse)
+def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
+    """Return the GitHub weekly report for a Saturday-through-Friday UTC week."""
+    today = datetime.now(timezone.utc).date()
+    latest_saturday = today - timedelta(days=(today.weekday() - 5) % 7)
+    selected_start = week_start or (latest_saturday - timedelta(days=7))
+    if selected_start.weekday() != 5:
+        raise HTTPException(status_code=422, detail="week_start must be a Saturday")
+    start = datetime.combine(selected_start, time.min, tzinfo=timezone.utc)
+    end = start + timedelta(days=7)
+    if end.date() > today:
+        raise HTTPException(status_code=422, detail="week_start must identify a completed week")
+    decisions, income = _report_records(start, end)
+    return ReportResponse(
+        report_type="weekly",
+        period_start=start.isoformat(),
+        period_end=end.isoformat(),
+        timezone="UTC",
+        body=build_weekly_report_body(selected_start, decisions, income),
+    )
 
 
 @app.get("/api/command-center", response_model=CommandCenterResponse)
