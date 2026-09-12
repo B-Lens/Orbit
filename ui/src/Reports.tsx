@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, FileText, Moon, RefreshCw, Sun } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -21,9 +21,10 @@ export function ReportPage({ kind }: { kind: ReportKind }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const requestGeneration = useRef(0);
   const step = kind === "daily" ? 1 : 7;
 
-  const load = useCallback(async () => { setLoading(true); setReport(null); try { const query = kind === "daily" ? `report_date=${selected}` : `week_start=${selected}`; const response = await fetch(`/api/reports/${kind}?${query}`); if (!response.ok) throw new Error(`Report request failed (${response.status}).`); setReport(await response.json() as Report); setError(""); } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Report is unavailable."); } finally { setLoading(false); } }, [kind, selected]);
+  const load = useCallback(async () => { const generation = ++requestGeneration.current; setLoading(true); setReport(null); try { const query = kind === "daily" ? `report_date=${selected}` : `week_start=${selected}`; const response = await fetch(`/api/reports/${kind}?${query}`); if (!response.ok) throw new Error(`Report request failed (${response.status}).`); const nextReport = await response.json() as Report; if (generation !== requestGeneration.current) return; setReport(nextReport); setError(""); } catch (requestError) { if (generation !== requestGeneration.current) return; setError(requestError instanceof Error ? requestError.message : "Report is unavailable."); } finally { if (generation === requestGeneration.current) setLoading(false); } }, [kind, selected]);
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("orbit-theme", theme); }, [theme]);
   useEffect(() => { void load(); }, [load]);
 
