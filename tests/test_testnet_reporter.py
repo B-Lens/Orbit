@@ -8,6 +8,7 @@ from orbit.core.testnet_reporter import (
     GitHubProjectClient,
     SUMMARY_TRUNCATION_NOTICE,
     TestnetDailyReporter as DailyReporter,
+    _format_value,
     _split_report,
     build_report_body,
     build_summary_prompt,
@@ -16,6 +17,11 @@ from orbit.core.testnet_reporter import (
 
 
 class TestReportRendering(unittest.TestCase):
+    def test_naive_mongodb_timestamp_is_rendered_as_utc(self):
+        timestamp = datetime(2026, 9, 11, 0, 15)
+
+        self.assertEqual(_format_value(timestamp), "2026-09-11T00:15:00+00:00")
+
     def test_summary_prompt_requests_a_safe_explanation_of_the_report(self):
         prompt = build_summary_prompt("# daily report\n- Orders filled: **2**")
 
@@ -525,6 +531,39 @@ class TestDailyReporter(unittest.TestCase):
 
 
 class TestGitHubProjectClient(unittest.TestCase):
+    def test_published_report_reassembles_overflow_comments_in_part_order(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "B-Lens/Orbit"
+        client._call = MagicMock(
+            return_value={
+                "items": [
+                    {
+                        "title": "daily",
+                        "body": "part one",
+                        "comments_url": "https://api.github.test/issues/7/comments",
+                    }
+                ]
+            }
+        )
+        client._issue_comments = MagicMock(
+            return_value=[
+                {"body": "<!-- orbit-testnet-report-part:3 -->\npart three"},
+                {"body": "discussion"},
+                {"body": "<!-- orbit-testnet-report-part:2 -->\npart two"},
+            ]
+        )
+
+        assert client.published_report("daily") == "part one\npart two\npart three"
+
+    def test_published_report_requires_an_exact_title_match(self):
+        client = GitHubProjectClient.__new__(GitHubProjectClient)
+        client.repository = "B-Lens/Orbit"
+        client._call = MagicMock(
+            return_value={"items": [{"title": "daily report", "body": "wrong"}]}
+        )
+
+        assert client.published_report("daily") is None
+
     def test_summary_lookup_finds_marker_after_first_comment_page(self):
         client = GitHubProjectClient.__new__(GitHubProjectClient)
         client.repository = "B-Lens/Orbit"

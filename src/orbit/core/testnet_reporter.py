@@ -79,6 +79,8 @@ def _format_value(value: Any) -> str:
     if value is None:
         return "—"
     if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).isoformat(timespec="seconds")
     return str(value).replace("|", "\\|").replace("\n", " ")
 
@@ -512,10 +514,11 @@ class GitHubProjectClient:
         self.project_id = project_id
         self._request = request
         self._headers = {
-            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+        if token:
+            self._headers["Authorization"] = f"Bearer {token}"
 
     def _call(self, method: str, url: str, **kwargs: Any) -> Any:
         response = self._request(
@@ -556,6 +559,42 @@ class GitHubProjectClient:
             if len(current_page) < 100:
                 return comments
             page += 1
+
+    def published_report(self, title: str) -> Optional[str]:
+        """Return an exact report issue, including marker-owned overflow parts."""
+        result = self._call(
+            "GET",
+            "https://api.github.com/search/issues",
+            params={
+                "q": (
+                    f'repo:{self.repository} is:issue in:title "{title}" '
+                    f"label:{REPORT_LABEL}"
+                ),
+                "per_page": 10,
+            },
+        )
+        issue = next(
+            (item for item in result.get("items", []) if item.get("title") == title),
+            None,
+        )
+        if issue is None:
+            return None
+        comments = self._issue_comments(str(issue["comments_url"]))
+        overflow_parts: list[tuple[int, str]] = []
+        for comment in comments:
+            body = str(comment.get("body", ""))
+            marker = body.splitlines()[0] if body else ""
+            prefix = "<!-- orbit-testnet-report-part:"
+            if not marker.startswith(prefix) or not marker.endswith(" -->"):
+                continue
+            try:
+                part_number = int(marker[len(prefix) : -len(" -->")])
+            except ValueError:
+                continue
+            overflow_parts.append((part_number, body.removeprefix(f"{marker}\n")))
+        parts = [str(issue.get("body") or "")]
+        parts.extend(body for _, body in sorted(overflow_parts))
+        return "\n".join(parts)
 
     def publish(
         self,

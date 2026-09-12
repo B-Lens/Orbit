@@ -25,6 +25,7 @@ from orbit.core.execution import ExecutionSettings
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.notification_feed import list_notifications
+from orbit.core.testnet_reporter import GitHubProjectClient, WEEKLY_TITLE_PREFIX
 
 logger = logging.getLogger("Orbit")
 
@@ -193,6 +194,24 @@ class ReportResponse(BaseModel):
     period_end: str
     timezone: str
     body: str
+
+
+@lru_cache(maxsize=1)
+def _github_report_client() -> GitHubProjectClient:
+    return GitHubProjectClient(
+        os.getenv("ORBIT_GITHUB_TOKEN", "").strip(),
+        os.getenv("ORBIT_GITHUB_REPOSITORY", "B-Lens/Orbit").strip(),
+        "",
+    )
+
+
+def _github_report_body(title: str) -> Optional[str]:
+    """Read reports that predate MongoDB finalized-snapshot persistence."""
+    try:
+        return _github_report_client().published_report(title)
+    except Exception as exc:
+        logger.warning("Unable to read historical GitHub report %s: %s", title, exc)
+        return None
 
 
 def _expected_runtime_ids() -> List[str]:
@@ -424,7 +443,17 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
     start = datetime.combine(selected_date, time.min, tzinfo=timezone.utc)
     report = _command_center_mongo_handler().get_finalized_report("daily", start)
     if report is None:
-        raise HTTPException(status_code=404, detail="Finalized daily report not found")
+        body = _github_report_body(
+            f"Orbit Testnet daily report: {selected_date.isoformat()}"
+        )
+        if body is None:
+            raise HTTPException(status_code=404, detail="Daily report not found")
+        report = {
+            "period_start": start,
+            "period_end": start + timedelta(days=1),
+            "timezone": "UTC",
+            "body": body,
+        }
     return ReportResponse(
         report_type="daily",
         period_start=_iso_value(report.get("period_start")) or start.isoformat(),
@@ -448,7 +477,15 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
         raise HTTPException(status_code=422, detail="week_start must identify a completed week")
     report = _command_center_mongo_handler().get_finalized_report("weekly", start)
     if report is None:
-        raise HTTPException(status_code=404, detail="Finalized weekly report not found")
+        body = _github_report_body(f"{WEEKLY_TITLE_PREFIX}{selected_start.isoformat()}")
+        if body is None:
+            raise HTTPException(status_code=404, detail="Weekly report not found")
+        report = {
+            "period_start": start,
+            "period_end": end,
+            "timezone": "UTC",
+            "body": body,
+        }
     return ReportResponse(
         report_type="weekly",
         period_start=_iso_value(report.get("period_start")) or start.isoformat(),

@@ -169,9 +169,11 @@ def test_weekly_report_uses_saturday_to_saturday_midnight_utc_window(
     assert response.body == "finalized weekly body"
 
 
+@patch("orbit.api._github_report_body", return_value=None)
 @patch("orbit.api._command_center_mongo_handler")
 def test_daily_report_fails_closed_without_finalized_snapshot(
     mongo_handler: MagicMock,
+    github_report: MagicMock,
 ) -> None:
     mongo_handler.return_value.get_finalized_report.return_value = None
 
@@ -179,6 +181,39 @@ def test_daily_report_fails_closed_without_finalized_snapshot(
         get_daily_report(date(2026, 9, 11))
 
     assert exc_info.value.status_code == 404
+    github_report.assert_called_once_with("Orbit Testnet daily report: 2026-09-11")
+
+
+@patch("orbit.api._github_report_body", return_value="historical daily body")
+@patch("orbit.api._command_center_mongo_handler")
+def test_daily_report_falls_back_to_historical_github_issue(
+    mongo_handler: MagicMock,
+    github_report: MagicMock,
+) -> None:
+    mongo_handler.return_value.get_finalized_report.return_value = None
+
+    response = get_daily_report(date(2026, 9, 10))
+
+    assert response.period_start == "2026-09-10T00:00:00+00:00"
+    assert response.period_end == "2026-09-11T00:00:00+00:00"
+    assert response.body == "historical daily body"
+    github_report.assert_called_once_with("Orbit Testnet daily report: 2026-09-10")
+
+
+@patch("orbit.api._github_report_body", return_value="historical weekly body")
+@patch("orbit.api._command_center_mongo_handler")
+def test_weekly_report_falls_back_to_historical_github_issue(
+    mongo_handler: MagicMock,
+    github_report: MagicMock,
+) -> None:
+    mongo_handler.return_value.get_finalized_report.return_value = None
+
+    response = get_weekly_report(date(2026, 9, 5))
+
+    assert response.period_start == "2026-09-05T00:00:00+00:00"
+    assert response.period_end == "2026-09-12T00:00:00+00:00"
+    assert response.body == "historical weekly body"
+    github_report.assert_called_once_with("Orbit Testnet weekly report: 2026-09-05")
 
 
 def test_weekly_report_rejects_non_saturday_start() -> None:
