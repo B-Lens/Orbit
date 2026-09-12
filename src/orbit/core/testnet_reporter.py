@@ -79,6 +79,8 @@ def _format_value(value: Any) -> str:
     if value is None:
         return "—"
     if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).isoformat(timespec="seconds")
     return str(value).replace("|", "\\|").replace("\n", " ")
 
@@ -113,6 +115,8 @@ def build_report_body(
     income_records: Iterable[Mapping[str, Any]],
     active_trades: Iterable[Mapping[str, Any]] = (),
     cutoff_equity: Optional[float] = None,
+    *,
+    include_automation_task: bool = True,
 ) -> str:
     """Render readable daily evidence with closed and active P&L separated."""
     all_decisions = list(decisions)
@@ -363,17 +367,18 @@ def build_report_body(
     if not execution_rows:
         lines.append("| — | — | — | — | No execution events recorded |")
     lines.extend(["", "</details>"])
-    lines.extend(
-        [
-            "",
-            "## Codex task",
-            "",
-            "Analyze repeated rejections and errors against the code and tests. Fix only "
-            "a demonstrated software defect. Do not relax risk limits, bypass sentiment, "
-            "change an asset to live mode, or expose credentials. If behavior is intentional, "
-            "make no code change and explain that conclusion in the workflow artifact.",
-        ]
-    )
+    if include_automation_task:
+        lines.extend(
+            [
+                "",
+                "## Codex task",
+                "",
+                "Analyze repeated rejections and errors against the code and tests. Fix only "
+                "a demonstrated software defect. Do not relax risk limits, bypass sentiment, "
+                "change an asset to live mode, or expose credentials. If behavior is intentional, "
+                "make no code change and explain that conclusion in the workflow artifact.",
+            ]
+        )
     return "\n".join(lines)
 
 

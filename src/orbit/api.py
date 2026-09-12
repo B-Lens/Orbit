@@ -25,6 +25,7 @@ from orbit.core.execution import ExecutionSettings
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.notification_feed import list_notifications
+from orbit.core.testnet_reporter import build_report_body, build_weekly_report_body
 
 logger = logging.getLogger("Orbit")
 
@@ -416,27 +417,39 @@ def get_notifications(limit: int = 100) -> NotificationFeedResponse:
 
 @app.get("/api/reports/daily", response_model=ReportResponse)
 def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
-    """Return the GitHub daily report for one completed UTC calendar day."""
+    """Build the dashboard view for one completed UTC calendar day."""
     today = datetime.now(timezone.utc).date()
     selected_date = report_date or (today - timedelta(days=1))
     if selected_date >= today:
         raise HTTPException(status_code=422, detail="report_date must be completed")
     start = datetime.combine(selected_date, time.min, tzinfo=timezone.utc)
-    report = _command_center_mongo_handler().get_finalized_report("daily", start)
-    if report is None:
-        raise HTTPException(status_code=404, detail="Finalized daily report not found")
+    end = start + timedelta(days=1)
+    mongo = _command_center_mongo_handler()
+    decisions = mongo.get_trade_decisions(
+        start, end, "testnet", include_event_window=True
+    )
+    income = mongo.get_income_records(
+        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
+    )
+    active_trades = mongo.get_active_trade_decisions(end, "testnet")
     return ReportResponse(
         report_type="daily",
-        period_start=_iso_value(report.get("period_start")) or start.isoformat(),
-        period_end=_iso_value(report.get("period_end")) or "",
-        timezone=str(report.get("timezone") or "UTC"),
-        body=str(report.get("body") or ""),
+        period_start=start.isoformat(),
+        period_end=end.isoformat(),
+        timezone="UTC",
+        body=build_report_body(
+            selected_date,
+            decisions,
+            income,
+            active_trades,
+            include_automation_task=False,
+        ),
     )
 
 
 @app.get("/api/reports/weekly", response_model=ReportResponse)
 def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
-    """Return the GitHub weekly report for a Saturday-through-Friday UTC week."""
+    """Build the dashboard view for a Saturday-through-Friday UTC week."""
     today = datetime.now(timezone.utc).date()
     latest_saturday = today - timedelta(days=(today.weekday() - 5) % 7)
     selected_start = week_start or (latest_saturday - timedelta(days=7))
@@ -446,15 +459,19 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
     end = start + timedelta(days=7)
     if end.date() > today:
         raise HTTPException(status_code=422, detail="week_start must identify a completed week")
-    report = _command_center_mongo_handler().get_finalized_report("weekly", start)
-    if report is None:
-        raise HTTPException(status_code=404, detail="Finalized weekly report not found")
+    mongo = _command_center_mongo_handler()
+    decisions = mongo.get_trade_decisions(
+        start, end, "testnet", include_event_window=True
+    )
+    income = mongo.get_income_records(
+        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
+    )
     return ReportResponse(
         report_type="weekly",
-        period_start=_iso_value(report.get("period_start")) or start.isoformat(),
-        period_end=_iso_value(report.get("period_end")) or end.isoformat(),
-        timezone=str(report.get("timezone") or "UTC"),
-        body=str(report.get("body") or ""),
+        period_start=start.isoformat(),
+        period_end=end.isoformat(),
+        timezone="UTC",
+        body=build_weekly_report_body(selected_start, decisions, income),
     )
 
 
