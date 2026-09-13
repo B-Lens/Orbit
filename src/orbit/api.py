@@ -1,7 +1,7 @@
 import os
 import logging
 from contextlib import closing
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +26,10 @@ from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.notification_feed import list_notifications
 from orbit.core.testnet_reporter import build_report_body, build_weekly_report_body
+from orbit.core.reporting import IST, reconstruct_equity, report_metrics, report_window
+from orbit.core.performance import PerformanceTracker
+from orbit.core.authentication_manager import _build_futures_client
+from orbit.core.execution import FUTURES_TESTNET_URL
 
 logger = logging.getLogger("Orbit")
 
@@ -194,6 +198,25 @@ class ReportResponse(BaseModel):
     period_end: str
     timezone: str
     body: str
+    metrics: Dict[str, Any]
+
+
+def _report_accounting(start: datetime, end: datetime) -> tuple[List[Dict[str, Any]], float]:
+    """Read complete historical Testnet accounting without writing or publishing."""
+    key = os.getenv("BINANCE_TESTNET_API_KEY")
+    secret = os.getenv("BINANCE_TESTNET_SECRET_KEY")
+    if not key or not secret:
+        raise HTTPException(status_code=503, detail="Testnet report accounting credentials are unavailable")
+    client = _build_futures_client(
+        key, secret, os.getenv("BINANCE_FUTURES_TESTNET_URL", FUTURES_TESTNET_URL)
+    )
+    tracker = PerformanceTracker(client, execution_mode="testnet")
+    try:
+        tracker.sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
+        income = list(tracker.last_records)
+        return income, reconstruct_equity(tracker, end)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Complete Testnet report accounting is unavailable") from exc
 
 
 def _expected_runtime_ids() -> List[str]:
@@ -417,31 +440,30 @@ def get_notifications(limit: int = 100) -> NotificationFeedResponse:
 
 @app.get("/api/reports/daily", response_model=ReportResponse)
 def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
-    """Build the dashboard view for one completed UTC calendar day."""
-    today = datetime.now(timezone.utc).date()
+    """Build the dashboard view for one completed IST calendar day."""
+    today = datetime.now(IST).date()
     selected_date = report_date or (today - timedelta(days=1))
     if selected_date >= today:
         raise HTTPException(status_code=422, detail="report_date must be completed")
-    start = datetime.combine(selected_date, time.min, tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
+    start, end = report_window(selected_date)
     mongo = _command_center_mongo_handler()
     decisions = mongo.get_trade_decisions(
         start, end, "testnet", include_event_window=True
     )
-    income = mongo.get_income_records(
-        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
-    )
+    income, equity = _report_accounting(start, end)
     active_trades = mongo.get_active_trade_decisions(end, "testnet")
     return ReportResponse(
         report_type="daily",
         period_start=start.isoformat(),
         period_end=end.isoformat(),
-        timezone="UTC",
+        timezone="IST",
+        metrics=report_metrics(income, equity),
         body=build_report_body(
             selected_date,
             decisions,
             income,
             active_trades,
+            equity,
             include_automation_task=False,
         ),
     )
@@ -449,29 +471,27 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
 
 @app.get("/api/reports/weekly", response_model=ReportResponse)
 def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
-    """Build the dashboard view for a Saturday-through-Friday UTC week."""
-    today = datetime.now(timezone.utc).date()
+    """Build the dashboard view for a Saturday-through-Friday IST week."""
+    today = datetime.now(IST).date()
     latest_saturday = today - timedelta(days=(today.weekday() - 5) % 7)
     selected_start = week_start or (latest_saturday - timedelta(days=7))
     if selected_start.weekday() != 5:
         raise HTTPException(status_code=422, detail="week_start must be a Saturday")
-    start = datetime.combine(selected_start, time.min, tzinfo=timezone.utc)
-    end = start + timedelta(days=7)
+    start, end = report_window(selected_start, 7)
     if end.date() > today:
         raise HTTPException(status_code=422, detail="week_start must identify a completed week")
     mongo = _command_center_mongo_handler()
     decisions = mongo.get_trade_decisions(
         start, end, "testnet", include_event_window=True
     )
-    income = mongo.get_income_records(
-        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
-    )
+    income, equity = _report_accounting(start, end)
     return ReportResponse(
         report_type="weekly",
         period_start=start.isoformat(),
         period_end=end.isoformat(),
-        timezone="UTC",
-        body=build_weekly_report_body(selected_start, decisions, income),
+        timezone="IST",
+        metrics=report_metrics(income, equity),
+        body=build_weekly_report_body(selected_start, decisions, income, equity),
     )
 
 

@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from orbit.core.performance import PerformanceTracker
+from orbit.core.reporting import IST
 from orbit.core.testnet_reporter import (
     GITHUB_COMMENT_BODY_LIMIT,
     GitHubProjectClient,
@@ -17,10 +18,10 @@ from orbit.core.testnet_reporter import (
 
 
 class TestReportRendering(unittest.TestCase):
-    def test_naive_mongodb_timestamp_is_rendered_as_utc(self):
+    def test_naive_mongodb_timestamp_is_converted_from_utc_to_ist(self):
         timestamp = datetime(2026, 9, 11, 0, 15)
 
-        self.assertEqual(_format_value(timestamp), "2026-09-11T00:15:00+00:00")
+        self.assertEqual(_format_value(timestamp), "2026-09-11T05:45:00+05:30")
 
     def test_summary_prompt_requests_a_safe_explanation_of_the_report(self):
         prompt = build_summary_prompt("# daily report\n- Orders filled: **2**")
@@ -77,12 +78,12 @@ class TestReportRendering(unittest.TestCase):
             },
             {
                 "decision_id": "prior-day-order",
-                "timestamp": datetime(2026, 8, 20, 23),
+                "timestamp": datetime(2026, 8, 20, 17),
                 "outcome": "accepted",
                 "execution_events": [
                     {
                         "status": "order_submitted",
-                        "timestamp": datetime(2026, 8, 20, 23),
+                        "timestamp": datetime(2026, 8, 20, 17),
                     },
                     {"status": "order_filled", "timestamp": datetime(2026, 8, 21, 5)},
                 ],
@@ -98,6 +99,12 @@ class TestReportRendering(unittest.TestCase):
 
         self.assertIn("accepted-1", body)
         self.assertIn("blocked-1", body)
+        self.assertIn(
+            "Reporting window: **2026-08-21T00:00:00+05:30 ≤ event time < "
+            "2026-08-22T00:00:00+05:30**",
+            body,
+        )
+        self.assertIn("(IST, end exclusive)", body)
         self.assertIn("minimum_notional", body)
         self.assertIn("sentiment_conflict", body)
         self.assertIn("Accepted signals: **1**", body)
@@ -113,7 +120,8 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("Funding: **-0.50000000 USDT**", body)
         self.assertIn("Net account income: **8.50000000 USDT**", body)
         self.assertIn("## Closed-trade performance by asset", body)
-        self.assertIn("## Open trade lifecycles", body)
+        self.assertIn("## Unclosed decision-ledger lifecycles", body)
+        self.assertIn("They are **not open positions**", body)
         self.assertNotIn("quiet-1", body)
         self.assertIn("| prior-day-order | — | order_filled |", body)
 
@@ -150,7 +158,7 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("| BTCUSDT | 1 | 5.00000000 |", body)
         self.assertNotIn("ETHUSDT | 1 |", body)
         self.assertIn(
-            "| active-eth | ETHUSDT | BUY | 2026-08-21T01:00:00+00:00 | 100 | 0.5 | — | — |",
+            "| active-eth | ETHUSDT | BUY | 2026-08-21T06:30:00+05:30 | 100 | 0.5 | — | — |",
             body,
         )
         self.assertIn("Closed-trade net P&L: **5.00000000 USDT**", body)
@@ -165,7 +173,7 @@ class TestReportRendering(unittest.TestCase):
                     "status": "order_filled",
                     "average_price": "100",
                     "executed_quantity": "0.5",
-                    "timestamp": datetime(2026, 8, 21, 20, tzinfo=timezone.utc),
+                    "timestamp": datetime(2026, 8, 21, 18, tzinfo=timezone.utc),
                 },
                 {
                     "status": "order_filled",
@@ -178,8 +186,8 @@ class TestReportRendering(unittest.TestCase):
 
         body = build_report_body(date(2026, 8, 21), [], [], active)
 
-        self.assertIn("| 2026-08-21T20:00:00+00:00 | 100 | 0.5 |", body)
-        self.assertNotIn("| 2026-08-22T02:00:00+00:00 | 110 | 0.25 |", body)
+        self.assertIn("| 2026-08-21T23:30:00+05:30 | 100 | 0.5 |", body)
+        self.assertNotIn("| 2026-08-22T07:30:00+05:30 | 110 | 0.25 |", body)
 
     def test_reports_equity_value_return_and_risk_rejection_inputs(self):
         decisions = [{
@@ -205,10 +213,10 @@ class TestReportRendering(unittest.TestCase):
             date(2026, 8, 21), decisions, income, cutoff_equity=1010
         )
 
-        self.assertIn("Equity value: **1010.00 USDT**", body)
-        self.assertIn("Equity P&L: **1.00%**", body)
+        self.assertIn("Equity value: **1010.00000000 USDT**", body)
+        self.assertIn("Equity change %: **1.00000000 %**", body)
         self.assertIn(
-            "| 2026-08-21T02:00:00+00:00 | risk-1 | ETHUSDT | SELL | "
+            "| 2026-08-21T07:30:00+05:30 | risk-1 | ETHUSDT | SELL | "
             "reward_risk_below_minimum | 100 | 102 | 97 | 1.499 | 1.5 |",
             body,
         )
@@ -374,8 +382,8 @@ class TestDailyReporter(unittest.TestCase):
 
         self.assertEqual(url, "https://github.test/report/1")
         start, end, mode = mongo.get_trade_decisions.call_args.args
-        self.assertEqual(start, datetime(2026, 8, 21, tzinfo=timezone.utc))
-        self.assertEqual(end, datetime(2026, 8, 22, tzinfo=timezone.utc))
+        self.assertEqual(start, datetime(2026, 8, 21, tzinfo=IST))
+        self.assertEqual(end, datetime(2026, 8, 22, tzinfo=IST))
         self.assertEqual(mode, "testnet")
         self.assertTrue(
             mongo.get_trade_decisions.call_args.kwargs["include_event_window"]
@@ -403,13 +411,13 @@ class TestDailyReporter(unittest.TestCase):
         )
         summary_prompt = summary_generator.call_args.args[0]
         self.assertIn("Orbit Testnet daily report", summary_prompt)
-        self.assertIn("Equity value: **975.00 USDT**", summary_prompt)
+        self.assertIn("Equity value: **975.00000000 USDT**", summary_prompt)
         finalized = mongo.store_finalized_report.call_args.args[0]
         self.assertEqual(finalized["report_type"], "daily")
         self.assertEqual(finalized["period_start"], start)
         self.assertEqual(finalized["period_end"], end)
         self.assertEqual(finalized["github_url"], url)
-        self.assertIn("Equity value: **975.00 USDT**", finalized["body"])
+        self.assertIn("Equity value: **975.00000000 USDT**", finalized["body"])
 
     def test_equity_snapshot_retries_when_income_crosses_account_request(self):
         futures = MagicMock()
@@ -483,7 +491,7 @@ class TestDailyReporter(unittest.TestCase):
             2000,
         )
 
-    def test_weekly_report_reads_exact_completed_utc_week(self):
+    def test_weekly_report_reads_exact_completed_ist_week(self):
         mongo = MagicMock()
         mongo.get_trade_decisions.return_value = []
         mongo.get_income_records.return_value = []
@@ -496,8 +504,8 @@ class TestDailyReporter(unittest.TestCase):
 
         self.assertEqual(url, "https://github.test/report/week")
         start, end, mode = mongo.get_trade_decisions.call_args.args
-        self.assertEqual(start, datetime(2026, 8, 17, tzinfo=timezone.utc))
-        self.assertEqual(end, datetime(2026, 8, 24, tzinfo=timezone.utc))
+        self.assertEqual(start, datetime(2026, 8, 17, tzinfo=IST))
+        self.assertEqual(end, datetime(2026, 8, 24, tzinfo=IST))
         self.assertEqual(mode, "testnet")
         self.assertTrue(
             mongo.get_trade_decisions.call_args.kwargs["include_event_window"]

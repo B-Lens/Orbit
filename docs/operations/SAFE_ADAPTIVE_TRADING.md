@@ -62,7 +62,7 @@ copies duplicated decision data and did not represent executed positions.
 ## GitHub Testnet reporting and analysis
 
 When `ORBIT_GITHUB_REPORTING_ENABLED=true`, `TestnetDailyReporterThread` publishes
-one idempotent daily Testnet report for the completed previous UTC day.
+one idempotent daily Testnet report for the completed previous IST day.
 The issue separates strategy rejections from risk/order rejections, shows closed-
 trade performance by asset, and keeps trades active at each historical cutoff in
 a separate ledger-lifecycle section that explicitly distinguishes them from
@@ -111,6 +111,34 @@ net P&L = realized P&L + commission + funding fees + other income
 return % = net P&L / opening equity * 100
 ```
 
+Daily reports distinguish closed-lifecycle net P&L from period account income.
+The unclosed lifecycle table is historical ledger evidence, not an exchange-position
+snapshot; use the command center's exchange-backed Active positions table for
+current position state.
+
+GitHub reports, `/daily`, `/weekly`, and the Closed trades calendar use IST
+(Asia/Kolkata, UTC+05:30), regardless of the browser's timezone. Daily periods
+run midnight to midnight; weeks run Saturday 00:00 to the following Saturday
+00:00 (end exclusive). Weekly reports display both dates and the exact interval.
+The publisher switches days at IST midnight. Existing published UTC reports
+retain their old evidence until explicitly regenerated.
+
+Daily and weekly pages prominently show Net P&L, closing wallet equity, equity
+change %, and maximum drawdown. Details include opening equity, realized P&L,
+commissions, funding, other income, and drawdown %. Equity excludes unrealized
+P&L. Drawdown measures the largest peak-to-trough wallet-income decline within
+the selected period, grouping income with identical exchange timestamps;
+percentage drawdown uses the corresponding wallet peak. Transfers affect the
+wallet change and are disclosed as other income.
+
+Dashboard report accounting reads the Testnet exchange income and account APIs
+and reconstructs the historical cutoff balance using the same routine as the
+GitHub publisher. The API service needs `BINANCE_TESTNET_API_KEY` and
+`BINANCE_TESTNET_SECRET_KEY`; it does not publish reports or write accounting
+rows. If complete accounting cannot be obtained, the page reports unavailable
+instead of showing missing equity as zero. Closed-trade Net P&L is the sum of
+the displayed lifecycle records; the panel identifies the 250-row display cap.
+
 Binance represents commissions and paid funding as negative income, so they are
 added rather than subtracted a second time. `PerformanceReporterThread` syncs and
 reports the last 24 hours when Orbit starts and every 24 hours thereafter.
@@ -121,7 +149,7 @@ retains `sentiment_history` because its rolling 24-hour score is an input to the
 current signal filter. Removing any of these collections would change trading,
 risk, or reporting behavior rather than merely removing archival data.
 
-On Saturday UTC, the Testnet reporter also publishes an idempotent report for the
+On Saturday IST, the Testnet reporter also publishes an idempotent report for the
 completed Saturday-through-Friday week. It distinguishes accepted signals,
 submitted orders, filled orders, order-stage rejections, and realized-PnL
 events. The weekly scorecard includes fee-aware net P&L, realized-PnL profit
