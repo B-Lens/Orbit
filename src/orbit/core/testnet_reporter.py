@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 import requests
 
 from orbit.core.performance import PerformanceTracker
+from orbit.core.reporting import IST, performance_lines, reconstruct_equity, report_metrics, report_window
 
 logger = logging.getLogger("Orbit")
 
@@ -63,11 +64,7 @@ def _income_risk_metrics(
     gross_loss = abs(sum(value for value in realized if value < 0))
     profit_factor = gross_profit / gross_loss if gross_loss else None
 
-    equity = peak = max_drawdown = 0.0
-    for row in records:
-        equity += float(row.get("income", 0) or 0)
-        peak = max(peak, equity)
-        max_drawdown = max(max_drawdown, peak - equity)
+    max_drawdown = report_metrics(records, None)["max_drawdown"]
     return profit_factor, max_drawdown, len(realized)
 
 
@@ -81,7 +78,7 @@ def _format_value(value: Any) -> str:
     if isinstance(value, datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).isoformat(timespec="seconds")
+        return value.astimezone(IST).isoformat(timespec="seconds")
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
@@ -125,18 +122,7 @@ def build_report_body(
     # daily exchange ledger is reported separately because rows such as funding
     # and entry commission cannot safely be attributed to a closed lifecycle.
     account_performance = PerformanceTracker.summarize(income)
-    opening_equity = (
-        cutoff_equity - account_performance.net_pnl
-        if cutoff_equity is not None
-        else None
-    )
-    equity_return = (
-        account_performance.net_pnl / opening_equity * 100
-        if opening_equity is not None and opening_equity > 0
-        else None
-    )
-    start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
+    start, end = report_window(report_date)
     window_decisions = [
         row for row in all_decisions if _in_window(row.get("timestamp"), start, end)
     ]
@@ -172,7 +158,6 @@ def build_report_body(
                 float(event.get("pnl", 0) or 0)
             )
     closed_pnl = sum(sum(values) for values in closed_by_symbol.values())
-    lifecycle_exchange_difference = closed_pnl - account_performance.realized_pnl
 
     lines = [
         f"# Orbit Testnet daily report — {report_date.isoformat()}",
@@ -181,10 +166,9 @@ def build_report_body(
         "Policy rejections are evidence, not permission to weaken safety limits.",
         "",
         f"> Reporting window: **{start.isoformat()} ≤ event time < "
-        f"{end.isoformat()}**. The dashboard's Closed trades calendar uses your "
-        "browser's local midnight instead, so a late-UTC close can appear on the "
-        "following local date.",
+        f"{end.isoformat()}** (IST, end exclusive).",
         "",
+        *performance_lines(report_metrics(income, cutoff_equity)),
         "## Summary",
         "",
         f"- Trade attempts: **{len(trade_attempts)}**",
@@ -196,14 +180,14 @@ def build_report_body(
         f"- Errors: **{counts['error']}**",
         f"- No-signal evaluations (counted, not expanded): **{counts['no_signal']}**",
         f"- Closed trades: **{events['trade_closed']}**",
-        f"- Closed-lifecycle estimated P&L: **{closed_pnl:.8f} USDT**",
+        f"- Closed-trade net P&L: **{closed_pnl:.8f} USDT**",
         "",
         "## Closed-trade performance by asset",
         "",
-        "_Calculated from decision-lifecycle entry and exit records. This is an "
-        "operational estimate, not the exchange accounting total below._",
+        "_Net P&L attributed to lifecycles closed in this period. The account "
+        "income above also includes activity from other lifecycles._",
         "",
-        "| Asset | Closed trades | Estimated P&L |",
+        "| Asset | Closed trades | Net P&L |",
         "| :--- | ---: | ---: |",
     ]
     for symbol, pnl_values in sorted(closed_by_symbol.items()):
@@ -216,7 +200,7 @@ def build_report_body(
             "",
             "## Daily exchange-ledger activity",
             "",
-            "_Whole-account income recorded during this UTC day. These values include "
+            "_Whole-account income recorded during this IST day. These values include "
             "active-position activity and are not attributed to closed trades._",
             "_Equity value is wallet equity reconstructed at the report cutoff by "
             "reconciling all subsequent exchange income against a current wallet "
@@ -224,14 +208,10 @@ def build_report_body(
             "equity._",
             "",
             f"- Realized P&L: **{account_performance.realized_pnl:.8f} USDT**",
-            f"- Lifecycle estimate minus exchange realized P&L: "
-            f"**{lifecycle_exchange_difference:.8f} USDT**",
             f"- Commission: **{account_performance.commission:.8f} USDT**",
             f"- Funding: **{account_performance.funding:.8f} USDT**",
             f"- Other income: **{account_performance.other_income:.8f} USDT**",
             f"- Net account income: **{account_performance.net_pnl:.8f} USDT**",
-            f"- Equity value: **{_format_metric(cutoff_equity)} USDT**",
-            f"- Equity P&L: **{_format_metric(equity_return)}%**",
         ]
     )
 
@@ -242,7 +222,7 @@ def build_report_body(
         "with the dashboard's exchange-backed Active positions table. Multiple rows "
         "for one asset may be netted, offset, or already absent at the exchange. No "
         "current position state or unrealized P&L is inferred._", "",
-        "| Decision | Asset | Side | Opened (UTC) | Entry | Quantity | Stop | Target |",
+        "| Decision | Asset | Side | Opened (IST) | Entry | Quantity | Stop | Target |",
         "| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: |",
     ])
     for position in sorted(active, key=lambda row: str(row.get("symbol") or "")):
@@ -295,7 +275,7 @@ def build_report_body(
     if rejection_rows:
         lines.extend([
             "",
-            "| Time (UTC) | Decision | Asset | Side | Reason | Entry | Stop | Target | Observed R:R | Required min R:R |",
+            "| Time (IST) | Decision | Asset | Side | Reason | Entry | Stop | Target | Observed R:R | Required min R:R |",
             "| :--- | :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |",
         ])
         for decision, event in rejection_rows:
@@ -323,7 +303,7 @@ def build_report_body(
             "",
             "## Trade attempts",
             "",
-            "| Time (UTC) | Decision | Asset | Side | Strategy | Outcome | Reason |",
+            "| Time (IST) | Decision | Asset | Side | Strategy | Outcome | Reason |",
             "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
         ]
     )
@@ -355,7 +335,7 @@ def build_report_body(
     ]
     lines.extend([
         "", "<details>", "<summary>Execution-event details</summary>", "",
-        "| Time (UTC) | Decision | Asset | Event | Reason / details |",
+        "| Time (IST) | Decision | Asset | Event | Reason / details |",
         "| :--- | :--- | :--- | :--- | :--- |",
     ])
     for decision, event in execution_rows:
@@ -398,12 +378,12 @@ def build_weekly_report_body(
     week_start: date,
     decisions: Iterable[Mapping[str, Any]],
     income_records: Iterable[Mapping[str, Any]],
+    cutoff_equity: Optional[float] = None,
 ) -> str:
-    """Render one completed UTC week's operational and performance evidence."""
+    """Render one completed IST week's operational and performance evidence."""
     all_decisions = list(decisions)
     income = list(income_records)
-    start = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
-    end = start + timedelta(days=7)
+    start, end = report_window(week_start, 7)
     attempts = [
         row
         for row in all_decisions
@@ -433,9 +413,11 @@ def build_weekly_report_body(
     lines = [
         f"# Orbit Testnet weekly report — {week_start.isoformat()} to {week_end.isoformat()}",
         "",
-        "> Completed UTC week. Submitted, filled, and realized-PnL events are reported "
+        f"> From **{start.isoformat()}** to **{end.isoformat()}** "
+        "(IST, end exclusive; Saturday–Friday). Submitted, filled, and realized-PnL events are reported "
         "separately; none is inferred to mean another.",
         "",
+        *performance_lines(report_metrics(income, cutoff_equity)),
         "## Weekly scorecard",
         "",
         f"- Trade attempts: **{len(attempts)}**",
@@ -737,29 +719,10 @@ class TestnetDailyReporter:
         self, tracker: PerformanceTracker, end: datetime, attempts: int = 3
     ) -> float:
         """Reconstruct cutoff equity from a wallet snapshot with no crossing income."""
-        end_ms = int(end.timestamp() * 1000)
-        for _ in range(attempts):
-            before_ms = int(tracker.utc_now().timestamp() * 1000)
-            account = self.futures_client.account()
-            after_ms = int(tracker.utc_now().timestamp() * 1000)
-            subsequent_income = tracker.sync_window(end_ms, after_ms + 1)
-            crossing_income = any(
-                before_ms <= int(record.get("time", 0) or 0) <= after_ms
-                for record in tracker.last_records
-            )
-            if not crossing_income:
-                return (
-                    float(account["totalWalletBalance"])
-                    - subsequent_income.net_pnl
-                )
-        raise RuntimeError(
-            "Account income changed during every equity snapshot attempt; "
-            "refusing to publish inconsistent historical equity"
-        )
+        return reconstruct_equity(tracker, end, attempts)
 
     def publish_date(self, report_date: date) -> str:
-        start = datetime.combine(report_date, time.min, tzinfo=timezone.utc)
-        end = start + timedelta(days=1)
+        start, end = report_window(report_date)
         tracker = None
         if self.futures_client is not None:
             tracker = PerformanceTracker(
@@ -792,7 +755,8 @@ class TestnetDailyReporter:
                 "report_type": "daily",
                 "period_start": start,
                 "period_end": end,
-                "timezone": "UTC",
+                "timezone": "IST",
+                "metrics": report_metrics(income, cutoff_equity),
                 "body": body,
                 "github_url": url,
                 "finalized_at": datetime.now(timezone.utc),
@@ -802,13 +766,14 @@ class TestnetDailyReporter:
         return url
 
     def publish_week(self, week_start: date) -> str:
-        """Publish a completed Saturday-through-Friday UTC reporting window."""
-        start = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
-        end = start + timedelta(days=7)
+        """Publish a completed Saturday-through-Friday IST reporting window."""
+        start, end = report_window(week_start, 7)
+        tracker = None
         if self.futures_client is not None:
-            PerformanceTracker(
+            tracker = PerformanceTracker(
                 self.futures_client, self.mongo_handler, "testnet"
-            ).sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
+            )
+            tracker.sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
         decisions = self.mongo_handler.get_trade_decisions(
             start, end, "testnet", include_event_window=True
         )
@@ -816,7 +781,8 @@ class TestnetDailyReporter:
             int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
         )
         title = f"{WEEKLY_TITLE_PREFIX}{week_start.isoformat()}"
-        body = build_weekly_report_body(week_start, decisions, income)
+        cutoff_equity = self._cutoff_equity(tracker, end) if tracker is not None else None
+        body = build_weekly_report_body(week_start, decisions, income, cutoff_equity)
         url = self.github.publish(
             title,
             body,
@@ -828,7 +794,8 @@ class TestnetDailyReporter:
                 "report_type": "weekly",
                 "period_start": start,
                 "period_end": end,
-                "timezone": "UTC",
+                "timezone": "IST",
+                "metrics": report_metrics(income, cutoff_equity),
                 "body": body,
                 "github_url": url,
                 "finalized_at": datetime.now(timezone.utc),
@@ -841,7 +808,7 @@ class TestnetDailyReporter:
         last_daily_published: Optional[date] = None
         last_week_published: Optional[date] = None
         while True:
-            today = datetime.now(timezone.utc).date()
+            today = datetime.now(IST).date()
             yesterday = today - timedelta(days=1)
             if yesterday != last_daily_published:
                 try:

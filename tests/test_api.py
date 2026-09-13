@@ -1,6 +1,8 @@
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
+from orbit.core.reporting import IST
+
 import pytest
 from fastapi import HTTPException
 
@@ -128,9 +130,10 @@ def test_closed_trades_are_read_for_the_requested_calendar_range(
     )
 
 
+@patch("orbit.api._report_accounting", return_value=([], 1000.0))
 @patch("orbit.api._command_center_mongo_handler")
-def test_daily_report_uses_one_midnight_to_midnight_utc_window(
-    mongo_handler: MagicMock,
+def test_daily_report_uses_one_midnight_to_midnight_ist_window(
+    mongo_handler: MagicMock, accounting: MagicMock,
 ) -> None:
     mongo = mongo_handler.return_value
     mongo.get_trade_decisions.return_value = []
@@ -139,8 +142,8 @@ def test_daily_report_uses_one_midnight_to_midnight_utc_window(
 
     response = get_daily_report(date(2026, 9, 11))
 
-    assert response.period_start == "2026-09-11T00:00:00+00:00"
-    assert response.period_end == "2026-09-12T00:00:00+00:00"
+    assert response.period_start == "2026-09-11T00:00:00+05:30"
+    assert response.period_end == "2026-09-12T00:00:00+05:30"
     assert "# Orbit Testnet daily report — 2026-09-11" in response.body
     assert "## Codex task" not in response.body
     start = datetime.fromisoformat(response.period_start)
@@ -148,16 +151,19 @@ def test_daily_report_uses_one_midnight_to_midnight_utc_window(
     mongo.get_trade_decisions.assert_called_once_with(
         start, end, "testnet", include_event_window=True
     )
-    mongo.get_income_records.assert_called_once_with(
-        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
-    )
+    accounting.assert_called_once_with(start, end)
+    assert response.metrics["equity_value"] == 1000.0
+    assert response.metrics["net_pnl"] == 0.0
+    assert response.metrics["equity_change_pct"] == 0.0
+    assert response.metrics["max_drawdown"] == 0.0
     mongo.get_active_trade_decisions.assert_called_once_with(end, "testnet")
     mongo.get_finalized_report.assert_not_called()
 
 
+@patch("orbit.api._report_accounting", return_value=([], 1000.0))
 @patch("orbit.api._command_center_mongo_handler")
-def test_weekly_report_uses_saturday_to_saturday_midnight_utc_window(
-    mongo_handler: MagicMock,
+def test_weekly_report_uses_saturday_to_saturday_midnight_ist_window(
+    mongo_handler: MagicMock, accounting: MagicMock,
 ) -> None:
     mongo = mongo_handler.return_value
     mongo.get_trade_decisions.return_value = []
@@ -165,17 +171,19 @@ def test_weekly_report_uses_saturday_to_saturday_midnight_utc_window(
 
     response = get_weekly_report(date(2025, 9, 6))
 
-    assert response.period_start == "2025-09-06T00:00:00+00:00"
-    assert response.period_end == "2025-09-13T00:00:00+00:00"
+    assert response.period_start == "2025-09-06T00:00:00+05:30"
+    assert response.period_end == "2025-09-13T00:00:00+05:30"
     assert "# Orbit Testnet weekly report — 2025-09-06 to 2025-09-12" in response.body
     start = datetime.fromisoformat(response.period_start)
     end = datetime.fromisoformat(response.period_end)
     mongo.get_trade_decisions.assert_called_once_with(
         start, end, "testnet", include_event_window=True
     )
-    mongo.get_income_records.assert_called_once_with(
-        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
-    )
+    accounting.assert_called_once_with(start, end)
+    assert response.metrics["equity_value"] == 1000.0
+    assert response.metrics["net_pnl"] == 0.0
+    assert response.metrics["equity_change_pct"] == 0.0
+    assert response.metrics["max_drawdown"] == 0.0
     mongo.get_finalized_report.assert_not_called()
 
 
@@ -186,9 +194,9 @@ def test_weekly_report_rejects_non_saturday_start() -> None:
     assert exc_info.value.status_code == 422
 
 
-def test_daily_report_rejects_incomplete_utc_day() -> None:
+def test_daily_report_rejects_incomplete_ist_day() -> None:
     with pytest.raises(HTTPException) as exc_info:
-        get_daily_report(datetime.now(timezone.utc).date())
+        get_daily_report(datetime.now(IST).date())
 
     assert exc_info.value.status_code == 422
 
@@ -271,12 +279,12 @@ def test_command_center_uses_live_state_not_notification_feed(
         "status": "online",
         "current_activity": "analyzing_signal",
         "detail": "BTCUSDT",
-        "updated_at": "2026-09-06T00:00:00+00:00",
+        "updated_at": "2026-09-06T00:00:00+05:30",
         "runtimes": [
             {
                 "runtime_id": "default",
                 "status": "online",
-                "heartbeat_at": "2026-09-06T00:00:00+00:00",
+                "heartbeat_at": "2026-09-06T00:00:00+05:30",
             }
         ],
     }
