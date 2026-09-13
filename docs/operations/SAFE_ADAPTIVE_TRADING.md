@@ -111,6 +111,17 @@ net P&L = realized P&L + commission + funding fees + other income
 return % = net P&L / opening equity * 100
 ```
 
+Daily reports label P&L reconstructed from decision-lifecycle entry and exit
+records as an estimate and show its difference from exchange realized P&L. The
+unclosed lifecycle table is historical ledger evidence, not an exchange-position
+snapshot; use the command center's exchange-backed Active positions table for
+current position state.
+
+GitHub daily reports always group events by UTC calendar day. The command
+center's Closed trades calendar groups them by the browser's local calendar day,
+so events late in a UTC day can appear under the following date in positive UTC
+offsets. Each GitHub report prints its exact half-open UTC event interval.
+
 Binance represents commissions and paid funding as negative income, so they are
 added rather than subtracted a second time. `PerformanceReporterThread` syncs and
 reports the last 24 hours when Orbit starts and every 24 hours thereafter.

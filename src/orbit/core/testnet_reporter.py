@@ -172,12 +172,18 @@ def build_report_body(
                 float(event.get("pnl", 0) or 0)
             )
     closed_pnl = sum(sum(values) for values in closed_by_symbol.values())
+    lifecycle_exchange_difference = closed_pnl - account_performance.realized_pnl
 
     lines = [
         f"# Orbit Testnet daily report — {report_date.isoformat()}",
         "",
         "> Generated from MongoDB's immutable decision and income ledgers. "
         "Policy rejections are evidence, not permission to weaken safety limits.",
+        "",
+        f"> Reporting window: **{start.isoformat()} ≤ event time < "
+        f"{end.isoformat()}**. The dashboard's Closed trades calendar uses your "
+        "browser's local midnight instead, so a late-UTC close can appear on the "
+        "following local date.",
         "",
         "## Summary",
         "",
@@ -190,11 +196,14 @@ def build_report_body(
         f"- Errors: **{counts['error']}**",
         f"- No-signal evaluations (counted, not expanded): **{counts['no_signal']}**",
         f"- Closed trades: **{events['trade_closed']}**",
-        f"- Closed-trade net P&L: **{closed_pnl:.8f} USDT**",
+        f"- Closed-lifecycle estimated P&L: **{closed_pnl:.8f} USDT**",
         "",
         "## Closed-trade performance by asset",
         "",
-        "| Asset | Closed trades | Net P&L |",
+        "_Calculated from decision-lifecycle entry and exit records. This is an "
+        "operational estimate, not the exchange accounting total below._",
+        "",
+        "| Asset | Closed trades | Estimated P&L |",
         "| :--- | ---: | ---: |",
     ]
     for symbol, pnl_values in sorted(closed_by_symbol.items()):
@@ -215,6 +224,8 @@ def build_report_body(
             "equity._",
             "",
             f"- Realized P&L: **{account_performance.realized_pnl:.8f} USDT**",
+            f"- Lifecycle estimate minus exchange realized P&L: "
+            f"**{lifecycle_exchange_difference:.8f} USDT**",
             f"- Commission: **{account_performance.commission:.8f} USDT**",
             f"- Funding: **{account_performance.funding:.8f} USDT**",
             f"- Other income: **{account_performance.other_income:.8f} USDT**",
@@ -225,11 +236,12 @@ def build_report_body(
     )
 
     lines.extend([
-        "", "## Open trade lifecycles", "",
-        "_These are filled decision-ledger lifecycles with no close recorded before "
-        "the report cutoff. They are not a snapshot of exchange positions: multiple "
-        "rows for one asset may be netted or offset at the exchange. No unrealized "
-        "P&L is inferred._", "",
+        "", "## Unclosed decision-ledger lifecycles", "",
+        "_These historical records have a fill but no matching close recorded before "
+        "the report cutoff. They are **not open positions** and must not be compared "
+        "with the dashboard's exchange-backed Active positions table. Multiple rows "
+        "for one asset may be netted, offset, or already absent at the exchange. No "
+        "current position state or unrealized P&L is inferred._", "",
         "| Decision | Asset | Side | Opened (UTC) | Entry | Quantity | Stop | Target |",
         "| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: |",
     ])

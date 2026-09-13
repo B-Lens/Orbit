@@ -98,6 +98,12 @@ class TestReportRendering(unittest.TestCase):
 
         self.assertIn("accepted-1", body)
         self.assertIn("blocked-1", body)
+        self.assertIn(
+            "Reporting window: **2026-08-21T00:00:00+00:00 ≤ event time < "
+            "2026-08-22T00:00:00+00:00**",
+            body,
+        )
+        self.assertIn("dashboard's Closed trades calendar uses your browser's local", body)
         self.assertIn("minimum_notional", body)
         self.assertIn("sentiment_conflict", body)
         self.assertIn("Accepted signals: **1**", body)
@@ -106,14 +112,19 @@ class TestReportRendering(unittest.TestCase):
         self.assertIn("Strategy rejections: **1**", body)
         self.assertIn("Risk/order rejections: **1**", body)
         self.assertIn("No-signal evaluations (counted, not expanded): **1**", body)
-        self.assertIn("Closed-trade net P&L: **8.50000000 USDT**", body)
+        self.assertIn("Closed-lifecycle estimated P&L: **8.50000000 USDT**", body)
         self.assertIn("| BTCUSDT | 1 | 8.50000000 |", body)
         self.assertIn("## Daily exchange-ledger activity", body)
         self.assertIn("Commission: **-1.00000000 USDT**", body)
         self.assertIn("Funding: **-0.50000000 USDT**", body)
         self.assertIn("Net account income: **8.50000000 USDT**", body)
         self.assertIn("## Closed-trade performance by asset", body)
-        self.assertIn("## Open trade lifecycles", body)
+        self.assertIn("## Unclosed decision-ledger lifecycles", body)
+        self.assertIn("They are **not open positions**", body)
+        self.assertIn(
+            "Lifecycle estimate minus exchange realized P&L: **-1.50000000 USDT**",
+            body,
+        )
         self.assertNotIn("quiet-1", body)
         self.assertIn("| prior-day-order | — | order_filled |", body)
 
@@ -153,7 +164,7 @@ class TestReportRendering(unittest.TestCase):
             "| active-eth | ETHUSDT | BUY | 2026-08-21T01:00:00+00:00 | 100 | 0.5 | — | — |",
             body,
         )
-        self.assertIn("Closed-trade net P&L: **5.00000000 USDT**", body)
+        self.assertIn("Closed-lifecycle estimated P&L: **5.00000000 USDT**", body)
 
     def test_active_trade_uses_latest_fill_before_report_cutoff(self):
         active = [{
