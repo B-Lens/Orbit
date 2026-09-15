@@ -82,9 +82,22 @@ class MongoHandler(ExceptionManager):
 
         try:
             uri = uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-            self._mongo_client = mongo_client or MongoClient(
-                uri, serverSelectionTimeoutMS=1000
-            )
+            if mongo_client is None:
+                username = os.getenv("MONGODB_USERNAME")
+                password = os.getenv("MONGODB_PASSWORD")
+                if bool(username) != bool(password):
+                    raise ValueError(
+                        "MONGODB_USERNAME and MONGODB_PASSWORD must be set together"
+                    )
+                client_options: Dict[str, Any] = {"serverSelectionTimeoutMS": 1000}
+                if username and password:
+                    client_options.update(
+                        username=username,
+                        password=password,
+                        authSource=os.getenv("MONGODB_AUTH_SOURCE", "admin"),
+                    )
+                mongo_client = MongoClient(uri, **client_options)
+            self._mongo_client = mongo_client
             self.db = self._mongo_client[db_name]
             self.collection = self.db[OHLCV_COLLECTION_NAME]
             self.testnet_collection = self.db[TESTNET_OHLCV_COLLECTION_NAME]
