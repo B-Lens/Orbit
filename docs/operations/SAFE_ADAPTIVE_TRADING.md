@@ -79,7 +79,11 @@ net P&L = realized P&L + commission + funding fees + other income
 return % = net P&L / opening equity * 100
 ```
 
-Daily reports distinguish closed-lifecycle net P&L from period account income.
+Daily reports and the Closed trades calendar derive closed-trade counts and P&L
+from immutable lifecycle records selected by `closed_at`. Daily and weekly reports
+restrict those records to Testnet; the command-center calendar displays all
+execution modes and identifies each row's mode. Reports distinguish this
+closed-lifecycle P&L from period account income.
 The unclosed lifecycle table is historical ledger evidence, not an exchange-position
 snapshot; use the command center's exchange-backed Active positions table for
 current position state.

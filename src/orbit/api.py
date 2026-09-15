@@ -437,6 +437,9 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
     income = mongo.get_income_records(
         int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
     )
+    closed_trades = mongo.get_closed_trades_between(
+        start, end, 0, execution_mode="testnet"
+    )
     equity = None
     active_trades = mongo.get_active_trade_decisions(end, "testnet")
     return ReportResponse(
@@ -451,6 +454,7 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
             income,
             active_trades,
             equity,
+            closed_trades,
             include_automation_task=False,
         ),
     )
@@ -474,6 +478,9 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
     income = mongo.get_income_records(
         int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
     )
+    closed_trades = mongo.get_closed_trades_between(
+        start, end, 0, execution_mode="testnet"
+    )
     equity = None
     return ReportResponse(
         report_type="weekly",
@@ -481,7 +488,9 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
         period_end=end.isoformat(),
         timezone="IST",
         metrics=report_metrics(income, equity),
-        body=build_weekly_report_body(selected_start, decisions, income, equity),
+        body=build_weekly_report_body(
+            selected_start, decisions, income, equity, closed_trades
+        ),
     )
 
 
