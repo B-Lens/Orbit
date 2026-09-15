@@ -12,7 +12,7 @@ Use this page as the entry point when loading Orbit into a limited context windo
 | Intelligence | Runs Codex-authenticated web analysis and persists validated sentiment | `core/sentimen_cron.py`, `market_intelligence/sentimental_workflow.py` |
 | LLM providers | Owns provider clients, routing, and reusable prompts independently of market intelligence | `llm/` |
 | Trade reasoning | Gates every candidate entry and reviews every confirmed exit in the execution core | `core/trade_reasoner.py`, `core/main.py`, `core/trade_checker.py` |
-| Testnet reporting | Publishes daily decision-ledger evidence to the linked GitHub Project for guarded Codex analysis | `core/testnet_reporter.py` |
+| Reporting | Builds daily and weekly API reports from MongoDB decision and income ledgers | `api.py`, `core/reporting.py` |
 | Strategies | Implements production and research signal logic | `strategies/` |
 
 All package paths above are relative to `src/orbit/`. Configuration belongs in
