@@ -42,10 +42,9 @@ flowchart TD
     Reporter <--> Binance
     Reporter --> Income
 
-    Main --> Daily[TestnetDailyReporter worker]
-    Daily --> Decision
-    Daily --> Income
-    Daily --> Project[GitHub issue and Project item]
+    API --> Reports[Daily and weekly reports]
+    Reports --> Decision
+    Reports --> Income
 
     Monitor --> Alerts[Discord alerts]
     Signal --> Alerts

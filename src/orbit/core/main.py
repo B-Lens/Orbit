@@ -44,7 +44,6 @@ from orbit.core.order_manager import OrderManager
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.sentimen_cron import Croner
 from orbit.core.performance_reporter import PerformanceReporter
-from orbit.core.testnet_reporter import TestnetDailyReporter
 from orbit.core.execution import ExecutionMode
 from orbit.core.trade_reasoner import TradeReasoner
 from orbit.core.command_center import (
@@ -122,7 +121,6 @@ class BinanceAutomation(ExceptionManager):
         trade_checker: Optional[TradeChecker] = None,
         order_manager: Optional[OrderManager] = None,
         croner: Optional[Croner] = None,
-        testnet_reporter: Optional[TestnetDailyReporter] = None,
         trade_reasoner: Optional[TradeReasoner] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -137,7 +135,6 @@ class BinanceAutomation(ExceptionManager):
             order_manager=self.order_manager
         )
         self._croner: Optional[Croner] = croner
-        self._testnet_reporter = testnet_reporter
         self._trade_reasoner = trade_reasoner
 
         # Configuration
@@ -655,25 +652,6 @@ class BinanceAutomation(ExceptionManager):
         monitor_thread.start()
 
         self.handle_crons()
-
-        try:
-            reporter = self._testnet_reporter or TestnetDailyReporter.from_env(
-                self.order_manager.mongo_handler,
-                self.order_manager.futures_clients.get(ExecutionMode.TESTNET),
-            )
-        except Exception as exc:
-            reporter = None
-            self.handle_exception(
-                exc, "Testnet reporting disabled because configuration is invalid"
-            )
-        if reporter is not None:
-            report_thread = threading.Thread(
-                target=reporter.run_forever,
-                daemon=True,
-                name="TestnetDailyReporterThread",
-            )
-            report_thread.start()
-            self.workers_to_monitor.append(report_thread)
 
         trade_thread = threading.Thread(
             target=self.start_trade_checker, daemon=True, name="TradeCheckerThread"

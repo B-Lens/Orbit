@@ -18,13 +18,12 @@ npm run dev
 Vite proxies `/api` requests to the local FastAPI service. Production hosting
 should route the UI and `/api` through the same origin.
 
-The dashboard also exposes finalized snapshots of the same immutable-ledger
-Testnet evidence published by the GitHub reporter. It does not build reports
-from a potentially partial MongoDB income window:
+The dashboard builds reports only from MongoDB's immutable decision and income
+ledgers. It does not query Binance or consume GitHub report snapshots:
 
-- `/daily` renders one completed UTC day, from midnight through the following
+- `/daily` renders one completed IST day, from midnight through the following
   midnight.
-- `/weekly` renders completed Saturday-through-Friday UTC weeks, using a
+- `/weekly` renders completed Saturday-through-Friday IST weeks, using a
   half-open Saturday-midnight to Saturday-midnight boundary.
 
 Both pages allow navigation through completed periods. The live command center

@@ -25,11 +25,13 @@ from orbit.core.execution import ExecutionSettings
 from orbit.core.mongo_handler import MongoHandler
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.notification_feed import list_notifications
-from orbit.core.testnet_reporter import build_report_body, build_weekly_report_body
-from orbit.core.reporting import IST, reconstruct_equity, report_metrics, report_window
-from orbit.core.performance import PerformanceTracker
-from orbit.core.authentication_manager import _build_futures_client
-from orbit.core.execution import FUTURES_TESTNET_URL
+from orbit.core.reporting import (
+    IST,
+    build_report_body,
+    build_weekly_report_body,
+    report_metrics,
+    report_window,
+)
 
 logger = logging.getLogger("Orbit")
 
@@ -199,24 +201,6 @@ class ReportResponse(BaseModel):
     timezone: str
     body: str
     metrics: Dict[str, Any]
-
-
-def _report_accounting(start: datetime, end: datetime) -> tuple[List[Dict[str, Any]], float]:
-    """Read complete historical Testnet accounting without writing or publishing."""
-    key = os.getenv("BINANCE_TESTNET_API_KEY")
-    secret = os.getenv("BINANCE_TESTNET_SECRET_KEY")
-    if not key or not secret:
-        raise HTTPException(status_code=503, detail="Testnet report accounting credentials are unavailable")
-    client = _build_futures_client(
-        key, secret, os.getenv("BINANCE_FUTURES_TESTNET_URL", FUTURES_TESTNET_URL)
-    )
-    tracker = PerformanceTracker(client, execution_mode="testnet")
-    try:
-        tracker.sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
-        income = list(tracker.last_records)
-        return income, reconstruct_equity(tracker, end)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Complete Testnet report accounting is unavailable") from exc
 
 
 def _expected_runtime_ids() -> List[str]:
@@ -450,7 +434,10 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
     decisions = mongo.get_trade_decisions(
         start, end, "testnet", include_event_window=True
     )
-    income, equity = _report_accounting(start, end)
+    income = mongo.get_income_records(
+        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
+    )
+    equity = None
     active_trades = mongo.get_active_trade_decisions(end, "testnet")
     return ReportResponse(
         report_type="daily",
@@ -484,7 +471,10 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
     decisions = mongo.get_trade_decisions(
         start, end, "testnet", include_event_window=True
     )
-    income, equity = _report_accounting(start, end)
+    income = mongo.get_income_records(
+        int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
+    )
+    equity = None
     return ReportResponse(
         report_type="weekly",
         period_start=start.isoformat(),

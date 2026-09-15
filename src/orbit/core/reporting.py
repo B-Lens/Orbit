@@ -80,3 +80,124 @@ def performance_lines(metrics: Mapping[str, Any]) -> list[str]:
         "this period; it excludes unrealized position fluctuations. Transfers in "
         "other income affect these wallet-change figures.", "",
     ]
+
+
+def _in_window(value: Any, start: datetime, end: datetime) -> bool:
+    if not isinstance(value, datetime):
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return start <= value.astimezone(IST) < end
+
+
+def _event_counts(
+    decisions: Iterable[Mapping[str, Any]], start: datetime, end: datetime
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for decision in decisions:
+        for event in decision.get("execution_events", []):
+            if _in_window(event.get("timestamp"), start, end):
+                status = str(event.get("status", "unknown"))
+                counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _report_body(
+    report_type: str,
+    label: str,
+    start: datetime,
+    end: datetime,
+    decisions: Iterable[Mapping[str, Any]],
+    income_records: Iterable[Mapping[str, Any]],
+    cutoff_equity: Optional[float],
+    active_trades: Iterable[Mapping[str, Any]] = (),
+) -> str:
+    rows = list(decisions)
+    income = [dict(row) for row in income_records]
+    window_rows = [row for row in rows if _in_window(row.get("timestamp"), start, end)]
+    outcomes: dict[str, int] = {}
+    for row in window_rows:
+        outcome = str(row.get("outcome", "unknown"))
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+    events = _event_counts(rows, start, end)
+    attempts = sum(outcomes.get(name, 0) for name in ("accepted", "rejected", "error"))
+
+    closed: dict[str, list[float]] = {}
+    for decision in rows:
+        for event in decision.get("execution_events", []):
+            if event.get("status") == "trade_closed" and _in_window(
+                event.get("timestamp"), start, end
+            ):
+                symbol = str(decision.get("symbol") or "UNKNOWN")
+                closed.setdefault(symbol, []).append(float(event.get("pnl", 0) or 0))
+
+    lines = [
+        f"# Orbit Testnet {report_type} report — {label}",
+        "",
+        "> Generated only from MongoDB decision, execution-event, and income ledgers.",
+        "",
+        f"> Reporting window: **{start.isoformat()} ≤ event time < {end.isoformat()}** "
+        "(IST, end exclusive).",
+        "",
+        *performance_lines(report_metrics(income, cutoff_equity)),
+        "## Summary",
+        "",
+        f"- Trade attempts: **{attempts}**",
+        f"- Accepted signals: **{outcomes.get('accepted', 0)}**",
+        f"- Orders submitted: **{events.get('order_submitted', 0)}**",
+        f"- Orders filled: **{events.get('order_filled', 0)}**",
+        f"- Strategy rejections: **{outcomes.get('rejected', 0)}**",
+        f"- Risk/order rejections: **{events.get('order_rejected', 0)}**",
+        f"- Errors: **{outcomes.get('error', 0)}**",
+        f"- No-signal evaluations: **{outcomes.get('no_signal', 0)}**",
+        f"- Closed trades: **{events.get('trade_closed', 0)}**",
+        "",
+        "## Closed-trade performance by asset",
+        "",
+        "| Asset | Closed trades | Net P&L |",
+        "| :--- | ---: | ---: |",
+    ]
+    for symbol, values in sorted(closed.items()):
+        lines.append(f"| {symbol} | {len(values)} | {sum(values):.8f} |")
+    if not closed:
+        lines.append("| — | 0 | 0.00000000 |")
+
+    if report_type == "daily":
+        active = list(active_trades)
+        lines.extend([
+            "",
+            "## Unclosed decision-ledger lifecycles",
+            "",
+            f"- Lifecycles with a fill and no close before cutoff: **{len(active)}**",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def build_report_body(
+    report_date: date,
+    decisions: Iterable[Mapping[str, Any]],
+    income_records: Iterable[Mapping[str, Any]],
+    active_trades: Iterable[Mapping[str, Any]] = (),
+    cutoff_equity: Optional[float] = None,
+    *,
+    include_automation_task: bool = False,
+) -> str:
+    del include_automation_task
+    start, end = report_window(report_date)
+    return _report_body(
+        "daily", report_date.isoformat(), start, end, decisions, income_records,
+        cutoff_equity, active_trades,
+    )
+
+
+def build_weekly_report_body(
+    week_start: date,
+    decisions: Iterable[Mapping[str, Any]],
+    income_records: Iterable[Mapping[str, Any]],
+    cutoff_equity: Optional[float] = None,
+) -> str:
+    start, end = report_window(week_start, 7)
+    label = f"{week_start.isoformat()} to {(week_start + timedelta(days=6)).isoformat()}"
+    return _report_body(
+        "weekly", label, start, end, decisions, income_records, cutoff_equity
+    )

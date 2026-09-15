@@ -59,47 +59,15 @@ Sentiment-conflict rejections are stored only in this ledger. Orbit does not
 create separate `contradict_trades` or `simulated_trades` collections: those
 copies duplicated decision data and did not represent executed positions.
 
-## GitHub Testnet reporting and analysis
+## MongoDB-backed reports
 
-When `ORBIT_GITHUB_REPORTING_ENABLED=true`, `TestnetDailyReporterThread` publishes
-one idempotent daily Testnet report for the completed previous IST day.
-The issue separates strategy rejections from risk/order rejections, shows closed-
-trade performance by asset, and keeps trades active at each historical cutoff in
-a separate ledger-lifecycle section that explicitly distinguishes them from
-exchange position snapshots. Daily reports also reconstruct wallet equity at the
-report cutoff by reconciling subsequent exchange income against a current account
-snapshot, then show the day's fee-aware equity P&L percentage. No-signal
-evaluations are counted but are not trade attempts. Risk/order rejections include
-the decision inputs and recorded risk metrics needed to audit the rejection.
-Before publication, the reporter synchronizes Binance Testnet income from the
-start of the reporting window. Income rows are tagged by execution mode, and the
-report queries only `testnet` rows so mixed live/Testnet deployments cannot blend
-account performance.
-
-When an LLM provider is configured, both daily and weekly report issues receive a
-plain-language explanation comment generated from the completed report. The prompt
-asks the model to add only useful interpretation that the report does not already
-state, using short scan-friendly sections for highlights and follow-ups without
-treating policy rejections as a reason to weaken safeguards. Republishing updates
-the marker-owned comment, and post-write reconciliation removes duplicates created
-by overlapping publishers.
-
-The publisher then applies `ai-autonomous`. The existing Codex workflow analyzes
-the evidence and may create a reviewed pull request only for a demonstrated code
-defect. Its task explicitly forbids weakening risk limits, bypassing sentiment, or
-enabling live trading. Keep the `Codex-Automation` environment approval required.
-
-Configure the EC2 service with a fine-grained GitHub token limited to Issues
-(write) on `B-Lens/Orbit` and Projects (write) on the private Project:
-
-```text
-ORBIT_GITHUB_REPORTING_ENABLED=true
-ORBIT_GITHUB_TOKEN=<secret supplied by the service manager>
-ORBIT_GITHUB_REPOSITORY=B-Lens/Orbit
-ORBIT_GITHUB_PROJECT_ID=PVT_kwHOBPU1Qs4BhHzU
-```
-
-Never store the token in `.env` inside the checkout, logs, MongoDB, or GitHub.
+The `/daily` and `/weekly` dashboard reports read Testnet decisions, execution
+events, active lifecycle evidence, and income exclusively from MongoDB. Report
+requests do not call Binance and Orbit no longer starts a GitHub report publisher.
+Income rows remain filtered by execution mode so live and Testnet performance are
+never blended. Historical wallet equity is shown as unavailable until an audited
+MongoDB balance-snapshot ledger exists; period income alone is not used to invent
+an opening or closing balance.
 
 ## Performance accounting
 
