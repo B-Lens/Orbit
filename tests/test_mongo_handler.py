@@ -69,10 +69,16 @@ def test_get_closed_trades_between_uses_lifecycle_close_time() -> None:
     cutoff = datetime(2026, 9, 7, tzinfo=timezone.utc)
     end = datetime(2026, 9, 8, tzinfo=timezone.utc)
 
-    assert handler.get_closed_trades_between(cutoff, end, 50) == []
+    assert handler.get_closed_trades_between(
+        cutoff, end, 50, execution_mode="testnet"
+    ) == []
 
     handler.trade_lifecycle_collection.find.assert_called_once_with(
-        {"closed_at": {"$gte": cutoff, "$lt": end}, "pnl": {"$exists": True}},
+        {
+            "closed_at": {"$gte": cutoff, "$lt": end},
+            "pnl": {"$exists": True},
+            "execution_mode": "testnet",
+        },
         {"_id": 0},
     )
     handler.trade_lifecycle_collection.find.return_value.sort.assert_called_once_with(

@@ -8,18 +8,42 @@ from orbit.core.reporting import (
 )
 
 
-def test_ist_day_assigns_closes_by_event_time() -> None:
+def test_closed_lifecycle_records_produce_asset_performance() -> None:
+    first = build_report_body(
+        date(2026, 9, 12),
+        [],
+        [],
+        closed_trades=[{"symbol": "ATOMUSDT", "pnl": -6.43758611}],
+    )
+    second = build_report_body(
+        date(2026, 9, 13),
+        [],
+        [],
+        closed_trades=[{"symbol": "ATOMUSDT", "pnl": 15.15294538}],
+    )
+    assert "| ATOMUSDT | 1 | -6.43758611 |" in first
+    assert "| ATOMUSDT | 1 | 15.15294538 |" in second
+    assert "Account-income performance" in first
+    assert "exchange income ledger, not the closed-lifecycle table" in first
+
+
+def test_closed_trade_summary_ignores_duplicate_decision_events() -> None:
     decisions = [{
         "symbol": "ATOMUSDT",
         "execution_events": [
-            {"status": "trade_closed", "timestamp": datetime(2026, 9, 12, 4, 10, 18), "pnl": -6.43758611},
-            {"status": "trade_closed", "timestamp": datetime(2026, 9, 12, 23, 0, 43), "pnl": 15.15294538},
+            {"status": "trade_closed", "timestamp": datetime(2026, 9, 12, 4), "pnl": 4},
+            {"status": "trade_closed", "timestamp": datetime(2026, 9, 12, 4), "pnl": 4},
         ],
     }]
-    first = build_report_body(date(2026, 9, 12), decisions, [])
-    second = build_report_body(date(2026, 9, 13), decisions, [])
-    assert "| ATOMUSDT | 1 | -6.43758611 |" in first
-    assert "| ATOMUSDT | 1 | 15.15294538 |" in second
+    body = build_report_body(
+        date(2026, 9, 12),
+        decisions,
+        [],
+        closed_trades=[{"symbol": "ATOMUSDT", "pnl": 4}],
+    )
+
+    assert "Closed lifecycle records: **1**" in body
+    assert "| ATOMUSDT | 1 | 4.00000000 |" in body
 
 
 def test_ist_week_includes_start_and_excludes_end() -> None:
