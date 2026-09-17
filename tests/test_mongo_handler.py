@@ -109,6 +109,28 @@ def test_get_closed_trades_between_uses_lifecycle_close_time() -> None:
     )
 
 
+def test_report_closed_trades_are_unbounded_and_testnet_only() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.trade_lifecycle_collection = MagicMock()
+    cursor = MagicMock()
+    cursor.__iter__.return_value = iter([])
+    handler.trade_lifecycle_collection.find.return_value.sort.return_value = cursor
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 2, tzinfo=timezone.utc)
+
+    assert handler.get_closed_trades_between(start, end, None, "testnet") == []
+
+    handler.trade_lifecycle_collection.find.assert_called_once_with(
+        {
+            "closed_at": {"$gte": start, "$lt": end},
+            "pnl": {"$exists": True},
+            "execution_mode": "testnet",
+        },
+        {"_id": 0},
+    )
+    cursor.limit.assert_not_called()
+
+
 def test_active_trade_decisions_are_resolved_at_historical_cutoff() -> None:
     cutoff = datetime(2026, 8, 22, tzinfo=timezone.utc)
     open_trade = {

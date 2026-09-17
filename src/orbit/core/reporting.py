@@ -159,6 +159,7 @@ def _report_body(
     cutoff_equity: Optional[float],
     active_trades: Iterable[Mapping[str, Any]] = (),
     income_source: str = "recorded MongoDB income ledger (completeness unverified)",
+    closed_trades: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> str:
     rows = list(decisions)
     income = [dict(row) for row in income_records]
@@ -171,18 +172,27 @@ def _report_body(
     attempts = sum(outcomes.get(name, 0) for name in ("accepted", "rejected", "error"))
 
     closed: dict[str, list[float]] = {}
-    for decision in rows:
-        for event in decision.get("execution_events", []):
-            if event.get("status") == "trade_closed" and _in_window(
-                event.get("timestamp"), start, end
-            ):
-                symbol = str(decision.get("symbol") or "UNKNOWN")
-                closed.setdefault(symbol, []).append(float(event.get("pnl", 0) or 0))
+    if closed_trades is None:
+        for decision in rows:
+            for event in decision.get("execution_events", []):
+                if event.get("status") == "trade_closed" and _in_window(
+                    event.get("timestamp"), start, end
+                ):
+                    symbol = str(decision.get("symbol") or "UNKNOWN")
+                    closed.setdefault(symbol, []).append(float(event.get("pnl", 0) or 0))
+    else:
+        for trade in closed_trades:
+            if _in_window(trade.get("closed_at"), start, end):
+                symbol = str(trade.get("symbol") or "UNKNOWN")
+                closed.setdefault(symbol, []).append(float(trade.get("pnl", 0) or 0))
+    closed_count = sum(len(values) for values in closed.values())
 
     lines = [
         f"# Orbit Testnet {report_type} report — {label}",
         "",
-        f"> Decisions and execution events: MongoDB ledger. Account income: {income_source}.",
+        f"> Decisions and execution events: MongoDB ledger. "
+        f"Closed trades: {'trade_lifecycle' if closed_trades is not None else 'decision events'}. "
+        f"Account income: {income_source}.",
         "",
         f"> Reporting window: **{start.isoformat()} ≤ event time < {end.isoformat()}** "
         "(IST, end exclusive).",
@@ -198,7 +208,7 @@ def _report_body(
         f"- Risk/order rejections: **{events.get('order_rejected', 0)}**",
         f"- Errors: **{outcomes.get('error', 0)}**",
         f"- No-signal evaluations: **{outcomes.get('no_signal', 0)}**",
-        f"- Closed trades: **{events.get('trade_closed', 0)}**",
+        f"- Closed trades: **{closed_count}**",
         "",
         "## Closed-trade performance by asset",
         "",
@@ -230,12 +240,13 @@ def build_report_body(
     *,
     include_automation_task: bool = False,
     income_source: str = "recorded MongoDB income ledger (completeness unverified)",
+    closed_trades: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> str:
     del include_automation_task
     start, end = report_window(report_date)
     return _report_body(
         "daily", report_date.isoformat(), start, end, decisions, income_records,
-        cutoff_equity, active_trades, income_source,
+        cutoff_equity, active_trades, income_source, closed_trades,
     )
 
 
@@ -246,10 +257,11 @@ def build_weekly_report_body(
     cutoff_equity: Optional[float] = None,
     *,
     income_source: str = "recorded MongoDB income ledger (completeness unverified)",
+    closed_trades: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> str:
     start, end = report_window(week_start, 7)
     label = f"{week_start.isoformat()} to {(week_start + timedelta(days=6)).isoformat()}"
     return _report_body(
         "weekly", label, start, end, decisions, income_records, cutoff_equity,
-        income_source=income_source,
+        income_source=income_source, closed_trades=closed_trades,
     )

@@ -90,7 +90,11 @@ trading return % = trading net P&L / opening USDT wallet * 100
 wallet change % = wallet change / opening USDT wallet * 100
 ```
 
-Daily reports distinguish closed-lifecycle net P&L from period account income.
+Daily and weekly closed-trade counts and asset totals read completed
+`trade_lifecycle` records by `closed_at`, including reconstructed lifecycles.
+Signal and order counts still read the decision ledger. This keeps the
+closed-trade figures aligned with the command center for the same IST window.
+Reports distinguish closed-lifecycle net P&L from period account income.
 The unclosed lifecycle table is historical ledger evidence, not an exchange-position
 snapshot; use the command center's exchange-backed Active positions table for
 current position state.
