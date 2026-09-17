@@ -740,24 +740,24 @@ class MongoHandler(ExceptionManager):
             return []
 
     def get_closed_trades_between(
-        self, start: datetime, end: datetime, limit: Optional[int] = 100,
-        execution_mode: Optional[str] = None,
+        self, start: datetime, end: datetime, limit: int = 100
     ) -> List[Dict[str, Any]]:
         """Return completed lifecycle records in a half-open UTC time range."""
         lifecycle = getattr(self, "trade_lifecycle_collection", None)
         if lifecycle is None:
             return []
         try:
-            query: Dict[str, Any] = {
-                "closed_at": {"$gte": start, "$lt": end},
-                "pnl": {"$exists": True},
-            }
-            if execution_mode:
-                query["execution_mode"] = execution_mode
-            cursor = lifecycle.find(query, {"_id": 0}).sort("closed_at", -1)
-            if limit is not None:
-                cursor = cursor.limit(max(0, limit))
-            return list(cursor)
+            return list(
+                lifecycle.find(
+                    {
+                        "closed_at": {"$gte": start, "$lt": end},
+                        "pnl": {"$exists": True},
+                    },
+                    {"_id": 0},
+                )
+                .sort("closed_at", -1)
+                .limit(max(0, limit))
+            )
         except Exception as exc:
             if getattr(self, "read_only", False):
                 logger.warning("Error reading recently closed trades: %s", exc)
