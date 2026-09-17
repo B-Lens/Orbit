@@ -1,12 +1,13 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from orbit.core.reporting import IST
+from orbit.core.reporting import IST, report_metrics
 
 import pytest
 from fastapi import HTTPException
 
 from orbit.api import (
+    _report_accounting,
     _closed_trades_between,
     _closed_trade_response,
     _recent_sentiment_history,
@@ -130,6 +131,7 @@ def test_closed_trades_are_read_for_the_requested_calendar_range(
     )
 
 
+@patch.dict("os.environ", {"BINANCE_TESTNET_API_KEY": "", "BINANCE_TESTNET_SECRET_KEY": ""})
 @patch("orbit.api._command_center_mongo_handler")
 def test_daily_report_uses_one_midnight_to_midnight_ist_window(
     mongo_handler: MagicMock,
@@ -160,6 +162,106 @@ def test_daily_report_uses_one_midnight_to_midnight_ist_window(
     mongo.get_active_trade_decisions.assert_called_once_with(end, "testnet")
 
 
+@patch.dict("os.environ", {
+    "BINANCE_TESTNET_API_KEY": "test-key",
+    "BINANCE_TESTNET_SECRET_KEY": "test-secret",
+})
+@patch("orbit.api.UMFutures")
+def test_report_accounting_uses_exchange_income_and_cutoff_wallet(
+    futures_cls: MagicMock,
+) -> None:
+    end = datetime.now(IST) - timedelta(days=1)
+    start = end - timedelta(days=1)
+    client = futures_cls.return_value
+    client.account.return_value = {
+        "totalWalletBalance": "1100",
+        "assets": [
+            {"asset": "USDT", "walletBalance": "1000"},
+            {"asset": "BNB", "walletBalance": "100"},
+        ],
+    }
+    daily = [{
+        "tranId": 1, "time": int(start.timestamp() * 1000) + 1000,
+        "asset": "USDT", "incomeType": "REALIZED_PNL", "income": "30",
+    }]
+    subsequent = [{
+        "tranId": 2, "time": int(end.timestamp() * 1000) + 1000,
+        "asset": "USDT", "incomeType": "REALIZED_PNL", "income": "20",
+    }]
+    client.get_income_history.side_effect = [daily, subsequent]
+
+    income, equity, source = _report_accounting(start, end, [])
+
+    assert income == daily
+    assert equity == 980.0
+    assert source == "Binance Testnet income history"
+    assert report_metrics(income, equity)["opening_equity"] == 950.0
+    client.session.close.assert_called_once_with()
+
+
+@patch.dict("os.environ", {
+    "BINANCE_TESTNET_API_KEY": "test-key",
+    "BINANCE_TESTNET_SECRET_KEY": "test-secret",
+})
+@patch("orbit.api.UMFutures")
+def test_report_accounting_does_not_use_mixed_asset_income(
+    futures_cls: MagicMock,
+) -> None:
+    end = datetime.now(IST) - timedelta(days=1)
+    stored = [{"income": "2"}]
+    futures_cls.return_value.get_income_history.return_value = [{
+        "asset": "BNB", "income": "1", "time": int(end.timestamp() * 1000) - 1
+    }]
+
+    assert _report_accounting(end - timedelta(days=1), end, stored) == (
+        stored, None, "recorded MongoDB USDT income ledger (completeness unverified)"
+    )
+
+
+@patch.dict("os.environ", {"BINANCE_TESTNET_API_KEY": "", "BINANCE_TESTNET_SECRET_KEY": ""})
+def test_unverified_report_does_not_sum_non_usdt_currency_as_usdt() -> None:
+    end = datetime.now(IST) - timedelta(days=1)
+    stored = [
+        {"asset": "BNB", "income": "2"},
+        {"asset": "USDT", "income": "3"},
+    ]
+
+    income, equity, _source = _report_accounting(end - timedelta(days=1), end, stored)
+
+    assert income == [stored[1]]
+    assert equity is None
+
+
+@patch.dict("os.environ", {"BINANCE_TESTNET_API_KEY": "", "BINANCE_TESTNET_SECRET_KEY": ""})
+@patch("orbit.api._command_center_mongo_handler")
+def test_daily_report_uses_archived_verified_wallet_when_exchange_is_unavailable(
+    mongo_handler: MagicMock,
+) -> None:
+    mongo = mongo_handler.return_value
+    mongo.get_trade_decisions.return_value = []
+    mongo.get_income_records.return_value = []
+    mongo.get_active_trade_decisions.return_value = []
+    mongo.get_report_accounting.return_value = {
+        "source": "binance_testnet_income_and_usdt_wallet",
+        "closing_wallet_balance": 1020.0,
+        "income_records": [{
+            "asset": "USDT", "incomeType": "REALIZED_PNL",
+            "income": "20", "time": 1,
+        }],
+    }
+
+    response = get_daily_report(date(2026, 9, 11))
+
+    assert response.metrics["income_verified"] is True
+    assert response.metrics["equity_value"] == 1020.0
+    assert response.metrics["closing_wallet_balance"] == 1020.0
+    assert response.metrics["opening_equity"] == 1000.0
+    assert response.metrics["trading_return_pct"] == 2.0
+    assert "archived verified Binance Testnet accounting" in response.body
+    mongo.get_report_accounting.assert_called_once()
+
+
+@patch.dict("os.environ", {"BINANCE_TESTNET_API_KEY": "", "BINANCE_TESTNET_SECRET_KEY": ""})
 @patch("orbit.api._command_center_mongo_handler")
 def test_weekly_report_uses_saturday_to_saturday_midnight_ist_window(
     mongo_handler: MagicMock,

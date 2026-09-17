@@ -62,6 +62,35 @@ def test_get_trade_exit_returns_immutable_lifecycle_record() -> None:
     )
 
 
+def test_report_accounting_stores_and_reads_cutoff_wallet_with_income() -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.report_accounting_collection = MagicMock()
+    start = datetime(2026, 9, 12, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    income = [{"asset": "USDT", "income": "5", "time": 1}]
+
+    assert handler.store_report_accounting(
+        "daily", start, end, "testnet", 1005.0, income
+    )
+    identity, record = handler.report_accounting_collection.replace_one.call_args.args
+    assert identity == {
+        "report_type": "daily", "period_start": start, "execution_mode": "testnet"
+    }
+    assert record["period_end"] == end
+    assert record["closing_wallet_balance"] == 1005.0
+    assert record["income_records"] == income
+    assert record["source"] == "binance_testnet_income_and_usdt_wallet"
+    handler.report_accounting_collection.replace_one.assert_called_once_with(
+        identity, record, upsert=True
+    )
+
+    handler.report_accounting_collection.find_one.return_value = record
+    assert handler.get_report_accounting("daily", start, end, "testnet") == record
+    handler.report_accounting_collection.find_one.assert_called_once_with(
+        {**identity, "period_end": end}, {"_id": 0}
+    )
+
+
 def test_get_closed_trades_between_uses_lifecycle_close_time() -> None:
     handler = MongoHandler.__new__(MongoHandler)
     handler.trade_lifecycle_collection = MagicMock()

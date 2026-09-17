@@ -92,6 +92,7 @@ class MongoHandler(ExceptionManager):
             self.trade_lifecycle_collection = self.db["trade_lifecycle"]
             self.trade_metrics_collection = self.db["trade_metrics"]
             self.income_collection = self.db["futures_income"]
+            self.report_accounting_collection = self.db["report_accounting"]
             self.sentiment_history_collection = self._mongo_client[
                 "crypto_sentiment"
             ]["sentiment_history"]
@@ -135,6 +136,14 @@ class MongoHandler(ExceptionManager):
             )
             self.income_collection.create_index(
                 [("execution_mode", ASCENDING), ("time", ASCENDING)]
+            )
+            self.report_accounting_collection.create_index(
+                [
+                    ("execution_mode", ASCENDING),
+                    ("report_type", ASCENDING),
+                    ("period_start", ASCENDING),
+                ],
+                unique=True,
             )
         except Exception as exc:
             logger.exception(f"Error initializing MongoDB: {exc}")
@@ -865,6 +874,55 @@ class MongoHandler(ExceptionManager):
         except Exception as exc:
             self.handle_exception(exc, "Error reading futures income records")
             return []
+
+    def get_report_accounting(
+        self, report_type: str, start: datetime, end: datetime,
+        execution_mode: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Read an exchange-verified period wallet and its exact income rows."""
+        collection = getattr(self, "report_accounting_collection", None)
+        if collection is None:
+            return None
+        query = {
+            "report_type": report_type,
+            "period_start": start,
+            "period_end": end,
+            "execution_mode": execution_mode,
+        }
+        try:
+            return collection.find_one(query, {"_id": 0})
+        except Exception as exc:
+            self.handle_exception(exc, "Error reading report accounting snapshot")
+            return None
+
+    def store_report_accounting(
+        self, report_type: str, start: datetime, end: datetime,
+        execution_mode: str, closing_wallet_balance: float,
+        income_records: List[Dict[str, Any]],
+    ) -> bool:
+        """Archive a verified cutoff balance with the income used to derive it."""
+        collection = getattr(self, "report_accounting_collection", None)
+        if collection is None:
+            return False
+        identity = {
+            "report_type": report_type,
+            "period_start": start,
+            "execution_mode": execution_mode,
+        }
+        record = {
+            **identity,
+            "period_end": end,
+            "closing_wallet_balance": closing_wallet_balance,
+            "income_records": income_records,
+            "source": "binance_testnet_income_and_usdt_wallet",
+            "verified_at": datetime.now(timezone.utc),
+        }
+        try:
+            result = collection.replace_one(identity, record, upsert=True)
+            return bool(result.acknowledged)
+        except Exception as exc:
+            self.handle_exception(exc, "Error storing report accounting snapshot")
+            return False
 
     def store_income_records(
         self, records: List[Dict[str, Any]], execution_mode: str = "unknown"

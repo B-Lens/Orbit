@@ -59,15 +59,24 @@ Sentiment-conflict rejections are stored only in this ledger. Orbit does not
 create separate `contradict_trades` or `simulated_trades` collections: those
 copies duplicated decision data and did not represent executed positions.
 
-## MongoDB-backed reports
+## Daily and weekly reports
 
 The `/daily` and `/weekly` dashboard reports read Testnet decisions, execution
-events, active lifecycle evidence, and income exclusively from MongoDB. Report
-requests do not call Binance and Orbit no longer starts a GitHub report publisher.
-Income rows remain filtered by execution mode so live and Testnet performance are
-never blended. Historical wallet equity is shown as unavailable until an audited
-MongoDB balance-snapshot ledger exists; period income alone is not used to invent
-an opening or closing balance.
+events, and active lifecycle evidence from MongoDB. For periods ending within
+the last 30 days, the API reads Testnet income and the USDT wallet entry from
+the current Binance account response when Testnet credentials are configured.
+It reconstructs the period-end USDT balance by subtracting subsequent USDT
+income, then derives opening balance and percentages. It rejects missing USDT
+wallet entries, non-USDT income, and income that changes during the account
+snapshot. `PerformanceReporterThread` archives verified daily and completed
+weekly periods in MongoDB `report_accounting`, with the closing USDT wallet
+balance and exact exchange income rows used to calculate it. It refreshes the
+last 30 completed IST days and weeks within that range when it starts and once
+per day. Report requests remain read-only. If direct exchange verification is
+unavailable, the API uses a verified archive when present. Otherwise it uses
+the stored Testnet income ledger, labels its completeness unverified, and
+leaves historical equity and percentages unavailable. Live and Testnet
+records remain separate.
 
 ## Performance accounting
 
@@ -75,8 +84,10 @@ MongoDB collection `futures_income` upserts exchange income rows by transaction
 and income type. The daily report calculates:
 
 ```text
-net P&L = realized P&L + commission + funding fees + other income
-return % = net P&L / opening equity * 100
+trading net P&L = realized P&L + commission + funding fees
+wallet change = trading net P&L + transfers + other income
+trading return % = trading net P&L / opening USDT wallet * 100
+wallet change % = wallet change / opening USDT wallet * 100
 ```
 
 Daily reports distinguish closed-lifecycle net P&L from period account income.
@@ -91,31 +102,34 @@ run midnight to midnight; weeks run Saturday 00:00 to the following Saturday
 The publisher switches days at IST midnight. Existing published UTC reports
 retain their old evidence until explicitly regenerated.
 
-Daily and weekly pages prominently show Net P&L, closing wallet equity, equity
-change %, and maximum drawdown. Details include opening equity, realized P&L,
-commissions, funding, other income, and drawdown %. Equity excludes unrealized
-P&L. Drawdown measures the largest peak-to-trough wallet-income decline within
-the selected period, grouping income with identical exchange timestamps;
-percentage drawdown uses the corresponding wallet peak. Transfers affect the
-wallet change and are disclosed as other income.
+Daily and weekly pages show account trading net P&L, the closing USDT wallet,
+trading return, wallet change, and realized trading drawdown. Details include
+opening USDT wallet, realized P&L, commissions, funding, transfers, other
+income, wallet change %, and drawdown %. The wallet balance and settled trading
+drawdown exclude unrealized position P&L. Drawdown groups trading income with
+identical exchange timestamps; percentage drawdown uses the corresponding
+wallet peak with external cash flows excluded from its path. Transfers affect
+wallet change but not trading net P&L or trading drawdown. These are account
+figures, so activity outside Orbit in the same Testnet account can contribute.
 
-Dashboard report accounting reads the Testnet exchange income and account APIs
-and reconstructs the historical cutoff balance using the same routine as the
-GitHub publisher. The API service needs `BINANCE_TESTNET_API_KEY` and
-`BINANCE_TESTNET_SECRET_KEY`; it does not publish reports or write accounting
-rows. If complete accounting cannot be obtained, the page reports unavailable
-instead of showing missing equity as zero. Closed-trade Net P&L is the sum of
-the displayed lifecycle records; the panel identifies the 250-row display cap.
+The API service needs `BINANCE_TESTNET_API_KEY` and
+`BINANCE_TESTNET_SECRET_KEY` to verify recent historical balances. Binance
+income history is limited to the last three months; Orbit limits its direct
+reconstruction to 30 days to keep report requests bounded. Archived verified
+periods remain available after this window; periods that were never archived
+cannot gain a historical wallet balance from trade records alone. Closed-trade
+Net P&L is the sum of the displayed lifecycle records; the panel identifies
+the 250-row display cap.
 
 Binance represents commissions and paid funding as negative income, so they are
 added rather than subtracted a second time. `PerformanceReporterThread` syncs and
 reports the last 24 hours when Orbit starts and every 24 hours thereafter.
 
-The operational MongoDB footprint is deliberately limited to `OHLCVData`,
-`trade_decisions`, and `futures_income`. The market-intelligence workflow also
-retains `sentiment_history` because its rolling 24-hour score is an input to the
-current signal filter. Removing any of these collections would change trading,
-risk, or reporting behavior rather than merely removing archival data.
+Reporting uses `trade_decisions`, `futures_income`, and `report_accounting`.
+The verified accounting documents retain period income and closing wallet
+balance together, so later income-ledger gaps cannot silently change a saved
+report. The market-intelligence workflow also retains `sentiment_history`
+because its rolling 24-hour score is an input to the current signal filter.
 
 On Saturday IST, the Testnet reporter also publishes an idempotent report for the
 completed Saturday-through-Friday week. It distinguishes accepted signals,

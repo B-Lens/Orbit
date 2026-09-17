@@ -1,6 +1,7 @@
 """Shared IST calendar and wallet-income performance calculations."""
 
 from datetime import date, datetime, time, timedelta, timezone
+from math import isfinite
 from typing import Any, Iterable, Mapping, Optional
 
 from orbit.core.performance import PerformanceTracker
@@ -18,11 +19,23 @@ def report_metrics(
 ) -> dict[str, Any]:
     records = sorted(income, key=lambda row: int(row.get("time", 0) or 0))
     summary = PerformanceTracker.summarize(dict(row) for row in records)
-    opening = cutoff_equity - summary.net_pnl if cutoff_equity is not None else None
-    # Income at one exchange timestamp is one balance change; order within a
+    transfers = sum(
+        float(row.get("income", 0) or 0)
+        for row in records
+        if str(row.get("incomeType", "")).upper() == "TRANSFER"
+    )
+    other_income = summary.other_income - transfers
+    trading_pnl = summary.realized_pnl + summary.commission + summary.funding
+    wallet_change = summary.net_pnl
+    opening = cutoff_equity - wallet_change if cutoff_equity is not None else None
+    # Income at one exchange timestamp is one trading result; order within a
     # millisecond must not manufacture a temporary peak or trough.
     changes: dict[int, float] = {}
     for row in records:
+        if str(row.get("incomeType", "")).upper() not in {
+            "REALIZED_PNL", "COMMISSION", "FUNDING_FEE"
+        }:
+            continue
         stamp = int(row.get("time", 0) or 0)
         changes[stamp] = changes.get(stamp, 0.0) + float(row.get("income", 0) or 0)
     balance = peak = opening if opening is not None else 0.0
@@ -35,9 +48,16 @@ def report_metrics(
             drawdown_pct = max(drawdown_pct, (peak - balance) / peak * 100)
     return {
         **summary.to_dict(),
+        "net_pnl": trading_pnl,
+        "other_income": other_income,
+        "transfers": transfers,
+        "wallet_change": wallet_change,
+        "return_pct": trading_pnl / opening * 100 if opening and opening > 0 else None,
         "opening_equity": opening,
         "equity_value": cutoff_equity,
-        "equity_change_pct": summary.net_pnl / opening * 100 if opening and opening > 0 else None,
+        "closing_wallet_balance": cutoff_equity,
+        "equity_change_pct": wallet_change / opening * 100 if opening and opening > 0 else None,
+        "trading_return_pct": trading_pnl / opening * 100 if opening and opening > 0 else None,
         "max_drawdown": drawdown,
         "max_drawdown_pct": drawdown_pct if opening is not None and opening > 0 else None,
     }
@@ -45,13 +65,31 @@ def report_metrics(
 
 def reconstruct_equity(tracker: PerformanceTracker, end: datetime, attempts: int = 3) -> float:
     """Reconstruct cutoff wallet balance using a snapshot with no crossing income."""
+    wallet_balance, subsequent = snapshot_usdt_income(tracker, end, attempts)
+    return wallet_balance - sum(float(row["income"]) for row in subsequent)
+
+
+def snapshot_usdt_income(
+    tracker: PerformanceTracker, start: datetime, attempts: int = 3
+) -> tuple[float, list[dict[str, Any]]]:
+    """Read a USDT wallet and complete subsequent income without a snapshot race."""
     for _ in range(attempts):
         before = int(tracker.utc_now().timestamp() * 1000)
         account = tracker.futures_client.account()
+        usdt_assets = [
+            asset for asset in account["assets"] if asset.get("asset") == "USDT"
+        ]
+        if len(usdt_assets) != 1:
+            raise ValueError("Expected one USDT wallet balance in account snapshot")
+        wallet_balance = float(usdt_assets[0]["walletBalance"])
+        if not isfinite(wallet_balance):
+            raise ValueError("USDT wallet balance is not finite")
         after = int(tracker.utc_now().timestamp() * 1000)
-        subsequent = tracker.sync_window(int(end.timestamp() * 1000), after + 1)
+        tracker.sync_window(int(start.timestamp() * 1000), after + 1)
+        if any(row.get("asset") != "USDT" for row in tracker.last_records):
+            raise ValueError("Non-USDT income cannot reconstruct a USDT wallet balance")
         if not any(before <= int(row.get("time", 0) or 0) <= after for row in tracker.last_records):
-            return float(account["totalWalletBalance"]) - subsequent.net_pnl
+            return wallet_balance, tracker.last_records
     raise RuntimeError("Account income changed during every snapshot; refusing to publish inconsistent equity")
 
 
@@ -60,26 +98,35 @@ def performance_lines(metrics: Mapping[str, Any]) -> list[str]:
         number = metrics[key]
         return "Unavailable" if number is None else f"{number:.8f} {unit}"
 
-    return [
+    lines = [
         "## Account performance", "",
-        f"- Net P&L: **{value('net_pnl', 'USDT')}**",
-        f"- Equity value: **{value('equity_value', 'USDT')}**",
-        f"- Opening equity: **{value('opening_equity', 'USDT')}**",
-        f"- Equity change %: **{value('equity_change_pct', '%')}**",
-        f"- Max drawdown: **{value('max_drawdown', 'USDT')}**",
-        f"- Max drawdown %: **{value('max_drawdown_pct', '%')}**", "",
-        "### Net P&L breakdown", "",
+        f"- Trading net P&L: **{value('net_pnl', 'USDT')}**",
+        f"- Closing USDT wallet: **{value('equity_value', 'USDT')}**",
+        f"- Opening USDT wallet: **{value('opening_equity', 'USDT')}**",
+        f"- Trading return %: **{value('trading_return_pct', '%')}**",
+        f"- Wallet change: **{value('wallet_change', 'USDT')}**",
+        f"- Wallet change %: **{value('equity_change_pct', '%')}**",
+        f"- Realized trading drawdown: **{value('max_drawdown', 'USDT')}**",
+        f"- Realized trading drawdown %: **{value('max_drawdown_pct', '%')}**", "",
+        "### Wallet change breakdown", "",
         f"- Realized P&L: **{value('realized_pnl', 'USDT')}**",
         f"- Commission: **{value('commission', 'USDT')}**",
         f"- Funding: **{value('funding', 'USDT')}**",
+        f"- Transfers: **{value('transfers', 'USDT')}**",
         f"- Other income: **{value('other_income', 'USDT')}**", "",
-        "Equity is wallet balance at the period end, excluding unrealized P&L. "
-        "Net P&L = realized P&L + commission + funding + other income. "
-        "Equity change = net income / opening wallet balance × 100. "
-        "Max drawdown is the largest peak-to-trough wallet-income decline within "
-        "this period; it excludes unrealized position fluctuations. Transfers in "
-        "other income affect these wallet-change figures.", "",
+        "Trading net P&L = realized P&L + commission + funding. "
+        "Wallet change also includes transfers and other income. "
+        "Trading return uses opening USDT wallet balance; wallet change % includes "
+        "transfers. Realized trading drawdown follows the trading income ledger "
+        "within this period and excludes unrealized position fluctuations. "
+        "Amounts cover USDT income only; other asset flows are excluded.", "",
     ]
+    if metrics["equity_value"] is None:
+        lines.extend([
+            "Historical wallet balance could not be verified for this cutoff; "
+            "equity and percentage figures are unavailable.", "",
+        ])
+    return lines
 
 
 def _in_window(value: Any, start: datetime, end: datetime) -> bool:
@@ -111,6 +158,7 @@ def _report_body(
     income_records: Iterable[Mapping[str, Any]],
     cutoff_equity: Optional[float],
     active_trades: Iterable[Mapping[str, Any]] = (),
+    income_source: str = "recorded MongoDB income ledger (completeness unverified)",
 ) -> str:
     rows = list(decisions)
     income = [dict(row) for row in income_records]
@@ -134,7 +182,7 @@ def _report_body(
     lines = [
         f"# Orbit Testnet {report_type} report — {label}",
         "",
-        "> Generated only from MongoDB decision, execution-event, and income ledgers.",
+        f"> Decisions and execution events: MongoDB ledger. Account income: {income_source}.",
         "",
         f"> Reporting window: **{start.isoformat()} ≤ event time < {end.isoformat()}** "
         "(IST, end exclusive).",
@@ -181,12 +229,13 @@ def build_report_body(
     cutoff_equity: Optional[float] = None,
     *,
     include_automation_task: bool = False,
+    income_source: str = "recorded MongoDB income ledger (completeness unverified)",
 ) -> str:
     del include_automation_task
     start, end = report_window(report_date)
     return _report_body(
         "daily", report_date.isoformat(), start, end, decisions, income_records,
-        cutoff_equity, active_trades,
+        cutoff_equity, active_trades, income_source,
     )
 
 
@@ -195,9 +244,12 @@ def build_weekly_report_body(
     decisions: Iterable[Mapping[str, Any]],
     income_records: Iterable[Mapping[str, Any]],
     cutoff_equity: Optional[float] = None,
+    *,
+    income_source: str = "recorded MongoDB income ledger (completeness unverified)",
 ) -> str:
     start, end = report_window(week_start, 7)
     label = f"{week_start.isoformat()} to {(week_start + timedelta(days=6)).isoformat()}"
     return _report_body(
-        "weekly", label, start, end, decisions, income_records, cutoff_equity
+        "weekly", label, start, end, decisions, income_records, cutoff_equity,
+        income_source=income_source,
     )
