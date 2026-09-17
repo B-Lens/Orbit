@@ -59,15 +59,18 @@ Sentiment-conflict rejections are stored only in this ledger. Orbit does not
 create separate `contradict_trades` or `simulated_trades` collections: those
 copies duplicated decision data and did not represent executed positions.
 
-## MongoDB-backed reports
+## Daily and weekly reports
 
 The `/daily` and `/weekly` dashboard reports read Testnet decisions, execution
-events, active lifecycle evidence, and income exclusively from MongoDB. Report
-requests do not call Binance and Orbit no longer starts a GitHub report publisher.
-Income rows remain filtered by execution mode so live and Testnet performance are
-never blended. Historical wallet equity is shown as unavailable until an audited
-MongoDB balance-snapshot ledger exists; period income alone is not used to invent
-an opening or closing balance.
+events, and active lifecycle evidence from MongoDB. For periods ending within
+the last 30 days, the API reads Testnet income and a current wallet balance from
+Binance when Testnet credentials are configured. It reconstructs the period-end
+balance by subtracting subsequent exchange income, then derives opening balance
+and percentages. It rejects multi-asset accounts, non-USDT income, and income
+that changes during the account snapshot. Requests do not write accounting rows.
+When exchange verification is unavailable, the report uses the stored MongoDB
+Testnet income ledger, labels its completeness unverified, and leaves historical
+equity and percentages unavailable. Live and Testnet records remain separate.
 
 ## Performance accounting
 
@@ -99,12 +102,10 @@ the selected period, grouping income with identical exchange timestamps;
 percentage drawdown uses the corresponding wallet peak. Transfers affect the
 wallet change and are disclosed as other income.
 
-Dashboard report accounting reads the Testnet exchange income and account APIs
-and reconstructs the historical cutoff balance using the same routine as the
-GitHub publisher. The API service needs `BINANCE_TESTNET_API_KEY` and
-`BINANCE_TESTNET_SECRET_KEY`; it does not publish reports or write accounting
-rows. If complete accounting cannot be obtained, the page reports unavailable
-instead of showing missing equity as zero. Closed-trade Net P&L is the sum of
+The API service needs `BINANCE_TESTNET_API_KEY` and
+`BINANCE_TESTNET_SECRET_KEY` to verify recent historical balances. Binance
+income history is limited to the last three months; Orbit limits its direct
+reconstruction to 30 days to keep report requests bounded. Closed-trade Net P&L is the sum of
 the displayed lifecycle records; the panel identifies the 250-row display cap.
 
 Binance represents commissions and paid funding as negative income, so they are

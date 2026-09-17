@@ -48,8 +48,12 @@ def reconstruct_equity(tracker: PerformanceTracker, end: datetime, attempts: int
     for _ in range(attempts):
         before = int(tracker.utc_now().timestamp() * 1000)
         account = tracker.futures_client.account()
+        if account.get("multiAssetsMargin") is not False:
+            raise ValueError("USDT wallet balance requires verified single-asset mode")
         after = int(tracker.utc_now().timestamp() * 1000)
         subsequent = tracker.sync_window(int(end.timestamp() * 1000), after + 1)
+        if any(row.get("asset") != "USDT" for row in tracker.last_records):
+            raise ValueError("Non-USDT income cannot reconstruct a USDT wallet balance")
         if not any(before <= int(row.get("time", 0) or 0) <= after for row in tracker.last_records):
             return float(account["totalWalletBalance"]) - subsequent.net_pnl
     raise RuntimeError("Account income changed during every snapshot; refusing to publish inconsistent equity")
@@ -60,7 +64,7 @@ def performance_lines(metrics: Mapping[str, Any]) -> list[str]:
         number = metrics[key]
         return "Unavailable" if number is None else f"{number:.8f} {unit}"
 
-    return [
+    lines = [
         "## Account performance", "",
         f"- Net P&L: **{value('net_pnl', 'USDT')}**",
         f"- Equity value: **{value('equity_value', 'USDT')}**",
@@ -80,6 +84,12 @@ def performance_lines(metrics: Mapping[str, Any]) -> list[str]:
         "this period; it excludes unrealized position fluctuations. Transfers in "
         "other income affect these wallet-change figures.", "",
     ]
+    if metrics["equity_value"] is None:
+        lines.extend([
+            "Historical wallet balance could not be verified for this cutoff; "
+            "equity and percentage figures are unavailable.", "",
+        ])
+    return lines
 
 
 def _in_window(value: Any, start: datetime, end: datetime) -> bool:
@@ -111,6 +121,7 @@ def _report_body(
     income_records: Iterable[Mapping[str, Any]],
     cutoff_equity: Optional[float],
     active_trades: Iterable[Mapping[str, Any]] = (),
+    income_source: str = "recorded MongoDB income ledger (completeness unverified)",
 ) -> str:
     rows = list(decisions)
     income = [dict(row) for row in income_records]
@@ -134,7 +145,7 @@ def _report_body(
     lines = [
         f"# Orbit Testnet {report_type} report — {label}",
         "",
-        "> Generated only from MongoDB decision, execution-event, and income ledgers.",
+        f"> Decisions and execution events: MongoDB ledger. Account income: {income_source}.",
         "",
         f"> Reporting window: **{start.isoformat()} ≤ event time < {end.isoformat()}** "
         "(IST, end exclusive).",
@@ -181,12 +192,13 @@ def build_report_body(
     cutoff_equity: Optional[float] = None,
     *,
     include_automation_task: bool = False,
+    income_source: str = "recorded MongoDB income ledger (completeness unverified)",
 ) -> str:
     del include_automation_task
     start, end = report_window(report_date)
     return _report_body(
         "daily", report_date.isoformat(), start, end, decisions, income_records,
-        cutoff_equity, active_trades,
+        cutoff_equity, active_trades, income_source,
     )
 
 
@@ -195,9 +207,12 @@ def build_weekly_report_body(
     decisions: Iterable[Mapping[str, Any]],
     income_records: Iterable[Mapping[str, Any]],
     cutoff_equity: Optional[float] = None,
+    *,
+    income_source: str = "recorded MongoDB income ledger (completeness unverified)",
 ) -> str:
     start, end = report_window(week_start, 7)
     label = f"{week_start.isoformat()} to {(week_start + timedelta(days=6)).isoformat()}"
     return _report_body(
-        "weekly", label, start, end, decisions, income_records, cutoff_equity
+        "weekly", label, start, end, decisions, income_records, cutoff_equity,
+        income_source=income_source,
     )

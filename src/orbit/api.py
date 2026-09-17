@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import redis
+from binance.um_futures import UMFutures
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,7 +23,9 @@ from orbit.core.command_center import (
     read_sentiment_history,
 )
 from orbit.core.execution import ExecutionSettings
+from orbit.core.execution import FUTURES_TESTNET_URL
 from orbit.core.mongo_handler import MongoHandler
+from orbit.core.performance import PerformanceTracker
 from orbit.core.redis_manager import runtime_heartbeat_key
 from orbit.core.notification_feed import list_notifications
 from orbit.core.reporting import (
@@ -31,6 +34,7 @@ from orbit.core.reporting import (
     build_weekly_report_body,
     report_metrics,
     report_window,
+    reconstruct_equity,
 )
 
 logger = logging.getLogger("Orbit")
@@ -422,6 +426,37 @@ def get_notifications(limit: int = 100) -> NotificationFeedResponse:
         ) from exc
 
 
+def _report_accounting(
+    start: datetime, end: datetime, stored_income: List[Dict[str, Any]]
+) -> tuple[List[Dict[str, Any]], Optional[float], str]:
+    """Use exchange income and a race-checked wallet snapshot when available."""
+    key = os.getenv("BINANCE_TESTNET_API_KEY")
+    secret = os.getenv("BINANCE_TESTNET_SECRET_KEY")
+    if not key or not secret or end < datetime.now(IST) - timedelta(days=30):
+        return stored_income, None, "recorded MongoDB income ledger (completeness unverified)"
+
+    client: Optional[UMFutures] = None
+    try:
+        client = UMFutures(
+            key=key, secret=secret,
+            base_url=os.getenv("BINANCE_FUTURES_TESTNET_URL", FUTURES_TESTNET_URL),
+            timeout=5,
+        )
+        tracker = PerformanceTracker(client)
+        tracker.sync_window(int(start.timestamp() * 1000), int(end.timestamp() * 1000))
+        income = tracker.last_records
+        if any(row.get("asset") != "USDT" for row in income):
+            raise ValueError("Report income contains non-USDT assets")
+        equity = reconstruct_equity(tracker, end)
+        return income, equity, "Binance Testnet income history"
+    except Exception as exc:
+        logger.warning("Unable to verify report equity against Binance Testnet: %s", exc)
+        return stored_income, None, "recorded MongoDB income ledger (completeness unverified)"
+    finally:
+        if client is not None:
+            client.session.close()
+
+
 @app.get("/api/reports/daily", response_model=ReportResponse)
 def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
     """Build the dashboard view for one completed IST calendar day."""
@@ -437,7 +472,7 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
     income = mongo.get_income_records(
         int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
     )
-    equity = None
+    income, equity, income_source = _report_accounting(start, end, income)
     active_trades = mongo.get_active_trade_decisions(end, "testnet")
     return ReportResponse(
         report_type="daily",
@@ -452,6 +487,7 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
             active_trades,
             equity,
             include_automation_task=False,
+            income_source=income_source,
         ),
     )
 
@@ -474,14 +510,16 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
     income = mongo.get_income_records(
         int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
     )
-    equity = None
+    income, equity, income_source = _report_accounting(start, end, income)
     return ReportResponse(
         report_type="weekly",
         period_start=start.isoformat(),
         period_end=end.isoformat(),
         timezone="IST",
         metrics=report_metrics(income, equity),
-        body=build_weekly_report_body(selected_start, decisions, income, equity),
+        body=build_weekly_report_body(
+            selected_start, decisions, income, equity, income_source=income_source
+        ),
     )
 
 
