@@ -628,6 +628,10 @@ class BinanceAutomation(ExceptionManager):
                     reporter.report_last_24_hours()
                 except Exception as exc:
                     self.handle_exception(exc, "Exception in performance reporter")
+                try:
+                    reporter.archive_recent_reports()
+                except Exception as exc:
+                    self.handle_exception(exc, "Exception archiving report accounting")
             time.sleep(interval_seconds)
 
     # ------------------------------------------------------------------

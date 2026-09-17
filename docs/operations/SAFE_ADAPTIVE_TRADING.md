@@ -68,10 +68,15 @@ the current Binance account response when Testnet credentials are configured.
 It reconstructs the period-end USDT balance by subtracting subsequent USDT
 income, then derives opening balance and percentages. It rejects missing USDT
 wallet entries, non-USDT income, and income that changes during the account
-snapshot. Requests do not write accounting rows.
-When exchange verification is unavailable, the report uses the stored MongoDB
-Testnet income ledger, labels its completeness unverified, and leaves historical
-equity and percentages unavailable. Live and Testnet records remain separate.
+snapshot. `PerformanceReporterThread` archives verified daily and completed
+weekly periods in MongoDB `report_accounting`, with the closing USDT wallet
+balance and exact exchange income rows used to calculate it. It refreshes the
+last 30 completed IST days and weeks within that range when it starts and once
+per day. Report requests remain read-only. If direct exchange verification is
+unavailable, the API uses a verified archive when present. Otherwise it uses
+the stored Testnet income ledger, labels its completeness unverified, and
+leaves historical equity and percentages unavailable. Live and Testnet
+records remain separate.
 
 ## Performance accounting
 
@@ -110,18 +115,21 @@ figures, so activity outside Orbit in the same Testnet account can contribute.
 The API service needs `BINANCE_TESTNET_API_KEY` and
 `BINANCE_TESTNET_SECRET_KEY` to verify recent historical balances. Binance
 income history is limited to the last three months; Orbit limits its direct
-reconstruction to 30 days to keep report requests bounded. Closed-trade Net P&L is the sum of
-the displayed lifecycle records; the panel identifies the 250-row display cap.
+reconstruction to 30 days to keep report requests bounded. Archived verified
+periods remain available after this window; periods that were never archived
+cannot gain a historical wallet balance from trade records alone. Closed-trade
+Net P&L is the sum of the displayed lifecycle records; the panel identifies
+the 250-row display cap.
 
 Binance represents commissions and paid funding as negative income, so they are
 added rather than subtracted a second time. `PerformanceReporterThread` syncs and
 reports the last 24 hours when Orbit starts and every 24 hours thereafter.
 
-The operational MongoDB footprint is deliberately limited to `OHLCVData`,
-`trade_decisions`, and `futures_income`. The market-intelligence workflow also
-retains `sentiment_history` because its rolling 24-hour score is an input to the
-current signal filter. Removing any of these collections would change trading,
-risk, or reporting behavior rather than merely removing archival data.
+Reporting uses `trade_decisions`, `futures_income`, and `report_accounting`.
+The verified accounting documents retain period income and closing wallet
+balance together, so later income-ledger gaps cannot silently change a saved
+report. The market-intelligence workflow also retains `sentiment_history`
+because its rolling 24-hour score is an input to the current signal filter.
 
 On Saturday IST, the Testnet reporter also publishes an idempotent report for the
 completed Saturday-through-Friday week. It distinguishes accepted signals,

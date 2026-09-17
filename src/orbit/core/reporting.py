@@ -55,6 +55,7 @@ def report_metrics(
         "return_pct": trading_pnl / opening * 100 if opening and opening > 0 else None,
         "opening_equity": opening,
         "equity_value": cutoff_equity,
+        "closing_wallet_balance": cutoff_equity,
         "equity_change_pct": wallet_change / opening * 100 if opening and opening > 0 else None,
         "trading_return_pct": trading_pnl / opening * 100 if opening and opening > 0 else None,
         "max_drawdown": drawdown,
@@ -64,6 +65,14 @@ def report_metrics(
 
 def reconstruct_equity(tracker: PerformanceTracker, end: datetime, attempts: int = 3) -> float:
     """Reconstruct cutoff wallet balance using a snapshot with no crossing income."""
+    wallet_balance, subsequent = snapshot_usdt_income(tracker, end, attempts)
+    return wallet_balance - sum(float(row["income"]) for row in subsequent)
+
+
+def snapshot_usdt_income(
+    tracker: PerformanceTracker, start: datetime, attempts: int = 3
+) -> tuple[float, list[dict[str, Any]]]:
+    """Read a USDT wallet and complete subsequent income without a snapshot race."""
     for _ in range(attempts):
         before = int(tracker.utc_now().timestamp() * 1000)
         account = tracker.futures_client.account()
@@ -76,11 +85,11 @@ def reconstruct_equity(tracker: PerformanceTracker, end: datetime, attempts: int
         if not isfinite(wallet_balance):
             raise ValueError("USDT wallet balance is not finite")
         after = int(tracker.utc_now().timestamp() * 1000)
-        subsequent = tracker.sync_window(int(end.timestamp() * 1000), after + 1)
+        tracker.sync_window(int(start.timestamp() * 1000), after + 1)
         if any(row.get("asset") != "USDT" for row in tracker.last_records):
             raise ValueError("Non-USDT income cannot reconstruct a USDT wallet balance")
         if not any(before <= int(row.get("time", 0) or 0) <= after for row in tracker.last_records):
-            return wallet_balance - subsequent.net_pnl
+            return wallet_balance, tracker.last_records
     raise RuntimeError("Account income changed during every snapshot; refusing to publish inconsistent equity")
 
 

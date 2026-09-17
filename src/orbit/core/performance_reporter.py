@@ -1,11 +1,12 @@
 """Periodic fee-aware performance reporting."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import logging
 from typing import Any
 
 from orbit.core.discord_manager import DiscordManager
 from orbit.core.performance import PerformanceTracker
+from orbit.core.reporting import IST, report_window, snapshot_usdt_income
 
 logger = logging.getLogger("Orbit")
 
@@ -48,3 +49,42 @@ class PerformanceReporter(DiscordManager):
             fields=payload,
         )
         return payload
+
+    def archive_recent_reports(self, today: date | None = None, days: int = 30) -> int:
+        """Persist verified completed IST day and week cutoffs for later reports."""
+        mongo = self.tracker.mongo_handler
+        if mongo is None or self.tracker.execution_mode != "testnet":
+            return 0
+        today = today or datetime.now(IST).date()
+        first_day = today - timedelta(days=days)
+        first_start, _ = report_window(first_day)
+        wallet, income = snapshot_usdt_income(
+            PerformanceTracker(self.client), first_start
+        )
+        archived = 0
+
+        def save(report_type: str, start: datetime, end: datetime) -> None:
+            nonlocal archived
+            start_ms = int(start.timestamp() * 1000)
+            end_ms = int(end.timestamp() * 1000)
+            period_income = [
+                row for row in income if start_ms <= int(row["time"]) < end_ms
+            ]
+            subsequent = sum(
+                float(row["income"])
+                for row in income if int(row["time"]) >= end_ms
+            )
+            if mongo.store_report_accounting(
+                report_type, start, end, "testnet", wallet - subsequent,
+                period_income,
+            ):
+                archived += 1
+
+        for offset in range(days):
+            day = first_day + timedelta(days=offset)
+            start, end = report_window(day)
+            save("daily", start, end)
+            if day.weekday() == 5 and day + timedelta(days=7) <= today:
+                _week_start, week_end = report_window(day, 7)
+                save("weekly", start, week_end)
+        return archived

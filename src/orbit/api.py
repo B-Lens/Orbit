@@ -1,5 +1,6 @@
 import os
 import logging
+from math import isfinite
 from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
@@ -427,16 +428,37 @@ def get_notifications(limit: int = 100) -> NotificationFeedResponse:
 
 
 def _report_accounting(
-    start: datetime, end: datetime, stored_income: List[Dict[str, Any]]
+    start: datetime, end: datetime, stored_income: List[Dict[str, Any]],
+    archived: Optional[Dict[str, Any]] = None,
 ) -> tuple[List[Dict[str, Any]], Optional[float], str]:
     """Use exchange income and a race-checked wallet snapshot when available."""
     stored_usdt_income = [
         row for row in stored_income if row.get("asset", "USDT") == "USDT"
     ]
+
+    def fallback() -> tuple[List[Dict[str, Any]], Optional[float], str]:
+        if isinstance(archived, dict) and archived.get("source") == (
+            "binance_testnet_income_and_usdt_wallet"
+        ):
+            archived_income = archived.get("income_records")
+            try:
+                balance = float(archived["closing_wallet_balance"])
+                if (
+                    isfinite(balance) and isinstance(archived_income, list)
+                    and all(
+                        isinstance(row, dict) and row.get("asset") == "USDT"
+                        for row in archived_income
+                    )
+                ):
+                    return archived_income, balance, "archived verified Binance Testnet accounting"
+            except (KeyError, TypeError, ValueError):
+                pass
+        return stored_usdt_income, None, "recorded MongoDB USDT income ledger (completeness unverified)"
+
     key = os.getenv("BINANCE_TESTNET_API_KEY")
     secret = os.getenv("BINANCE_TESTNET_SECRET_KEY")
     if not key or not secret or end < datetime.now(IST) - timedelta(days=30):
-        return stored_usdt_income, None, "recorded MongoDB USDT income ledger (completeness unverified)"
+        return fallback()
 
     client: Optional[UMFutures] = None
     try:
@@ -454,7 +476,7 @@ def _report_accounting(
         return income, equity, "Binance Testnet income history"
     except Exception as exc:
         logger.warning("Unable to verify report equity against Binance Testnet: %s", exc)
-        return stored_usdt_income, None, "recorded MongoDB USDT income ledger (completeness unverified)"
+        return fallback()
     finally:
         if client is not None:
             client.session.close()
@@ -475,7 +497,8 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
     income = mongo.get_income_records(
         int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
     )
-    income, equity, income_source = _report_accounting(start, end, income)
+    archived = mongo.get_report_accounting("daily", start, end, "testnet")
+    income, equity, income_source = _report_accounting(start, end, income, archived)
     active_trades = mongo.get_active_trade_decisions(end, "testnet")
     metrics = report_metrics(income, equity)
     metrics["income_verified"] = equity is not None
@@ -515,7 +538,8 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
     income = mongo.get_income_records(
         int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
     )
-    income, equity, income_source = _report_accounting(start, end, income)
+    archived = mongo.get_report_accounting("weekly", start, end, "testnet")
+    income, equity, income_source = _report_accounting(start, end, income, archived)
     metrics = report_metrics(income, equity)
     metrics["income_verified"] = equity is not None
     return ReportResponse(
