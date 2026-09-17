@@ -11,11 +11,18 @@ from orbit.core.binance_ws_manager import BinanceWSManager
 from orbit.core.order_manager import OrderManager
 from orbit.core.redis_manager import RedisManager
 from orbit.core.trade_checker import (
+    PositionLifecycleLockUnavailable,
     TradeChecker,
     TradeReconciliationError,
+    _quantity_covers,
     is_stop_order,
     is_take_profit_order,
 )
+
+
+def test_exit_quantity_comparison_tolerates_float_rounding() -> None:
+    assert _quantity_covers(0.1 + 0.1 + 0.08, 0.28)
+    assert not _quantity_covers(0.279, 0.28)
 
 
 def _order_manager():
@@ -720,6 +727,26 @@ class TestTradeChecker(unittest.TestCase):
         checker._exit_trade.assert_called_once_with("ETHUSDT", "decision-1")
         checker._quarantine_flat_trade.assert_not_called()
         checker.delete_trade_with_orders.assert_not_called()
+
+    def test_flat_trade_cleanup_defers_when_lifecycle_lock_is_busy(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(return_value=[])
+        checker.scan_trade_keys = MagicMock(return_value=["trade:decision-1"])
+        checker.load_trade = MagicMock(
+            return_value={"trade_id": "decision-1", "symbol": "PAXGUSDT"}
+        )
+        checker._exit_trade = MagicMock(
+            side_effect=PositionLifecycleLockUnavailable("lock busy")
+        )
+        checker._quarantine_flat_trade = MagicMock()
+
+        assert checker.activePosition_coolMaker() == {}
+
+        checker._exit_trade.assert_called_once_with("PAXGUSDT", "decision-1")
+        checker._quarantine_flat_trade.assert_not_called()
 
     def test_ambiguous_trade_is_retained_while_protective_order_is_open(self):
         checker = TradeChecker.__new__(TradeChecker)
