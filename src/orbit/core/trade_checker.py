@@ -1354,7 +1354,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self,
         risk_management: Dict[str, Any],
         symbol: str,
-        stop_loss: float,
+        stop_loss: Optional[float],
         target: Optional[float],
         current_price: float,
         stop_loss_order: Dict[str, Any],
@@ -1368,6 +1368,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
             return
 
         if self.trades.get(symbol, {}).get("exit_pending"):
+            return
+
+        if stop_loss is None:
+            logger.warning(
+                "[WARN] Stop-loss price for %s is unavailable; "
+                "skipping trade check until protective orders are reconciled.",
+                symbol,
+            )
             return
 
         try:
@@ -1929,9 +1937,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
                 for symbol in active_trade_symbols:
                     if (
-                        "stop_loss_price" not in self.trades[symbol]
+                        self.trades[symbol].get("stop_loss_price") is None
                         or "target" not in self.trades[symbol]
-                        or "stop_loss_order" not in self.trades[symbol]
+                        or self.trades[symbol].get("stop_loss_order") is None
                     ):
                         flag = True
                         break
