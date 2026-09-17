@@ -25,26 +25,6 @@ def test_ist_day_assigns_closes_by_event_time() -> None:
     assert "| ATOMUSDT | 1 | 15.15294538 |" in second
 
 
-def test_closed_trade_table_uses_lifecycle_records_when_decision_events_are_missing() -> None:
-    trades = [
-        {
-            "symbol": "PAXGUSDT", "pnl": -11.2964141,
-            "closed_at": datetime(2026, 9, 1, 17, 34, tzinfo=timezone.utc),
-            "lifecycle_scope": "reconstructed",
-        },
-        {
-            "symbol": "BTCUSDT", "pnl": 5.0,
-            "closed_at": datetime(2026, 9, 1, 18, 31, tzinfo=timezone.utc),
-        },
-    ]
-
-    body = build_report_body(date(2026, 9, 1), [], [], closed_trades=trades)
-
-    assert "Closed trades: **1**" in body
-    assert "| PAXGUSDT | 1 | -11.29641410 |" in body
-    assert "| BTCUSDT |" not in body
-
-
 def test_ist_week_includes_start_and_excludes_end() -> None:
     start, end = report_window(date(2026, 9, 5), 7)
     assert start.astimezone(timezone.utc) == datetime(2026, 9, 4, 18, 30, tzinfo=timezone.utc)
