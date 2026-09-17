@@ -41,3 +41,21 @@ def test_archive_recent_reports_stores_completed_daily_and_weekly_wallets(
         if call.args[0] == "daily" and call.args[1].date() == date(2026, 9, 12)
     ][0]
     assert september_12[4] == 1010.0
+
+
+@patch("orbit.core.performance_reporter.snapshot_usdt_income")
+def test_archive_includes_week_ending_inside_horizon_when_start_is_older(
+    snapshot: MagicMock,
+) -> None:
+    snapshot.return_value = (1000.0, [])
+    mongo = MagicMock()
+    reporter = PerformanceReporter(MagicMock(), mongo, "testnet")
+
+    assert reporter.archive_recent_reports(date(2026, 9, 20), days=10) == 12
+
+    weekly_starts = [
+        call.args[1].date()
+        for call in mongo.store_report_accounting.call_args_list
+        if call.args[0] == "weekly"
+    ]
+    assert weekly_starts == [date(2026, 9, 5), date(2026, 9, 12)]

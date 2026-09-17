@@ -56,7 +56,9 @@ class PerformanceReporter(DiscordManager):
         if mongo is None or self.tracker.execution_mode != "testnet":
             return 0
         today = today or datetime.now(IST).date()
-        first_day = today - timedelta(days=days)
+        # A completed week can start six days before the oldest daily window.
+        first_day = today - timedelta(days=days + 6)
+        oldest_end_day = today - timedelta(days=days)
         first_start, _ = report_window(first_day)
         wallet, income = snapshot_usdt_income(
             PerformanceTracker(self.client), first_start
@@ -80,11 +82,13 @@ class PerformanceReporter(DiscordManager):
             ):
                 archived += 1
 
-        for offset in range(days):
+        for offset in range(days + 6):
             day = first_day + timedelta(days=offset)
             start, end = report_window(day)
-            save("daily", start, end)
-            if day.weekday() == 5 and day + timedelta(days=7) <= today:
+            if day >= oldest_end_day:
+                save("daily", start, end)
+            week_end_day = day + timedelta(days=7)
+            if day.weekday() == 5 and oldest_end_day <= week_end_day <= today:
                 _week_start, week_end = report_window(day, 7)
                 save("weekly", start, week_end)
         return archived
