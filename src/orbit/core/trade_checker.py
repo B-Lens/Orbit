@@ -360,6 +360,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             persisted = self.load_trade(trade_id) or {}
 
+            if trade.get("exit_pending") or persisted.get("exit_pending"):
+                logger.info(
+                    "[SELF-HEAL] Skipping protective-order recreation for %s "
+                    "while exit confirmation is pending",
+                    symbol,
+                )
+                return stop_loss_order, take_profit_order
+
             persisted_sl_id = str(persisted.get("sl_order_id", ""))
             if persisted_sl_id and persisted_sl_id not in open_order_ids:
                 logger.warning(
@@ -1787,6 +1795,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     "target",
                     "entered_at",
                     "lifecycle_id",
+                    "exit_pending",
                 ):
                     if key in persisted:
                         _dict.setdefault(key, persisted[key])

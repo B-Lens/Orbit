@@ -45,6 +45,9 @@ credentials.
 - Entry and exit LLM reasoning, execution rejections, and other trade blocks are
   appended to the MongoDB decision ledger. Active-position and post-exit cooldown
   states remain availability safeguards rather than LLM-reviewed candidates.
+- Once a protective trigger marks an exit as pending, reconciliation waits for
+  broker confirmation and must not recreate a trigger that has left the open-order
+  set.
 - `RedisManager` owns trade and order key formats.
 - External services must be mocked at their boundary in unit tests.
 
