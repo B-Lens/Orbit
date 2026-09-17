@@ -446,8 +446,7 @@ def test_reconstructed_exit_requires_closing_fills() -> None:
     checker.merge_existing_trade_fields = MagicMock(return_value=True)
 
     with patch("orbit.core.trade_checker.uuid4", return_value="unique"):
-        with pytest.raises(RuntimeError, match="exit fills were unavailable"):
-            checker._exit_trade("BTCUSDT", "legacy")
+        assert checker._exit_trade("BTCUSDT", "legacy") is False
 
     checker.merge_existing_trade_fields.assert_called_once_with(
         "legacy", {"lifecycle_id": "reconstructed:BTCUSDT:unique"}
@@ -455,6 +454,39 @@ def test_reconstructed_exit_requires_closing_fills() -> None:
     checker.mongo_handler.get_trade_exit.assert_called_once_with(
         "reconstructed:BTCUSDT:unique"
     )
+    checker.mongo_handler.store_trade_exit.assert_not_called()
+
+
+def test_partial_exit_fills_preserve_flat_trade_for_retry() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.trades = {"PAXGUSDT": {"trade_id": "PAXGUSDT"}}
+    checker.order_manager = MagicMock()
+    checker.order_manager.get_account_trades.return_value = [
+        {"id": 1, "orderId": 10, "side": "BUY", "qty": "0.02", "time": 1000},
+        {"id": 2, "orderId": 20, "side": "SELL", "qty": "0.01", "time": 2000},
+    ]
+    checker.execution_settings = ExecutionSettings(
+        {"PAXGUSDT": ExecutionMode.TESTNET}
+    )
+    checker.mongo_handler = MagicMock()
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "PAXGUSDT",
+            "symbol": "PAXGUSDT",
+            "positionSide": "BUY",
+            "quantity": 0.02,
+            "orderId": 10,
+        }
+    )
+    checker.set_cooldown = MagicMock()
+    checker.delete_trade_with_orders = MagicMock()
+
+    assert checker._exit_trade("PAXGUSDT", "PAXGUSDT") is False
+
+    checker.mongo_handler.store_trade_exit.assert_not_called()
+    checker.delete_trade_with_orders.assert_not_called()
+    assert "PAXGUSDT" in checker.trades
 
 
 def test_reconstructed_exit_groups_split_entry_fills_and_stores_exit_price() -> None:

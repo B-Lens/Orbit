@@ -711,17 +711,13 @@ class TestTradeChecker(unittest.TestCase):
                 "quantity": 0.1,
             }
         )
-        checker._exit_trade = MagicMock(
-            side_effect=RuntimeError(
-                "Binance exit fills were unavailable for decision-1"
-            )
-        )
+        checker._exit_trade = MagicMock(return_value=False)
         checker._quarantine_flat_trade = MagicMock()
         checker.delete_trade_with_orders = MagicMock()
 
-        with self.assertRaisesRegex(RuntimeError, "exit fills were unavailable"):
-            checker.activePosition_coolMaker()
+        self.assertEqual(checker.activePosition_coolMaker(), {})
 
+        checker._exit_trade.assert_called_once_with("ETHUSDT", "decision-1")
         checker._quarantine_flat_trade.assert_not_called()
         checker.delete_trade_with_orders.assert_not_called()
 

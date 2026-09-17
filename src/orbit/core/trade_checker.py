@@ -933,7 +933,15 @@ class TradeChecker(AuthenticationManager, RedisManager):
             if closing_quantity >= expected_quantity:
                 break
         if closing_quantity < expected_quantity:
-            raise RuntimeError(f"Binance exit fills were unavailable for {trade_id}")
+            logger.warning(
+                "[EXIT] Binance exit fills are incomplete for %s (%s): "
+                "found quantity %s of %s; preserving trade state for retry.",
+                trade_id,
+                symbol,
+                closing_quantity,
+                expected_quantity,
+            )
+            return False
         closed_at = datetime.fromtimestamp(
             max(int(fill.get("time", 0) or 0) for fill in closing_fills) / 1000,
             tz=timezone.utc,
