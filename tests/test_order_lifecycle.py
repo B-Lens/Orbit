@@ -711,17 +711,13 @@ class TestTradeChecker(unittest.TestCase):
                 "quantity": 0.1,
             }
         )
-        checker._exit_trade = MagicMock(
-            side_effect=RuntimeError(
-                "Binance exit fills were unavailable for decision-1"
-            )
-        )
+        checker._exit_trade = MagicMock(return_value=False)
         checker._quarantine_flat_trade = MagicMock()
         checker.delete_trade_with_orders = MagicMock()
 
-        with self.assertRaisesRegex(RuntimeError, "exit fills were unavailable"):
-            checker.activePosition_coolMaker()
+        self.assertEqual(checker.activePosition_coolMaker(), {})
 
+        checker._exit_trade.assert_called_once_with("ETHUSDT", "decision-1")
         checker._quarantine_flat_trade.assert_not_called()
         checker.delete_trade_with_orders.assert_not_called()
 
@@ -1212,6 +1208,48 @@ class TestTradeChecker(unittest.TestCase):
         checker.send_true_alarm.assert_not_called()
         checker._mark_exit_pending.assert_not_called()
         checker.handle_exception.assert_not_called()
+
+    def test_short_trade_check_skips_missing_stop_loss(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {
+            "PAXGUSDT": {
+                "trade_id": "PAXGUSDT",
+                "positionSide": "SELL",
+                "price": 4400.0,
+            }
+        }
+        checker.short_check_trade = MagicMock()
+        checker.send_active_trade_prices = MagicMock()
+        checker.handle_exception = MagicMock()
+
+        checker.check_trade({}, "PAXGUSDT", None, 4300.0, 4400.0, {}, 0.01)
+
+        checker.short_check_trade.assert_not_called()
+        checker.send_active_trade_prices.assert_not_called()
+        checker.handle_exception.assert_not_called()
+
+    def test_monitor_reconciles_trade_with_missing_stop_loss_price(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {
+            "PAXGUSDT": {
+                "trade_id": "PAXGUSDT",
+                "stop_loss_price": None,
+                "target": 4300.0,
+                "stop_loss_order": {"algoId": "101"},
+            }
+        }
+        checker._ws_manager = MagicMock()
+        checker._ensure_ws = MagicMock()
+        checker.check_price_freshness = MagicMock(return_value=4400.0)
+        checker._persist_current_price = MagicMock()
+        checker.check_trade = MagicMock()
+        checker.activePosition_coolMaker = MagicMock(side_effect=KeyboardInterrupt)
+
+        with self.assertRaises(KeyboardInterrupt):
+            checker.monitor_trades(["PAXGUSDT"], {})
+
+        checker.check_trade.assert_not_called()
+        checker.activePosition_coolMaker.assert_called_once_with()
 
     def test_exit_attempts_sibling_cancellation_when_filled_order_is_terminal(self):
         checker = TradeChecker.__new__(TradeChecker)
