@@ -58,6 +58,10 @@ _POSITION_LIFECYCLE_LOCK_TIMEOUT = 120
 _POSITION_LIFECYCLE_LOCK_WAIT = 10
 
 
+class PositionLifecycleLockUnavailable(RuntimeError):
+    """A lifecycle operation should be retried after lock contention."""
+
+
 @contextmanager
 def position_lifecycle_lock(
     symbol: str, redis_client: Optional[redis.StrictRedis] = None
@@ -78,7 +82,7 @@ def position_lifecycle_lock(
         )
         acquired = distributed_lock.acquire(blocking=True)
         if not acquired:
-            raise RuntimeError(
+            raise PositionLifecycleLockUnavailable(
                 f"Could not acquire the position lifecycle lock for {symbol}"
             )
         try:
@@ -93,6 +97,13 @@ class TradeReconciliationError(RuntimeError):
     def __init__(self, message: str, reason: str) -> None:
         super().__init__(message)
         self.reason = reason
+
+
+def _quantity_covers(found: float, expected: float) -> bool:
+    """Return whether fills cover a quantity despite binary float rounding."""
+    return found > expected or math.isclose(
+        found, expected, rel_tol=1e-9, abs_tol=1e-12
+    )
 
 
 def _order_types(order: Optional[Dict[str, Any]]) -> Tuple[str, str]:
@@ -930,9 +941,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 continue
             closing_fills.append(fill)
             closing_quantity += float(fill.get("qty", 0) or 0)
-            if closing_quantity >= expected_quantity:
+            if _quantity_covers(closing_quantity, expected_quantity):
                 break
-        if closing_quantity < expected_quantity:
+        if not _quantity_covers(closing_quantity, expected_quantity):
             logger.warning(
                 "[EXIT] Binance exit fills are incomplete for %s (%s): "
                 "found quantity %s of %s; preserving trade state for retry.",
@@ -1889,6 +1900,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
                 try:
                     self._exit_trade(symbol, trade_id)
+                except PositionLifecycleLockUnavailable:
+                    logger.warning(
+                        "[CLEANUP] Lifecycle lock for %s is busy; preserving trade "
+                        "%s for retry.",
+                        symbol,
+                        trade_id,
+                    )
                 except TradeReconciliationError as error:
                     if not self._quarantine_flat_trade(
                         symbol, trade_id, persisted, error
