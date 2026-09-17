@@ -174,7 +174,11 @@ def test_report_accounting_uses_exchange_income_and_cutoff_wallet(
     start = end - timedelta(days=1)
     client = futures_cls.return_value
     client.account.return_value = {
-        "multiAssetsMargin": False, "totalWalletBalance": "1000"
+        "totalWalletBalance": "1100",
+        "assets": [
+            {"asset": "USDT", "walletBalance": "1000"},
+            {"asset": "BNB", "walletBalance": "100"},
+        ],
     }
     daily = [{
         "tranId": 1, "time": int(start.timestamp() * 1000) + 1000,
@@ -210,8 +214,22 @@ def test_report_accounting_does_not_use_mixed_asset_income(
     }]
 
     assert _report_accounting(end - timedelta(days=1), end, stored) == (
-        stored, None, "recorded MongoDB income ledger (completeness unverified)"
+        stored, None, "recorded MongoDB USDT income ledger (completeness unverified)"
     )
+
+
+@patch.dict("os.environ", {"BINANCE_TESTNET_API_KEY": "", "BINANCE_TESTNET_SECRET_KEY": ""})
+def test_unverified_report_does_not_sum_non_usdt_currency_as_usdt() -> None:
+    end = datetime.now(IST) - timedelta(days=1)
+    stored = [
+        {"asset": "BNB", "income": "2"},
+        {"asset": "USDT", "income": "3"},
+    ]
+
+    income, equity, _source = _report_accounting(end - timedelta(days=1), end, stored)
+
+    assert income == [stored[1]]
+    assert equity is None
 
 
 @patch.dict("os.environ", {"BINANCE_TESTNET_API_KEY": "", "BINANCE_TESTNET_SECRET_KEY": ""})

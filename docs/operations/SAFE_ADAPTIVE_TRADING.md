@@ -63,11 +63,12 @@ copies duplicated decision data and did not represent executed positions.
 
 The `/daily` and `/weekly` dashboard reports read Testnet decisions, execution
 events, and active lifecycle evidence from MongoDB. For periods ending within
-the last 30 days, the API reads Testnet income and a current wallet balance from
-Binance when Testnet credentials are configured. It reconstructs the period-end
-balance by subtracting subsequent exchange income, then derives opening balance
-and percentages. It rejects multi-asset accounts, non-USDT income, and income
-that changes during the account snapshot. Requests do not write accounting rows.
+the last 30 days, the API reads Testnet income and the USDT wallet entry from
+the current Binance account response when Testnet credentials are configured.
+It reconstructs the period-end USDT balance by subtracting subsequent USDT
+income, then derives opening balance and percentages. It rejects missing USDT
+wallet entries, non-USDT income, and income that changes during the account
+snapshot. Requests do not write accounting rows.
 When exchange verification is unavailable, the report uses the stored MongoDB
 Testnet income ledger, labels its completeness unverified, and leaves historical
 equity and percentages unavailable. Live and Testnet records remain separate.
@@ -78,8 +79,10 @@ MongoDB collection `futures_income` upserts exchange income rows by transaction
 and income type. The daily report calculates:
 
 ```text
-net P&L = realized P&L + commission + funding fees + other income
-return % = net P&L / opening equity * 100
+trading net P&L = realized P&L + commission + funding fees
+wallet change = trading net P&L + transfers + other income
+trading return % = trading net P&L / opening USDT wallet * 100
+wallet change % = wallet change / opening USDT wallet * 100
 ```
 
 Daily reports distinguish closed-lifecycle net P&L from period account income.
@@ -94,13 +97,15 @@ run midnight to midnight; weeks run Saturday 00:00 to the following Saturday
 The publisher switches days at IST midnight. Existing published UTC reports
 retain their old evidence until explicitly regenerated.
 
-Daily and weekly pages prominently show Net P&L, closing wallet equity, equity
-change %, and maximum drawdown. Details include opening equity, realized P&L,
-commissions, funding, other income, and drawdown %. Equity excludes unrealized
-P&L. Drawdown measures the largest peak-to-trough wallet-income decline within
-the selected period, grouping income with identical exchange timestamps;
-percentage drawdown uses the corresponding wallet peak. Transfers affect the
-wallet change and are disclosed as other income.
+Daily and weekly pages show account trading net P&L, the closing USDT wallet,
+trading return, wallet change, and realized trading drawdown. Details include
+opening USDT wallet, realized P&L, commissions, funding, transfers, other
+income, wallet change %, and drawdown %. The wallet balance and settled trading
+drawdown exclude unrealized position P&L. Drawdown groups trading income with
+identical exchange timestamps; percentage drawdown uses the corresponding
+wallet peak with external cash flows excluded from its path. Transfers affect
+wallet change but not trading net P&L or trading drawdown. These are account
+figures, so activity outside Orbit in the same Testnet account can contribute.
 
 The API service needs `BINANCE_TESTNET_API_KEY` and
 `BINANCE_TESTNET_SECRET_KEY` to verify recent historical balances. Binance

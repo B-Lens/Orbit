@@ -1,6 +1,7 @@
 """Shared IST calendar and wallet-income performance calculations."""
 
 from datetime import date, datetime, time, timedelta, timezone
+from math import isfinite
 from typing import Any, Iterable, Mapping, Optional
 
 from orbit.core.performance import PerformanceTracker
@@ -18,11 +19,23 @@ def report_metrics(
 ) -> dict[str, Any]:
     records = sorted(income, key=lambda row: int(row.get("time", 0) or 0))
     summary = PerformanceTracker.summarize(dict(row) for row in records)
-    opening = cutoff_equity - summary.net_pnl if cutoff_equity is not None else None
-    # Income at one exchange timestamp is one balance change; order within a
+    transfers = sum(
+        float(row.get("income", 0) or 0)
+        for row in records
+        if str(row.get("incomeType", "")).upper() == "TRANSFER"
+    )
+    other_income = summary.other_income - transfers
+    trading_pnl = summary.realized_pnl + summary.commission + summary.funding
+    wallet_change = summary.net_pnl
+    opening = cutoff_equity - wallet_change if cutoff_equity is not None else None
+    # Income at one exchange timestamp is one trading result; order within a
     # millisecond must not manufacture a temporary peak or trough.
     changes: dict[int, float] = {}
     for row in records:
+        if str(row.get("incomeType", "")).upper() not in {
+            "REALIZED_PNL", "COMMISSION", "FUNDING_FEE"
+        }:
+            continue
         stamp = int(row.get("time", 0) or 0)
         changes[stamp] = changes.get(stamp, 0.0) + float(row.get("income", 0) or 0)
     balance = peak = opening if opening is not None else 0.0
@@ -35,9 +48,15 @@ def report_metrics(
             drawdown_pct = max(drawdown_pct, (peak - balance) / peak * 100)
     return {
         **summary.to_dict(),
+        "net_pnl": trading_pnl,
+        "other_income": other_income,
+        "transfers": transfers,
+        "wallet_change": wallet_change,
+        "return_pct": trading_pnl / opening * 100 if opening and opening > 0 else None,
         "opening_equity": opening,
         "equity_value": cutoff_equity,
-        "equity_change_pct": summary.net_pnl / opening * 100 if opening and opening > 0 else None,
+        "equity_change_pct": wallet_change / opening * 100 if opening and opening > 0 else None,
+        "trading_return_pct": trading_pnl / opening * 100 if opening and opening > 0 else None,
         "max_drawdown": drawdown,
         "max_drawdown_pct": drawdown_pct if opening is not None and opening > 0 else None,
     }
@@ -48,14 +67,20 @@ def reconstruct_equity(tracker: PerformanceTracker, end: datetime, attempts: int
     for _ in range(attempts):
         before = int(tracker.utc_now().timestamp() * 1000)
         account = tracker.futures_client.account()
-        if account.get("multiAssetsMargin") is not False:
-            raise ValueError("USDT wallet balance requires verified single-asset mode")
+        usdt_assets = [
+            asset for asset in account["assets"] if asset.get("asset") == "USDT"
+        ]
+        if len(usdt_assets) != 1:
+            raise ValueError("Expected one USDT wallet balance in account snapshot")
+        wallet_balance = float(usdt_assets[0]["walletBalance"])
+        if not isfinite(wallet_balance):
+            raise ValueError("USDT wallet balance is not finite")
         after = int(tracker.utc_now().timestamp() * 1000)
         subsequent = tracker.sync_window(int(end.timestamp() * 1000), after + 1)
         if any(row.get("asset") != "USDT" for row in tracker.last_records):
             raise ValueError("Non-USDT income cannot reconstruct a USDT wallet balance")
         if not any(before <= int(row.get("time", 0) or 0) <= after for row in tracker.last_records):
-            return float(account["totalWalletBalance"]) - subsequent.net_pnl
+            return wallet_balance - subsequent.net_pnl
     raise RuntimeError("Account income changed during every snapshot; refusing to publish inconsistent equity")
 
 
@@ -66,23 +91,26 @@ def performance_lines(metrics: Mapping[str, Any]) -> list[str]:
 
     lines = [
         "## Account performance", "",
-        f"- Net P&L: **{value('net_pnl', 'USDT')}**",
-        f"- Equity value: **{value('equity_value', 'USDT')}**",
-        f"- Opening equity: **{value('opening_equity', 'USDT')}**",
-        f"- Equity change %: **{value('equity_change_pct', '%')}**",
-        f"- Max drawdown: **{value('max_drawdown', 'USDT')}**",
-        f"- Max drawdown %: **{value('max_drawdown_pct', '%')}**", "",
-        "### Net P&L breakdown", "",
+        f"- Trading net P&L: **{value('net_pnl', 'USDT')}**",
+        f"- Closing USDT wallet: **{value('equity_value', 'USDT')}**",
+        f"- Opening USDT wallet: **{value('opening_equity', 'USDT')}**",
+        f"- Trading return %: **{value('trading_return_pct', '%')}**",
+        f"- Wallet change: **{value('wallet_change', 'USDT')}**",
+        f"- Wallet change %: **{value('equity_change_pct', '%')}**",
+        f"- Realized trading drawdown: **{value('max_drawdown', 'USDT')}**",
+        f"- Realized trading drawdown %: **{value('max_drawdown_pct', '%')}**", "",
+        "### Wallet change breakdown", "",
         f"- Realized P&L: **{value('realized_pnl', 'USDT')}**",
         f"- Commission: **{value('commission', 'USDT')}**",
         f"- Funding: **{value('funding', 'USDT')}**",
+        f"- Transfers: **{value('transfers', 'USDT')}**",
         f"- Other income: **{value('other_income', 'USDT')}**", "",
-        "Equity is wallet balance at the period end, excluding unrealized P&L. "
-        "Net P&L = realized P&L + commission + funding + other income. "
-        "Equity change = net income / opening wallet balance × 100. "
-        "Max drawdown is the largest peak-to-trough wallet-income decline within "
-        "this period; it excludes unrealized position fluctuations. Transfers in "
-        "other income affect these wallet-change figures.", "",
+        "Trading net P&L = realized P&L + commission + funding. "
+        "Wallet change also includes transfers and other income. "
+        "Trading return uses opening USDT wallet balance; wallet change % includes "
+        "transfers. Realized trading drawdown follows the trading income ledger "
+        "within this period and excludes unrealized position fluctuations. "
+        "Amounts cover USDT income only; other asset flows are excluded.", "",
     ]
     if metrics["equity_value"] is None:
         lines.extend([

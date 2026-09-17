@@ -430,10 +430,13 @@ def _report_accounting(
     start: datetime, end: datetime, stored_income: List[Dict[str, Any]]
 ) -> tuple[List[Dict[str, Any]], Optional[float], str]:
     """Use exchange income and a race-checked wallet snapshot when available."""
+    stored_usdt_income = [
+        row for row in stored_income if row.get("asset", "USDT") == "USDT"
+    ]
     key = os.getenv("BINANCE_TESTNET_API_KEY")
     secret = os.getenv("BINANCE_TESTNET_SECRET_KEY")
     if not key or not secret or end < datetime.now(IST) - timedelta(days=30):
-        return stored_income, None, "recorded MongoDB income ledger (completeness unverified)"
+        return stored_usdt_income, None, "recorded MongoDB USDT income ledger (completeness unverified)"
 
     client: Optional[UMFutures] = None
     try:
@@ -451,7 +454,7 @@ def _report_accounting(
         return income, equity, "Binance Testnet income history"
     except Exception as exc:
         logger.warning("Unable to verify report equity against Binance Testnet: %s", exc)
-        return stored_income, None, "recorded MongoDB income ledger (completeness unverified)"
+        return stored_usdt_income, None, "recorded MongoDB USDT income ledger (completeness unverified)"
     finally:
         if client is not None:
             client.session.close()
@@ -474,12 +477,14 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
     )
     income, equity, income_source = _report_accounting(start, end, income)
     active_trades = mongo.get_active_trade_decisions(end, "testnet")
+    metrics = report_metrics(income, equity)
+    metrics["income_verified"] = equity is not None
     return ReportResponse(
         report_type="daily",
         period_start=start.isoformat(),
         period_end=end.isoformat(),
         timezone="IST",
-        metrics=report_metrics(income, equity),
+        metrics=metrics,
         body=build_report_body(
             selected_date,
             decisions,
@@ -511,12 +516,14 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
         int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
     )
     income, equity, income_source = _report_accounting(start, end, income)
+    metrics = report_metrics(income, equity)
+    metrics["income_verified"] = equity is not None
     return ReportResponse(
         report_type="weekly",
         period_start=start.isoformat(),
         period_end=end.isoformat(),
         timezone="IST",
-        metrics=report_metrics(income, equity),
+        metrics=metrics,
         body=build_weekly_report_body(
             selected_start, decisions, income, equity, income_source=income_source
         ),
