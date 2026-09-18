@@ -407,13 +407,35 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 target_price = persisted.get("target") or self.calculate_target_price(
                     trade, risk_management
                 )
-                take_profit_order = self.order_manager.place_target_order(
-                    symbol=symbol,
-                    side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
-                    target_price=target_price,
-                    quantity=trade["quantity"],
+                current_price = self.check_price_freshness(symbol)
+                target_reached = current_price is not None and (
+                    (
+                        trade["positionSide"] == "BUY"
+                        and current_price >= float(target_price)
+                    )
+                    or (
+                        trade["positionSide"] == "SELL"
+                        and current_price <= float(target_price)
+                    )
                 )
-                time.sleep(0.5)
+                if target_reached:
+                    logger.info(
+                        "[SELF-HEAL] TP trigger for %s is already reached at %s; "
+                        "waiting for position reconciliation instead of recreating it",
+                        symbol,
+                        current_price,
+                    )
+                    self._mark_exit_pending(symbol, trade_id)
+                else:
+                    take_profit_order = self.order_manager.place_target_order(
+                        symbol=symbol,
+                        side=(
+                            "SELL" if trade["positionSide"] == "BUY" else "BUY"
+                        ),
+                        target_price=target_price,
+                        quantity=trade["quantity"],
+                    )
+                    time.sleep(0.5)
                 if take_profit_order:
                     new_tp_id = str(take_profit_order.get("algoId", ""))
                     self.register_order(new_tp_id, trade_id)
