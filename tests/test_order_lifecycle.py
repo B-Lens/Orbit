@@ -402,7 +402,7 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
-    def test_websocket_uses_tolerant_default_stale_threshold(self):
+    def test_websocket_reconnects_before_prolonged_rest_fallback(self):
         default_threshold = inspect.signature(TradeChecker).parameters[
             "ws_stale_threshold"
         ].default
@@ -419,7 +419,7 @@ class TestTradeChecker(unittest.TestCase):
             trading_pairs=["BTCUSDT"],
             on_price_update=checker._handle_price_update,
             on_status_change=checker._handle_ws_status,
-            stale_threshold=30.0,
+            stale_threshold=10.0,
         )
 
     def test_stale_watchdog_requests_only_one_reconnect_per_connection(self):

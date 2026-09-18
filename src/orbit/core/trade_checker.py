@@ -180,7 +180,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         order_manager: Optional[OrderManager] = None,
         mongo_handler: Optional[MongoHandler] = None,
         redis_client: Optional[redis.StrictRedis] = None,
-        ws_stale_threshold: float = 30.0,
+        ws_stale_threshold: float = 10.0,
         trade_reasoner: Optional[TradeReasoner] = None,
         **auth_kwargs: Any,
     ) -> None:
