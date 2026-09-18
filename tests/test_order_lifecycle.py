@@ -402,6 +402,45 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
+    def test_missing_reached_target_waits_for_reconciliation(self):
+        for position_side, current_price in (("BUY", 105.0), ("SELL", 95.0)):
+            with self.subTest(position_side=position_side):
+                checker = TradeChecker.__new__(TradeChecker)
+                checker.order_manager = MagicMock()
+                checker.order_manager.get_conditional_open_orders.return_value = [
+                    {
+                        "algoId": "101",
+                        "algoType": "CONDITIONAL",
+                        "orderType": "STOP_MARKET",
+                    }
+                ]
+                checker.register_order = MagicMock()
+                checker.update_trade_fields = MagicMock()
+                checker.load_trade = MagicMock(
+                    return_value={"tp_order_id": "202", "target": 100.0}
+                )
+                checker.check_price_freshness = MagicMock(
+                    return_value=current_price
+                )
+                checker._mark_exit_pending = MagicMock()
+                checker.handle_exception = MagicMock()
+
+                _, target_order = checker.ensure_orders(
+                    "BTCUSDT",
+                    {
+                        "trade_id": "trade-1",
+                        "positionSide": position_side,
+                        "quantity": 0.1,
+                    },
+                    {},
+                )
+
+                self.assertIsNone(target_order)
+                checker.order_manager.place_target_order.assert_not_called()
+                checker._mark_exit_pending.assert_called_once_with(
+                    "BTCUSDT", "trade-1"
+                )
+
     def test_websocket_uses_tolerant_default_stale_threshold(self):
         default_threshold = inspect.signature(TradeChecker).parameters[
             "ws_stale_threshold"
