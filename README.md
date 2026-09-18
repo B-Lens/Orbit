@@ -58,6 +58,7 @@ project files, set their paths with `ANTIGRAVITY_TOKEN_FILE` and
 `ANTIGRAVITY_PROJECT_FILE`, and provide the OAuth client values used to refresh
 the token. Credentials must stay outside the repository. Codex is always tried
 first; if both grounded providers fail, the run preserves cached sentiment.
+Transient Codex HTTP and network failures are retried once before fallback.
 
 ## Configuration
 
