@@ -137,6 +137,13 @@ def _latest_flat_fill_sequence(
     return fills
 
 
+def _quantity_reached(actual: float, expected: float) -> bool:
+    """Return whether fills cover a quantity, allowing only float rounding noise."""
+    return actual >= expected or math.isclose(
+        actual, expected, rel_tol=0.0, abs_tol=1e-12
+    )
+
+
 class TradeChecker(AuthenticationManager, RedisManager):
     """Real-time position monitor and SL/TP lifecycle manager.
 
@@ -930,9 +937,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 continue
             closing_fills.append(fill)
             closing_quantity += float(fill.get("qty", 0) or 0)
-            if closing_quantity >= expected_quantity:
+            if _quantity_reached(closing_quantity, expected_quantity):
                 break
-        if closing_quantity < expected_quantity:
+        if not _quantity_reached(closing_quantity, expected_quantity):
             logger.warning(
                 "[EXIT] Binance exit fills are incomplete for %s (%s): "
                 "found quantity %s of %s; preserving trade state for retry.",

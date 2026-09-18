@@ -9,7 +9,11 @@ import pytest
 from orbit.core.execution import ExecutionMode, ExecutionSettings
 from orbit.core.main import BinanceAutomation
 from orbit.core.mongo_handler import MongoHandler
-from orbit.core.trade_checker import TradeChecker, _latest_flat_fill_sequence
+from orbit.core.trade_checker import (
+    TradeChecker,
+    _latest_flat_fill_sequence,
+    _quantity_reached,
+)
 from orbit.core.trade_reasoner import EntryReasoning, ExitReasoning, TradeReasoner
 
 
@@ -154,6 +158,11 @@ def test_latest_flat_fill_sequence_ignores_prior_round_trips() -> None:
     ]
 
     assert _latest_flat_fill_sequence(fills) == fills[2:]
+
+
+def test_quantity_reached_accepts_only_float_rounding_noise() -> None:
+    assert _quantity_reached(0.27999999999999997, 0.28)
+    assert not _quantity_reached(0.279999, 0.28)
 
 
 def test_confirmed_exit_persists_llm_review_and_trade_metrics() -> None:
