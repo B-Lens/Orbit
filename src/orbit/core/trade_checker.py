@@ -58,6 +58,11 @@ _POSITION_LIFECYCLE_LOCK_TIMEOUT = 120
 _POSITION_LIFECYCLE_LOCK_WAIT = 10
 
 
+def _quantity_is_complete(actual: float, expected: float) -> bool:
+    """Return whether fills cover a quantity despite float representation noise."""
+    return actual > expected or math.isclose(actual, expected)
+
+
 @contextmanager
 def position_lifecycle_lock(
     symbol: str, redis_client: Optional[redis.StrictRedis] = None
@@ -930,9 +935,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 continue
             closing_fills.append(fill)
             closing_quantity += float(fill.get("qty", 0) or 0)
-            if closing_quantity >= expected_quantity:
+            if _quantity_is_complete(closing_quantity, expected_quantity):
                 break
-        if closing_quantity < expected_quantity:
+        if not _quantity_is_complete(closing_quantity, expected_quantity):
             logger.warning(
                 "[EXIT] Binance exit fills are incomplete for %s (%s): "
                 "found quantity %s of %s; preserving trade state for retry.",
