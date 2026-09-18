@@ -533,6 +533,35 @@ class TestTradeChecker(unittest.TestCase):
         self.assertEqual(checker.check_price_freshness("SKYUSDT"), 0.05)
         self.assertEqual(checker.live_prices["SKYUSDT"][0], 0.05)
 
+    def test_pending_exit_does_not_recreate_triggered_stop_order(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker.load_trade = MagicMock(
+            return_value={
+                "trade_id": "trade-1",
+                "exit_pending": True,
+                "sl_order_id": "101",
+                "stop_loss_price": 1.546,
+            }
+        )
+
+        stop_order, target_order = checker.ensure_orders(
+            "ATOMUSDT",
+            {
+                "trade_id": "trade-1",
+                "positionSide": "SELL",
+                "quantity": 783.4,
+                "price": 1.50,
+            },
+            {"stop_loss_percent": 2},
+        )
+
+        self.assertIsNone(stop_order)
+        self.assertIsNone(target_order)
+        checker.order_manager.place_sl_order.assert_not_called()
+        checker.order_manager.place_target_order.assert_not_called()
+
     def test_price_outage_persists_reconciled_protective_orders(self):
         checker = TradeChecker.__new__(TradeChecker)
         trade = {
