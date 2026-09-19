@@ -56,6 +56,7 @@ _POSITION_LIFECYCLE_LOCKS: Dict[str, Any] = {}
 _POSITION_LIFECYCLE_LOCKS_GUARD = threading.Lock()
 _POSITION_LIFECYCLE_LOCK_TIMEOUT = 120
 _POSITION_LIFECYCLE_LOCK_WAIT = 10
+_PRICE_STALE_AFTER_SECONDS = 5.0
 
 
 def _quantity_is_complete(actual: float, expected: float) -> bool:
@@ -278,10 +279,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
             price_age = time.time() - last_updated
-            if price_age <= 2 and math.isfinite(current_price) and current_price > 0:
+            if (
+                price_age <= _PRICE_STALE_AFTER_SECONDS
+                and math.isfinite(current_price)
+                and current_price > 0
+            ):
                 return current_price
 
-            if price_age > 2:
+            if price_age > _PRICE_STALE_AFTER_SECONDS:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
                     f"({price_age:.2f}s old) — falling back to REST."

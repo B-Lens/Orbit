@@ -54,3 +54,53 @@ class TestDiscordManager:
         embed_fields = mock_post.call_args.kwargs["json"]["embeds"][0]["fields"]
         assert len(embed_fields) == DiscordManager.MAX_FIELDS
         assert embed_fields[-1]["name"] == "⚠ Warning"
+
+    @patch("orbit.core.discord_manager.time.sleep")
+    @patch("orbit.core.discord_manager.record_notification")
+    @patch("orbit.core.discord_manager.requests.post")
+    @patch(
+        "orbit.core.discord_manager.URLS.get_url", return_value="https://example.test"
+    )
+    def test_transient_webhook_failure_is_retried(
+        self,
+        _mock_get_url: Mock,
+        mock_post: Mock,
+        mock_record: Mock,
+        mock_sleep: Mock,
+    ) -> None:
+        unavailable = Mock(status_code=503, text="temporarily unavailable")
+        delivered = Mock(status_code=204, text="")
+        mock_post.side_effect = [unavailable, delivered]
+
+        status_code = DiscordManager().send_logs(None, "Runtime status")
+
+        assert status_code == 204
+        assert mock_post.call_count == 2
+        mock_sleep.assert_called_once_with(DiscordManager.RETRY_BACKOFF_SECONDS)
+        mock_record.assert_called_once()
+
+    @patch("orbit.core.discord_manager.time.sleep")
+    @patch("orbit.core.discord_manager.logger.error")
+    @patch("orbit.core.discord_manager.requests.post")
+    @patch(
+        "orbit.core.discord_manager.URLS.get_url", return_value="https://example.test"
+    )
+    def test_exhausted_webhook_failure_logs_without_exception_traceback(
+        self,
+        _mock_get_url: Mock,
+        mock_post: Mock,
+        mock_error: Mock,
+        _mock_sleep: Mock,
+    ) -> None:
+        mock_post.return_value = Mock(status_code=503, text="x" * 600)
+
+        status_code = DiscordManager().send_logs(None, "Runtime status")
+
+        assert status_code == 503
+        assert mock_post.call_count == DiscordManager.MAX_WEBHOOK_ATTEMPTS
+        mock_error.assert_called_once_with(
+            "Failed webhook | Status: %s | Response: %.500s | key: %s",
+            503,
+            "x" * DiscordManager.MAX_ERROR_RESPONSE_LENGTH,
+            "logs",
+        )

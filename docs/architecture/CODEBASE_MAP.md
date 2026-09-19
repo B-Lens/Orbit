@@ -32,7 +32,9 @@ strategy signal and cached market intelligence. The trade checker reconciles Red
 with Binance, maintains protective orders, and asks the LLM for a post-exit review
 after the broker confirms a position is flat. Live position prices come from each
 symbol's periodic Binance Futures ticker stream; the checker falls back to REST
-when those updates exceed its freshness limit. The sentiment cron
+when those updates are more than five seconds old. Discord notifications retry
+transient rate-limit and server failures up to three times with bounded backoff;
+permanent failures are logged without interrupting trading. The sentiment cron
 runs web-grounded Responses analysis every 30 minutes using provisioned Codex
 credentials.
 
