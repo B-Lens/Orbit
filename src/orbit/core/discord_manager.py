@@ -1,5 +1,7 @@
-import os
 import json
+import os
+import time
+
 import requests
 import yaml
 
@@ -68,6 +70,10 @@ class DiscordManager:
     MAX_FIELDS = 25
     MAX_TITLE = 256
     REQUEST_TIMEOUT_SECONDS = 10
+    MAX_WEBHOOK_ATTEMPTS = 3
+    RETRY_BACKOFF_SECONDS = 0.5
+    RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+    MAX_ERROR_RESPONSE_LENGTH = 500
 
     def __init__(self):
         pass
@@ -168,20 +174,40 @@ class DiscordManager:
 
             file_path = kwargs.get("file_path")
 
-            if file_path:
-                with open(file_path, 'rb') as f:
-                    files = {'file': (os.path.basename(file_path), f)}
-                    multipart_data = {'payload_json': json.dumps(payload)}
+            for attempt in range(1, self.MAX_WEBHOOK_ATTEMPTS + 1):
+                if file_path:
+                    with open(file_path, "rb") as file_handle:
+                        files = {
+                            "file": (os.path.basename(file_path), file_handle)
+                        }
+                        multipart_data = {"payload_json": json.dumps(payload)}
+                        response = requests.post(
+                            url,
+                            data=multipart_data,
+                            files=files,
+                            timeout=self.REQUEST_TIMEOUT_SECONDS,
+                        )
+                else:
                     response = requests.post(
-                        url,
-                        data=multipart_data,
-                        files=files,
-                        timeout=self.REQUEST_TIMEOUT_SECONDS,
+                        url, json=payload, timeout=self.REQUEST_TIMEOUT_SECONDS
                     )
-            else:
-                response = requests.post(
-                    url, json=payload, timeout=self.REQUEST_TIMEOUT_SECONDS
+
+                if (
+                    response.status_code not in self.RETRYABLE_STATUS_CODES
+                    or attempt == self.MAX_WEBHOOK_ATTEMPTS
+                ):
+                    break
+
+                delay = self.RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                logger.warning(
+                    "Webhook '%s' returned %s; retrying in %.1fs (%s/%s)",
+                    key,
+                    response.status_code,
+                    delay,
+                    attempt,
+                    self.MAX_WEBHOOK_ATTEMPTS,
                 )
+                time.sleep(delay)
 
             SUCCESS_CODES = {200, 204}
 
@@ -189,11 +215,17 @@ class DiscordManager:
                 # For active_trade_prices and websocket webhooks, log a warning instead of an error
                 if key in ("active_trade_prices", "websocket", "active_trades"):
                     logger.warning(
-                        f"Failed webhook | Status: {response.status_code} | Response: {response.text} | key: {key}"
+                        "Failed webhook | Status: %s | Response: %.500s | key: %s",
+                        response.status_code,
+                        response.text[:self.MAX_ERROR_RESPONSE_LENGTH],
+                        key,
                     )
                 else:
-                    logger.exception(
-                        f"Failed webhook | Status: {response.status_code} | Response: {response.text} | key: {key}"
+                    logger.error(
+                        "Failed webhook | Status: %s | Response: %.500s | key: %s",
+                        response.status_code,
+                        response.text[:self.MAX_ERROR_RESPONSE_LENGTH],
+                        key,
                     )
             else:
                 record_notification(key, data, description, processed_fields)
