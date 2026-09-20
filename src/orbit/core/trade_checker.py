@@ -718,6 +718,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
         """Clean up a trade after broker reconciliation confirms it is flat."""
         persisted_trade = self.load_trade(trade_id) or {}
         reconstructed = persisted_trade.get("entry_source") == "broker_reconstruction"
+        # Legacy orders used the symbol as their Redis trade ID and have no
+        # corresponding strategy-decision document to receive execution events.
+        decision_backed = not reconstructed and trade_id != symbol
         lifecycle_trade_id = str(persisted_trade.get("lifecycle_id") or trade_id)
         if reconstructed and "lifecycle_id" not in persisted_trade:
             lifecycle_trade_id = f"reconstructed:{symbol}:{uuid4()}"
@@ -789,7 +792,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 raise RuntimeError(f"Stored close timestamp was invalid for {trade_id}")
             if closed_at.tzinfo is None:
                 closed_at = closed_at.replace(tzinfo=timezone.utc)
-            if not reconstructed:
+            if decision_backed:
                 if not mongo_handler.append_decision_event(
                     trade_id,
                     {
@@ -1020,7 +1023,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         }
         if not mongo_handler.store_trade_exit(exit_record):
             raise RuntimeError(f"MongoDB lifecycle persistence failed for {trade_id}")
-        if not reconstructed and not mongo_handler.append_decision_event(
+        if decision_backed and not mongo_handler.append_decision_event(
             trade_id,
             {
                 "event_id": f"trade_closed:{trade_id}",

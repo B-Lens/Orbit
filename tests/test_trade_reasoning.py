@@ -405,6 +405,40 @@ def test_exit_retry_reuses_durable_lifecycle_record() -> None:
     assert close_event["llm_exit_reasoning"] == {"reasoning": "stored review"}
 
 
+def test_symbol_keyed_exit_retry_skips_missing_decision_event() -> None:
+    checker = TradeChecker.__new__(TradeChecker)
+    checker.trades = {"PAXGUSDT": {"trade_id": "PAXGUSDT"}}
+    checker.order_manager = MagicMock()
+    checker.execution_settings = ExecutionSettings(
+        {"PAXGUSDT": ExecutionMode.TESTNET}
+    )
+    checker.mongo_handler = MagicMock()
+    checker.mongo_handler.get_trade_exit.return_value = {
+        "trade_id": "PAXGUSDT",
+        "closed_at": datetime.now(timezone.utc),
+        "exit_price": 3700.0,
+        "pnl": 1.0,
+        "duration_seconds": 60.0,
+    }
+    checker._position_is_flat = MagicMock(return_value=True)
+    checker.load_trade = MagicMock(
+        return_value={
+            "trade_id": "PAXGUSDT",
+            "symbol": "PAXGUSDT",
+            "positionSide": "BUY",
+            "quantity": 0.01,
+        }
+    )
+    checker.delete_trade_with_orders = MagicMock()
+    checker.set_cooldown = MagicMock()
+
+    assert checker._exit_trade("PAXGUSDT", "PAXGUSDT") is True
+
+    checker.mongo_handler.append_decision_event.assert_not_called()
+    checker.delete_trade_with_orders.assert_called_once_with("PAXGUSDT")
+    assert "PAXGUSDT" not in checker.trades
+
+
 def test_exit_rejects_fills_after_a_new_entry_lifecycle() -> None:
     checker = TradeChecker.__new__(TradeChecker)
     checker.trades = {"BTCUSDT": {"trade_id": "stale"}}
