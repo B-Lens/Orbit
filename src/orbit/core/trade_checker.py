@@ -1941,10 +1941,13 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         self._stop_ws()
 
                 for symbol in active_trade_symbols:
+                    trade = self.trades.get(symbol)
+                    if trade is None:
+                        continue
                     if (
-                        self.trades[symbol].get("stop_loss_price") is None
-                        or "target" not in self.trades[symbol]
-                        or self.trades[symbol].get("stop_loss_order") is None
+                        trade.get("stop_loss_price") is None
+                        or "target" not in trade
+                        or trade.get("stop_loss_order") is None
                     ):
                         flag = True
                         break
@@ -1953,18 +1956,21 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     if current_price is None:
                         continue
 
-                    trade_id = self.trades[symbol].get("trade_id") or symbol
-                    self.trades[symbol]["current_price"] = current_price
+                    if self.trades.get(symbol) is not trade:
+                        continue
+
+                    trade_id = trade.get("trade_id") or symbol
+                    trade["current_price"] = current_price
                     self._persist_current_price(trade_id, current_price)
 
                     self.check_trade(
                         risk_management,
                         symbol,
-                        self.trades[symbol]["stop_loss_price"],
-                        self.trades[symbol]["target"],
+                        trade["stop_loss_price"],
+                        trade["target"],
                         current_price,
-                        self.trades[symbol]["stop_loss_order"],
-                        self.trades[symbol]["quantity"],
+                        trade["stop_loss_order"],
+                        trade["quantity"],
                     )
                     if self.trades.get(symbol, {}).get("exit_pending"):
                         flag = True

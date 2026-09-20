@@ -1251,6 +1251,33 @@ class TestTradeChecker(unittest.TestCase):
         checker.check_trade.assert_not_called()
         checker.activePosition_coolMaker.assert_called_once_with()
 
+    def test_monitor_skips_trade_removed_after_active_symbol_snapshot(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.trades = {
+            "PAXGUSDT": {
+                "trade_id": "PAXGUSDT",
+                "stop_loss_price": 4500.0,
+                "target": 4300.0,
+                "stop_loss_order": {"algoId": "101"},
+                "quantity": 0.01,
+            }
+        }
+        checker._ws_manager = MagicMock()
+        checker._ensure_ws = MagicMock(
+            side_effect=lambda _symbols: checker.trades.pop("PAXGUSDT")
+        )
+        checker.check_price_freshness = MagicMock()
+        checker.check_trade = MagicMock()
+        checker.activePosition_coolMaker = MagicMock(side_effect=KeyboardInterrupt)
+        indian_time = MagicMock(minute=0)
+
+        with patch("orbit.core.trade_checker.get_indian_time", return_value=indian_time):
+            with self.assertRaises(KeyboardInterrupt):
+                checker.monitor_trades(["PAXGUSDT"], {})
+
+        checker.check_price_freshness.assert_not_called()
+        checker.check_trade.assert_not_called()
+
     def test_exit_attempts_sibling_cancellation_when_filled_order_is_terminal(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.trades = {
