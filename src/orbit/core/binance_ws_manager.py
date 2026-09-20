@@ -10,7 +10,7 @@ Features
 * **Auto-reconnect** with exponential backoff (capped at 60 s).
 * **Ping/pong keepalive** via ``websocket-client`` built-in support.
 * **Stale-connection detection** — restarts if no message is received within
-  ``stale_threshold`` seconds (default 30 s).
+  ``stale_threshold`` seconds (default 60 s).
 * **Thread safety** — guarantees only one WebSocket thread runs at a time
   using a :class:`threading.Lock`.
 * **Clean shutdown** — :meth:`stop` signals the run-loop to exit and closes
@@ -77,7 +77,7 @@ class BinanceWSManager:
         trading_pairs: List[str],
         on_price_update: Callable[[str, float, float], None],
         on_status_change: Optional[Callable[[str], None]] = None,
-        stale_threshold: float = 30.0,
+        stale_threshold: float = 60.0,
         ping_interval: int = _PING_INTERVAL,
         ping_timeout: int = _PING_TIMEOUT,
     ) -> None:
