@@ -375,9 +375,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             quantity=quantity,
             trade_id=trade_id,
             order_type="STOP_MARKET",
-            price_field="stopLossPrice",
             label="SL",
-            notify=self.send_sl_update_notifier,
         )
 
     def place_target_order(
@@ -407,9 +405,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             quantity=quantity,
             trade_id=trade_id,
             order_type="TAKE_PROFIT_MARKET",
-            price_field="targetPrice",
             label="Target",
-            notify=self.send_signal_updates,
         )
 
     def _place_exit_order(
@@ -421,26 +417,13 @@ class OrderManager(AuthenticationManager, RedisManager):
         quantity: float,
         trade_id: Optional[str],
         order_type: str,
-        price_field: str,
         label: str,
-        notify: Any,
     ) -> Optional[Dict[str, Any]]:
-        """Place a normalized SL/TP order and emit its request and response."""
+        """Place a normalized SL/TP order."""
         try:
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = abs(round(float(quantity), precision))
             quantity = self.adjust_quantity_step(symbol, quantity)
-            request = {
-                "symbol": symbol,
-                "side": side,
-                price_field: price,
-                "quantity": quantity,
-            }
-            notify(
-                data=None,
-                description=f"{label} Order Request for {symbol}",
-                fields=request,
-            )
             trigger_price = self.adjust_trigger_price(
                 symbol, price, side, order_type
             )
@@ -465,11 +448,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                         "order_id": response.get("algoId") if response else None,
                     },
                 )
-            notify(
-                data=None,
-                description=f"{label} Order Response for {symbol}",
-                fields=response,
-            )
             return response
         except ClientError as error:
             if trade_id and self.mongo_handler is not None:
@@ -631,17 +609,12 @@ class OrderManager(AuthenticationManager, RedisManager):
             qty_from_alloc: float = 0.0
 
             if sl is not None and symbol in risk_management:
-                qty_from_alloc, req_margin = self.calculate_risk_position_size(
+                qty_from_alloc, _ = self.calculate_risk_position_size(
                     symbol=symbol,
                     entry_price=price,
                     stop_price=sl,
                     risk_perc=risk_management[symbol],
                     leverage=leverage,
-                )
-                self.send_logs(
-                    data=None,
-                    description=f"Required margin for {symbol} is {req_margin}",
-                    fields=None,
                 )
             if quantity is None:
                 quantity = qty_from_alloc
@@ -754,12 +727,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "leverage": leverage,
             }
 
-            self.send_signal_updates(
-                data=None,
-                description=f"Order request Params for {symbol}",
-                fields=field_params,
-            )
-
             futures_client = self._order_client_for(symbol)
             futures_client.change_leverage(
                 symbol=symbol, leverage=leverage, recvWindow=60000
@@ -803,12 +770,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
 
             time.sleep(2)
-
-            self.send_signal_updates(
-                data=None,
-                description=f"{symbol} order placed successfully",
-                fields=order_response,
-            )
 
             if ros:
                 logger.info(f"ROS mode: returning after main order for {symbol}")
@@ -931,22 +892,9 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "recvWindow": 60000,
             }
 
-            self.send_signal_updates(
-                data=None,
-                description=f"Market Order request for {symbol}",
-                fields=market_order_params,
-            )
-
             order_response = self._order_client_for(symbol).new_order(
                 **market_order_params
             )
-
-            if order_response:
-                self.send_signal_updates(
-                    data=None,
-                    description=f"{symbol} market order placed successfully",
-                    fields=order_response,
-                )
 
             return order_response
 
@@ -1319,7 +1267,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             orderId: The ``orderId`` of the order to modify.
             price: New limit price.
             quantity: New quantity.
-            order_type: Human-readable label (e.g. ``"SL"``) used in Discord notifications.
+            order_type: Human-readable order label (for example, ``"SL"``).
 
         Returns:
             A list containing the modification response dict(s), or an empty list on failure.
@@ -1339,11 +1287,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                 recvWindow=60000,
             )
 
-            self.send_active_trades_info(
-                data=None,
-                description=f"{symbol} {order_type or ''} Modified",
-                fields=modified_order,
-            )
             return (
                 modified_order if isinstance(modified_order, list) else [modified_order]
             )

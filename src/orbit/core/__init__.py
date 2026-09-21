@@ -5,7 +5,7 @@ orbit.core
 Core module for the Binance trading automation system.
 
 Public classes:
-    - DiscordManager: Discord webhook notification management.
+    - DiscordManager: Discord alert and exception delivery.
     - ExceptionManager: Centralised exception handling and reporting.
     - AuthenticationManager: Binance API authentication and client setup.
     - MongoHandler: MongoDB OHLCV data storage and retrieval.

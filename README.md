@@ -65,7 +65,7 @@ first; if both grounded providers fail, the run preserves cached sentiment.
 | --- | --- |
 | `config/config.json` | Symbols, leverage, fixed allocations, precision, cooldowns, and risk limits. |
 | `config/strategies.yaml` | Symbol-to-strategy ownership and allowed execution modes. |
-| `config/webhooks.yaml` | Discord channel mapping; URLs come from environment variables. |
+| `config/webhooks.yaml` | Discord alert and exception webhooks; URLs come from environment variables. |
 | `.env` | Testnet/live credentials and service endpoints; it does not control execution modes. |
 
 ## Architecture

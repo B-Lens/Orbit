@@ -241,7 +241,6 @@ class TestBCHStrategyRiskContract(unittest.TestCase):
             ),
             patch.object(strategy, "compute_sma", return_value=upper),
             patch.object(strategy, "is_bullish_reversal", return_value=True),
-            patch.object(strategy, "send_params"),
             patch(
                 "orbit.strategies.reversal_strategy.generate_chart", return_value=None
             ),
@@ -265,7 +264,6 @@ class TestBCHStrategyRiskContract(unittest.TestCase):
             ),
             patch.object(strategy, "compute_sma", return_value=upper),
             patch.object(strategy, "is_bearish_reversal", return_value=True),
-            patch.object(strategy, "send_params"),
             patch(
                 "orbit.strategies.reversal_strategy.generate_chart", return_value=None
             ),

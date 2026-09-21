@@ -18,6 +18,8 @@ Application code uses a `src` layout under `src/orbit/`. Runtime orchestration a
 
 Use four-space indentation and keep Python code readable and consistent with nearby code; no automatic formatter is required. Add type annotations to new or changed interfaces; `mypy.ini` enables strict checking. Name modules, functions, and variables with `snake_case`, classes with `PascalCase`, and constants with `UPPER_SNAKE_CASE`. Keep strategy implementations in `<asset>_strategy.py` and register them through `strategy_registry.py`. Route exchange orders through `OrderManager`; market-intelligence code must not place orders directly.
 
+Keep changes minimal and directly scoped to the requested behavior. Avoid unrelated refactors, configuration cleanup, documentation edits, or interface changes unless they are required to implement or verify the request.
+
 ## Testing Guidelines
 
 Tests use pytest and `unittest` classes/mocks. Name files `test_<subject>.py` and test methods `test_<behavior>`. Exercise production behavior while mocking Binance, Redis, MongoDB, Discord, and LLM boundaries. Add regression tests for bug fixes and cover paper, testnet, and live safety gates when changing execution logic. No numeric coverage threshold is configured; prioritize risk and order-lifecycle paths.

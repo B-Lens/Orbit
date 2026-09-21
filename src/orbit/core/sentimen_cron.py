@@ -156,8 +156,6 @@ class Croner(ExceptionManager, RedisManager):
             return result
         sentiment = result.get("sentiment")
         sentiment_confidence = result.get("confidence")
-        sentiment_reasoning = result.get("explanation")
-        provider = result.get("provider", "Unknown")
 
         effective_sentiment, signal_action, confirmation_count = (
             self._resolve_effective_sentiment(sentiment, sentiment_confidence)
@@ -168,16 +166,6 @@ class Croner(ExceptionManager, RedisManager):
         result["confirmation_count"] = confirmation_count
 
         record_sentiment_snapshot(self.redis_client, result)
-
-        self.send_market_sentiment(
-            data=(
-                f"Observed Sentiment = {sentiment}, Effective Signal = {effective_sentiment}, "
-                f"Confidence: {sentiment_confidence}, Action: {signal_action}, "
-                f"Provider: {provider}, Reasoning: {sentiment_reasoning}"
-            ),
-            description=None,
-            fields=result,
-        )
 
         return result
 
