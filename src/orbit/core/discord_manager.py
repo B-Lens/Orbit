@@ -53,7 +53,7 @@ class DiscordManager:
         try:
             url = os.getenv(f"ORBIT_WEBHOOK_{key.upper()}")
             if not url:
-                logger.debug("Webhook '%s' is not configured; notification skipped", key)
+                logger.error("Webhook '%s' is not configured; notification skipped", key)
                 return None
             if data is None:
                 data = ""
