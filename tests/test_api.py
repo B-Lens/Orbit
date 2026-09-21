@@ -140,6 +140,7 @@ def test_daily_report_uses_one_midnight_to_midnight_ist_window(
     mongo.get_trade_decisions.return_value = []
     mongo.get_income_records.return_value = []
     mongo.get_active_trade_decisions.return_value = []
+    mongo.get_closed_trades_between.return_value = []
 
     response = get_daily_report(date(2026, 9, 11))
 
@@ -160,6 +161,9 @@ def test_daily_report_uses_one_midnight_to_midnight_ist_window(
     assert response.metrics["equity_change_pct"] is None
     assert response.metrics["max_drawdown"] == 0.0
     mongo.get_active_trade_decisions.assert_called_once_with(end, "testnet")
+    mongo.get_closed_trades_between.assert_called_once_with(
+        start, end, 0, execution_mode="testnet"
+    )
 
 
 @patch.dict("os.environ", {
@@ -240,6 +244,7 @@ def test_daily_report_uses_archived_verified_wallet_when_exchange_is_unavailable
     mongo = mongo_handler.return_value
     mongo.get_trade_decisions.return_value = []
     mongo.get_income_records.return_value = []
+    mongo.get_closed_trades_between.return_value = []
     mongo.get_active_trade_decisions.return_value = []
     mongo.get_report_accounting.return_value = {
         "source": "binance_testnet_income_and_usdt_wallet",
@@ -269,6 +274,7 @@ def test_weekly_report_uses_saturday_to_saturday_midnight_ist_window(
     mongo = mongo_handler.return_value
     mongo.get_trade_decisions.return_value = []
     mongo.get_income_records.return_value = []
+    mongo.get_closed_trades_between.return_value = []
 
     response = get_weekly_report(date(2025, 9, 6))
 
@@ -282,6 +288,9 @@ def test_weekly_report_uses_saturday_to_saturday_midnight_ist_window(
     )
     mongo.get_income_records.assert_called_once_with(
         int(start.timestamp() * 1000), int(end.timestamp() * 1000), "testnet"
+    )
+    mongo.get_closed_trades_between.assert_called_once_with(
+        start, end, 0, execution_mode="testnet"
     )
     assert response.metrics["equity_value"] is None
     assert response.metrics["net_pnl"] == 0.0

@@ -62,7 +62,10 @@ copies duplicated decision data and did not represent executed positions.
 ## Daily and weekly reports
 
 The `/daily` and `/weekly` dashboard reports read Testnet decisions, execution
-events, and active lifecycle evidence from MongoDB. For periods ending within
+events, closed-trade lifecycles, and active lifecycle evidence from MongoDB.
+Closed-trade counts and per-asset P&L use the durable lifecycle collection so
+broker-reconstructed trades are included even when they have no originating
+decision event. For periods ending within
 the last 30 days, the API reads Testnet income and the USDT wallet entry from
 the current Binance account response when Testnet credentials are configured.
 It reconstructs the period-end USDT balance by subtracting subsequent USDT

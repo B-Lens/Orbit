@@ -11,18 +11,32 @@ from unittest.mock import MagicMock
 import pytest
 
 
-def test_ist_day_assigns_closes_by_event_time() -> None:
+def test_report_uses_durable_closed_lifecycles() -> None:
     decisions = [{
         "symbol": "ATOMUSDT",
-        "execution_events": [
-            {"status": "trade_closed", "timestamp": datetime(2026, 9, 12, 4, 10, 18), "pnl": -6.43758611},
-            {"status": "trade_closed", "timestamp": datetime(2026, 9, 12, 23, 0, 43), "pnl": 15.15294538},
-        ],
+        "execution_events": [{
+            "status": "trade_closed",
+            "timestamp": datetime(2026, 9, 12, 4, 10, 18),
+            "pnl": -6.43758611,
+        }],
     }]
-    first = build_report_body(date(2026, 9, 12), decisions, [])
-    second = build_report_body(date(2026, 9, 13), decisions, [])
-    assert "| ATOMUSDT | 1 | -6.43758611 |" in first
-    assert "| ATOMUSDT | 1 | 15.15294538 |" in second
+    closed_trades = [
+        {"symbol": "ATOMUSDT", "pnl": -6.43758611},
+        {
+            "trade_id": "reconstructed:LINKUSDT:one",
+            "symbol": "LINKUSDT",
+            "pnl": 15.15294538,
+            "lifecycle_scope": "complete",
+        },
+    ]
+
+    report = build_report_body(
+        date(2026, 9, 12), decisions, [], closed_trades=closed_trades
+    )
+
+    assert "Closed trades: **2**" in report
+    assert "| ATOMUSDT | 1 | -6.43758611 |" in report
+    assert "| LINKUSDT | 1 | 15.15294538 |" in report
 
 
 def test_ist_week_includes_start_and_excludes_end() -> None:

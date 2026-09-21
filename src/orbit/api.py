@@ -500,6 +500,9 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
     archived = mongo.get_report_accounting("daily", start, end, "testnet")
     income, equity, income_source = _report_accounting(start, end, income, archived)
     active_trades = mongo.get_active_trade_decisions(end, "testnet")
+    closed_trades = mongo.get_closed_trades_between(
+        start, end, 0, execution_mode="testnet"
+    )
     metrics = report_metrics(income, equity)
     metrics["income_verified"] = equity is not None
     return ReportResponse(
@@ -515,6 +518,7 @@ def get_daily_report(report_date: Optional[date] = None) -> ReportResponse:
             active_trades,
             equity,
             include_automation_task=False,
+            closed_trades=closed_trades,
             income_source=income_source,
         ),
     )
@@ -540,6 +544,9 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
     )
     archived = mongo.get_report_accounting("weekly", start, end, "testnet")
     income, equity, income_source = _report_accounting(start, end, income, archived)
+    closed_trades = mongo.get_closed_trades_between(
+        start, end, 0, execution_mode="testnet"
+    )
     metrics = report_metrics(income, equity)
     metrics["income_verified"] = equity is not None
     return ReportResponse(
@@ -549,7 +556,12 @@ def get_weekly_report(week_start: Optional[date] = None) -> ReportResponse:
         timezone="IST",
         metrics=metrics,
         body=build_weekly_report_body(
-            selected_start, decisions, income, equity, income_source=income_source
+            selected_start,
+            decisions,
+            income,
+            equity,
+            closed_trades=closed_trades,
+            income_source=income_source,
         ),
     )
 
