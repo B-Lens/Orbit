@@ -6,11 +6,9 @@ from orbit.core.discord_manager import DiscordManager
 class TestDiscordManager:
     @patch("orbit.core.discord_manager.record_notification")
     @patch("orbit.core.discord_manager.requests.post")
-    @patch(
-        "orbit.core.discord_manager.URLS.get_url", return_value="https://example.test"
-    )
+    @patch("orbit.core.discord_manager.os.getenv", return_value="https://example.test")
     def test_exception_alert_truncation_stays_within_embed_field_limit(
-        self, _mock_get_url: Mock, mock_post: Mock, mock_record: Mock
+        self, _mock_getenv: Mock, mock_post: Mock, mock_record: Mock
     ) -> None:
         mock_post.return_value.status_code = 204
         fields = {f"field-{index}": index for index in range(26)}
@@ -36,11 +34,9 @@ class TestDiscordManager:
 
     @patch("orbit.core.discord_manager.record_notification")
     @patch("orbit.core.discord_manager.requests.post")
-    @patch(
-        "orbit.core.discord_manager.URLS.get_url", return_value="https://example.test"
-    )
+    @patch("orbit.core.discord_manager.os.getenv", return_value="https://example.test")
     def test_value_truncation_reserves_warning_field_at_field_limit(
-        self, _mock_get_url: Mock, mock_post: Mock, _mock_record: Mock
+        self, _mock_getenv: Mock, mock_post: Mock, _mock_record: Mock
     ) -> None:
         mock_post.return_value.status_code = 204
         fields = {f"field-{index}": index for index in range(25)}
@@ -56,13 +52,13 @@ class TestDiscordManager:
 
     @patch("orbit.core.discord_manager.record_notification")
     @patch("orbit.core.discord_manager.requests.post")
-    @patch("orbit.core.discord_manager.URLS.get_url")
+    @patch("orbit.core.discord_manager.os.getenv")
     def test_unsupported_notifications_are_discarded(
-        self, mock_get_url: Mock, mock_post: Mock, mock_record: Mock
+        self, mock_getenv: Mock, mock_post: Mock, mock_record: Mock
     ) -> None:
         assert DiscordManager().send_to_webhook("signal", None, "Order placed") is None
 
-        mock_get_url.assert_not_called()
+        mock_getenv.assert_not_called()
         mock_post.assert_not_called()
         mock_record.assert_not_called()
 
