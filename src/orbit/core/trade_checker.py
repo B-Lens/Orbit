@@ -157,7 +157,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
     1. Discovers active positions via the Binance API.
     2. Ensures each position has exactly one SL (and optionally one TP).
     3. Trails or adapts the stop-loss using the symbol's registered strategy.
-    4. Sends Discord notifications for every significant event.
+    4. Records lifecycle progress for monitoring and recovery.
 
     A :class:`BinanceWSManager` is used for the live price feed, providing
     automatic reconnection, ping/pong keepalive, and stale-connection
@@ -205,8 +205,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.live_prices[symbol] = (price, timestamp)
 
     def _handle_ws_status(self, msg: str) -> None:
-        """Forward WebSocket status messages to Discord logs."""
-        self.send_websocket_logs(data=None, description=msg, fields=None)
+        """Log WebSocket status changes."""
+        logger.info("WebSocket status: %s", msg)
 
     # ------------------------------------------------------------------
     # WebSocket lifecycle
@@ -1071,12 +1071,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
         sma_series = self.compute_sma(close)
         current_sma = sma_series.iloc[-1]
 
-        self.send_active_trade_prices(
-            data=None,
-            description=f"{symbol} Adaptive running stats on {side} side",
-            fields={"sma": current_sma, "current_price": current_price},
-        )
-
         if side == "BUY" and current_price > current_sma:
             resp = self.order_manager.place_market_order(symbol, "SELL", quantity)
             if resp:
@@ -1161,21 +1155,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             if current_price <= stop_loss and stop_loss <= self.trades[symbol]["price"]:
                 logger.info(f"Stop-loss hit for {symbol}, Exiting trade.")
-                self.send_false_alarm(
-                    data=None,
-                    description=f"{symbol} SL Hit at BUY side",
-                    fields=self.trades[symbol],
-                )
                 self._mark_exit_pending(symbol, trade_id)
                 return
 
             if current_price <= stop_loss and stop_loss > self.trades[symbol]["price"]:
                 logger.info(f"Average hit for {symbol}. Exiting trade.")
-                self.send_average_alarm(
-                    data=None,
-                    description=f"{symbol} SL Hit at BUY side",
-                    fields=self.trades[symbol],
-                )
                 self._mark_exit_pending(symbol, trade_id)
                 return
 
@@ -1185,11 +1169,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 and current_price >= target
             ):
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
-                self.send_true_alarm(
-                    data=None,
-                    description=f"{symbol} Target Hit at BUY side",
-                    fields=self.trades[symbol],
-                )
                 self._mark_exit_pending(symbol, trade_id)
                 return
 
@@ -1211,11 +1190,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     )
                     if new_stop_order:
                         self.trades[symbol]["stop_loss_price"] = new_stop
-                        self.send_sl_update_notifier(
-                            data=None,
-                            description=f"{symbol}: SL moved to Entry Price",
-                            fields={"new_sl": new_stop},
-                        )
                     return
 
             if not TRAILING_STOPLOSS.get(symbol, True):
@@ -1264,21 +1238,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             if current_price >= stop_loss and stop_loss >= self.trades[symbol]["price"]:
                 logger.info(f"Stop-loss hit for {symbol}. Exiting trade.")
-                self.send_false_alarm(
-                    data=None,
-                    description=f"{symbol} SL Hit at SELL Side",
-                    fields=self.trades[symbol],
-                )
                 self._mark_exit_pending(symbol, trade_id)
                 return
 
             if current_price >= stop_loss and stop_loss < self.trades[symbol]["price"]:
                 logger.info(f"Average hit for {symbol}, Exiting trade.")
-                self.send_average_alarm(
-                    data=None,
-                    description=f"{symbol} SL Hit at SELL Side",
-                    fields=self.trades[symbol],
-                )
                 self._mark_exit_pending(symbol, trade_id)
                 return
 
@@ -1288,11 +1252,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 and current_price <= target
             ):
                 logger.info(f"Target hit for {symbol}. Exiting trade.")
-                self.send_true_alarm(
-                    data=None,
-                    description=f"{symbol} Target Hit at SELL Side",
-                    fields=self.trades[symbol],
-                )
                 self._mark_exit_pending(symbol, trade_id)
                 return
 
@@ -1314,11 +1273,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     )
                     if new_stop_order:
                         self.trades[symbol]["stop_loss_price"] = new_stop
-                        self.send_sl_update_notifier(
-                            data=None,
-                            description=f"{symbol}: SL moved to Entry Price",
-                            fields={"new_sl": new_stop},
-                        )
                     return
 
             if not TRAILING_STOPLOSS.get(symbol, True):
@@ -1384,18 +1338,6 @@ class TradeChecker(AuthenticationManager, RedisManager):
             return
 
         try:
-            self.send_active_trade_prices(
-                data=None,
-                description=f"Price Updates for {symbol}",
-                fields={
-                    "Entry price": f'{self.trades[symbol].get("price")}',
-                    "current_price": f"{current_price}",
-                    "stop_loss": f"{stop_loss}",
-                    "target": f"{target}",
-                    "side": f'{self.trades[symbol].get("positionSide")}',
-                },
-            )
-
             if self.trades[symbol]["positionSide"] == "BUY":
                 self.long_check_trade(
                     risk_management,
@@ -1998,7 +1940,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         if current_price is None:
                             continue
 
-                        field_params = self.update_trade_data(
+                        self.update_trade_data(
                             symbol,
                             tradesFound[symbol],
                             current_price,
@@ -2006,19 +1948,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
                             take_profit_order,
                         )
 
-                        self.send_active_trades_info(
-                            data=None,
-                            description=f"{symbol} trade is Active",
-                            fields=field_params,
-                        )
                         time.sleep(2)
 
                     last_minute_used = get_indian_time().minute
 
                     if not any_trade_active:
-                        self.send_active_trades_info(
-                            data=None, description="No trade is Active", fields=None
-                        )
                         self._stop_ws()
 
                 iteration_succeeded = True

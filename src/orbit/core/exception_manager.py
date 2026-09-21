@@ -11,7 +11,7 @@ Every core class that needs to report errors inherits from this class
 
 import traceback
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Optional, Union
 
 from orbit.core.discord_manager import DiscordManager
 from orbit.core.command_center import record_exception
@@ -101,7 +101,6 @@ class ExceptionManager(DiscordManager):
         self,
         exception: Exception,
         context_description: str,
-        debug_params: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Handle a generic exception with full traceback reporting.
 
@@ -109,8 +108,6 @@ class ExceptionManager(DiscordManager):
             exception: The caught exception instance.
             context_description: Human-readable context of where the error
                 occurred (e.g. ``"ensure_orders"``).
-            debug_params: Optional dictionary of debugging values that will be
-                sent to the *exception_params* webhook.
         """
         tb = traceback.extract_tb(exception.__traceback__)
         origin_file = tb[-1].filename if tb else "unknown"
@@ -153,11 +150,6 @@ class ExceptionManager(DiscordManager):
                 f"Full traceback:\n{traceback_str}"
             ),
         )
-
-        if debug_params:
-            self.send_exception_params_debug(
-                data=None, description=context_description, fields=debug_params
-            )
 
     def exception_trigger(
         self,

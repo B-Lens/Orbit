@@ -4,21 +4,19 @@ from datetime import date, datetime, timedelta, timezone
 import logging
 from typing import Any
 
-from orbit.core.discord_manager import DiscordManager
 from orbit.core.performance import PerformanceTracker
 from orbit.core.reporting import IST, report_window, snapshot_usdt_income
 
 logger = logging.getLogger("Orbit")
 
 
-class PerformanceReporter(DiscordManager):
+class PerformanceReporter:
     def __init__(
         self,
         futures_client: Any,
         mongo_handler: Any = None,
         execution_mode: str = "unknown",
     ) -> None:
-        super().__init__()
         self.client = futures_client
         self.tracker = PerformanceTracker(
             futures_client, mongo_handler, execution_mode
@@ -43,11 +41,6 @@ class PerformanceReporter(DiscordManager):
             **summary.to_dict(),
         }
         logger.info("24h performance: %s", payload)
-        self.send_logs(
-            data=None,
-            description="Orbit Futures performance (last 24h)",
-            fields=payload,
-        )
         return payload
 
     def archive_recent_reports(self, today: date | None = None, days: int = 30) -> int:

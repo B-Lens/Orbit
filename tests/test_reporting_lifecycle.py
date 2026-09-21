@@ -9,12 +9,22 @@ from orbit.core.signal_analyzer import SignalAnalyzer
 
 
 class TestReportingLifecycle(unittest.TestCase):
+    def test_sentiment_conflict_does_not_send_alert(self):
+        analyzer = SignalAnalyzer.__new__(SignalAnalyzer)
+        analyzer.send_alerts = MagicMock()
+
+        self.assertTrue(
+            analyzer._should_skip_due_to_sentiment(
+                "SELL", "ETHUSDT", {}, sentiment="BULLISH"
+            )
+        )
+        analyzer.send_alerts.assert_not_called()
+
     @patch("orbit.core.signal_analyzer.time.sleep", return_value=None)
-    @patch("orbit.core.signal_analyzer.threading.Thread")
     @patch("orbit.core.signal_analyzer.record_runtime_activity")
     @patch("orbit.core.signal_analyzer.STRATEGY_REGISTRY")
-    def test_ohlcv_reporting_start_failure_does_not_block_signal_generation(
-        self, strategy_registry, _record_activity, thread_class, _sleep
+    def test_signal_generation_runs_without_discord_reporting(
+        self, strategy_registry, _record_activity, _sleep
     ):
         historical_data = pd.DataFrame(
             {
@@ -32,8 +42,6 @@ class TestReportingLifecycle(unittest.TestCase):
         strategy_class.__module__ = "orbit.strategies.example_strategy"
         strategy_class.__name__ = "ExampleStrategy"
         strategy_registry.get.return_value = strategy_class
-        thread_class.return_value.start.side_effect = RuntimeError("thread unavailable")
-
         analyzer = SignalAnalyzer.__new__(SignalAnalyzer)
         analyzer.trading_pairs = ["ETHUSDT"]
         analyzer.redis_client = MagicMock()
@@ -41,23 +49,10 @@ class TestReportingLifecycle(unittest.TestCase):
         analyzer.mongo_handler.handle_mongo_data.return_value = historical_data
         analyzer.execution_settings = MagicMock()
         analyzer.execution_settings.mode_for.return_value.value = "testnet"
-        analyzer.send_logs = MagicMock()
-        analyzer.send_signal_updates = MagicMock()
         analyzer._record_decision = MagicMock()
 
         self.assertEqual(list(analyzer.analyze_market({})), [])
 
-        thread_class.assert_called_once_with(
-            target=strategy.send_params,
-            kwargs={
-                "stock_df": historical_data,
-                "symbol": "ETHUSDT",
-                "duration": "15 MIN",
-            },
-            daemon=True,
-            name="OHLCVParams-ETHUSDT",
-        )
-        thread_class.return_value.start.assert_called_once_with()
         strategy.generate_signals.assert_called_once_with(symbol="ETHUSDT")
 
     def test_active_position_is_rejected_before_market_data_or_strategy_work(self):
@@ -175,8 +170,6 @@ class TestReportingLifecycle(unittest.TestCase):
         manager.adjust_quantity_step = MagicMock(return_value=0.5)
         manager.adjust_price_tick = MagicMock(return_value=98.0)
         manager.place_algo_conditional_order = MagicMock(return_value={"algoId": 456})
-        notify = MagicMock()
-
         response = manager._place_exit_order(
             symbol="ETHUSDT",
             side="SELL",
@@ -184,9 +177,7 @@ class TestReportingLifecycle(unittest.TestCase):
             quantity=0.5,
             trade_id="decision-1",
             order_type="STOP_MARKET",
-            price_field="stopLossPrice",
             label="SL",
-            notify=notify,
         )
 
         self.assertEqual(response, {"algoId": 456})

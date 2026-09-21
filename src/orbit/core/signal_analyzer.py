@@ -12,7 +12,6 @@ the constructor for easier testing and looser coupling.
 
 import time
 import logging
-import threading
 import uuid
 from importlib import metadata
 from typing import Any, Dict, Iterator, Mapping, Optional
@@ -112,10 +111,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     f"Running strategy for {symbol}",
                 )
 
-                self.send_logs(
-                    data=None, description=f"Analyzing market for {symbol}", fields=None
-                )
-
                 strategy_class = STRATEGY_REGISTRY.get(symbol)
                 if not strategy_class:
                     self.send_alerts(f"No strategy found for {symbol}", None)
@@ -127,12 +122,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                 strategy_identity = self._strategy_identity(strategy_class)
                 availability = unavailable_symbols.get(symbol)
                 if availability is not None:
-                    reason = str(availability.get("reason", "post_exit_cooldown"))
-                    self.send_cooldown_update(
-                        data=None,
-                        description=f"{symbol} entry blocked: {reason}",
-                        fields=dict(availability),
-                    )
                     # Availability states are not candidate trades. They are
                     # deliberately excluded from the blocked-trade audit ledger.
                     continue
@@ -152,22 +141,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
 
                 try:
                     strategy = strategy_class(historical_data)
-                    try:
-                        params_thread = threading.Thread(
-                            target=strategy.send_params,
-                            kwargs={
-                                "stock_df": historical_data,
-                                "symbol": symbol,
-                                "duration": "15 MIN",
-                            },
-                            daemon=True,
-                            name=f"OHLCVParams-{symbol}",
-                        )
-                        params_thread.start()
-                    except Exception as exc:
-                        logger.warning(
-                            "Unable to publish OHLCV params for %s: %s", symbol, exc
-                        )
                     signal_ss = time.perf_counter()
                     signal_dict = strategy.generate_signals(symbol=symbol)
                     signal_es = time.perf_counter()
@@ -184,9 +157,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     continue
 
                 if not signal_dict:
-                    self.send_signal_updates(
-                        data=None, description=f"{symbol}: No Signal Found", fields=None
-                    )
                     self._record_decision(
                         symbol=symbol,
                         outcome="no_signal",
@@ -197,7 +167,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     continue
 
                 signal = signal_dict.get("signal")
-                chart_path_raw = signal_dict.get("chart_path_raw")
                 pattern = signal_dict.get("pattern") or "unknown"
 
                 sentiment = self.get_market_sentiment()
@@ -219,16 +188,6 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                     continue
 
                 try:
-                    options = {"signal": signal, "pattern": pattern}
-
-                    if chart_path_raw:
-                        self.send_chart_to_webhook(
-                            file_path=chart_path_raw,
-                            data=None,
-                            description=f"{symbol}, signal = {signal}",
-                            fields=options,
-                        )
-
                     decision_id = self._record_decision(
                         symbol=symbol,
                         signal=signal,
@@ -285,18 +244,8 @@ class SignalAnalyzer(AuthenticationManager, RedisManager):
                 skip = False
 
                 if sentiment == "BULLISH" and signal == "SELL":
-                    self.send_alerts(
-                        data=f"{symbol}",
-                        description=f"Positive sentiment, but Sell signal",
-                        fields=None,
-                    )
                     skip = True
                 elif sentiment == "BEARISH" and signal == "BUY":
-                    self.send_alerts(
-                        data=f"{symbol}",
-                        description=f"Negative sentiment, but Buy signal",
-                        fields=None,
-                    )
                     skip = True
 
                 if skip:

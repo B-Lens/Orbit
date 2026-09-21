@@ -244,11 +244,6 @@ class BinanceAutomation(ExceptionManager):
                         self.trade_checker.merge_trade_fields(
                             decision_id or symbol, self.trades[symbol]
                         )
-                        self.send_signal_updates(
-                            data=None,
-                            description=f"Order {order_id} filled for {symbol}",
-                            fields=order,
-                        )
                         return
 
                 time.sleep(30)
@@ -304,7 +299,6 @@ class BinanceAutomation(ExceptionManager):
         entry_price = signal["entry_price"]
         stop_loss = signal["stop_loss"]
         target = signal["take_profit"]
-        meta_info = signal.get("Other Info", "")
         decision_id = signal.get("decision_id")
         record_runtime_activity(
             self.order_manager.redis_client,
@@ -352,13 +346,6 @@ class BinanceAutomation(ExceptionManager):
             )
             return
 
-        if meta_info:
-            self.send_logs(
-                data=f"{symbol} - {action}",
-                description=f"Signal Info: {meta_info}",
-                fields=None,
-            )
-
         price_to_use = entry_price or self.order_manager.get_symbol_price(symbol)
         logger.info(f"Placing {action} order for {symbol}...")
         record_runtime_activity(
@@ -400,12 +387,6 @@ class BinanceAutomation(ExceptionManager):
             name=f"OrderMonitor-{symbol}-{order_id}",
         )
         monitor_thread.start()
-
-        self.send_signal_updates(
-            data=None,
-            description=f"Order placed for {symbol} (monitoring started)",
-            fields={"orderId": order_id},
-        )
 
     # ------------------------------------------------------------------
     # Candle alignment
@@ -465,8 +446,6 @@ class BinanceAutomation(ExceptionManager):
 
         This is the **main thread** entry-point called by :meth:`run`.
         """
-        self.send_logs(data=None, description="Starting signal analysis thread")
-
         while True:
             try:
                 record_runtime_activity(
@@ -508,7 +487,6 @@ class BinanceAutomation(ExceptionManager):
 
     def start_trade_checker(self) -> None:
         """Background trade-monitor thread entry-point."""
-        self.send_logs(data=None, description="Starting trade checker thread")
         while True:
             try:
                 record_runtime_activity(
