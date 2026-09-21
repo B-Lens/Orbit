@@ -1,6 +1,5 @@
 import os
 import requests
-import yaml
 
 import logging
 from orbit.utils.utils import get_indian_time
@@ -10,50 +9,6 @@ from orbit.core.notification_feed import record_notification
 load_dotenv()  # Load environment variables from .env file
 
 logger = logging.getLogger("Orbit")
-
-def _load_webhooks() -> dict:
-    """
-    Load webhook URLs from the YAML config file.
-
-    Returns:
-        dict: A dictionary mapping webhook keys to their URLs.
-
-    Raises:
-        FileNotFoundError: If the webhooks YAML file cannot be found.
-        KeyError: If the YAML file does not contain a 'webhooks' key.
-    """
-    config_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "config", "webhooks.yaml"
-    )
-    config_path = os.path.abspath(config_path)
-
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-
-    return config["webhooks"]
-
-
-class URLS:
-    WEBHOOKS = _load_webhooks()
-
-    @classmethod
-    def get_url(cls, key: str) -> str:
-        """
-        Retrieve the webhook URL for the given key.
-
-        Args:
-            key (str): The key to identify the webhook.
-
-        Returns:
-            str: The webhook URL.
-
-        Raises:
-            ValueError: If the key does not exist in WEBHOOKS.
-        """
-        if key not in cls.WEBHOOKS:
-            raise ValueError(f"Invalid webhook key: {key}")
-        env_key = f"ORBIT_WEBHOOK_{key.upper()}"
-        return os.getenv(env_key) or cls.WEBHOOKS[key]
 
 
 class DiscordManager:
@@ -96,9 +51,9 @@ class DiscordManager:
             return None
 
         try:
-            url = URLS.get_url(key)
+            url = os.getenv(f"ORBIT_WEBHOOK_{key.upper()}")
             if not url:
-                logger.debug("Webhook '%s' is not configured; notification skipped", key)
+                logger.error("Webhook '%s' is not configured; notification skipped", key)
                 return None
             if data is None:
                 data = ""
