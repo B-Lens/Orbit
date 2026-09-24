@@ -518,6 +518,7 @@ class TestTradeChecker(unittest.TestCase):
     def test_stale_price_is_not_used_when_rest_fallback_fails(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.live_prices = {"PAXGUSDT": (4400.0, time.time() - 10)}
+        checker._rest_prices = {}
         checker.get_future_symbol_price = MagicMock(
             side_effect=ValueError("bad ticker")
         )
@@ -528,10 +529,23 @@ class TestTradeChecker(unittest.TestCase):
     def test_invalid_price_is_replaced_with_valid_rest_price(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.live_prices = {"SKYUSDT": (0.0, time.time())}
+        checker._rest_prices = {}
         checker.get_future_symbol_price = MagicMock(return_value=0.05)
 
         self.assertEqual(checker.check_price_freshness("SKYUSDT"), 0.05)
-        self.assertEqual(checker.live_prices["SKYUSDT"][0], 0.05)
+        self.assertEqual(checker._rest_prices["SKYUSDT"][0], 0.05)
+
+    def test_stale_price_reuses_recent_rest_fallback(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"ATOMUSDT": (1.7, 90.0)}
+        checker._rest_prices = {}
+        checker.get_future_symbol_price = MagicMock(return_value=1.8)
+
+        with patch("orbit.core.trade_checker.time.time", return_value=100.0):
+            self.assertEqual(checker.check_price_freshness("ATOMUSDT"), 1.8)
+            self.assertEqual(checker.check_price_freshness("ATOMUSDT"), 1.8)
+
+        checker.get_future_symbol_price.assert_called_once_with(symbol="ATOMUSDT")
 
     def test_price_outage_persists_reconciled_protective_orders(self):
         checker = TradeChecker.__new__(TradeChecker)
