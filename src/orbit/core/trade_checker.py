@@ -56,6 +56,8 @@ _POSITION_LIFECYCLE_LOCKS: Dict[str, Any] = {}
 _POSITION_LIFECYCLE_LOCKS_GUARD = threading.Lock()
 _POSITION_LIFECYCLE_LOCK_TIMEOUT = 120
 _POSITION_LIFECYCLE_LOCK_WAIT = 10
+_LIVE_PRICE_MAX_AGE = 2.0
+_REST_PRICE_MAX_AGE = 30.0
 
 
 def _quantity_is_complete(actual: float, expected: float) -> bool:
@@ -192,6 +194,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.order_manager: OrderManager = order_manager or OrderManager()
         self.mongo_handler: MongoHandler = mongo_handler or MongoHandler()
         self.live_prices: Dict[str, Tuple[float, float]] = {}
+        self._rest_prices: Dict[str, Tuple[float, float]] = {}
         self._ws_stale_threshold = ws_stale_threshold
         self._ws_manager: Optional[BinanceWSManager] = None
         self._trade_reasoner = trade_reasoner
@@ -203,6 +206,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
     def _handle_price_update(self, symbol: str, price: float, timestamp: float) -> None:
         """Receive a price tick from :class:`BinanceWSManager`."""
         self.live_prices[symbol] = (price, timestamp)
+        self._rest_prices.pop(symbol, None)
 
     def _handle_ws_status(self, msg: str) -> None:
         """Log WebSocket status changes."""
@@ -275,13 +279,24 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
     def check_price_freshness(self, symbol: str) -> Optional[float]:
         """Return a fresh price for *symbol*, falling back to the REST API."""
+        now = time.time()
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
-            price_age = time.time() - last_updated
-            if price_age <= 2 and math.isfinite(current_price) and current_price > 0:
+            price_age = now - last_updated
+            if (
+                price_age <= _LIVE_PRICE_MAX_AGE
+                and math.isfinite(current_price)
+                and current_price > 0
+            ):
                 return current_price
 
-            if price_age > 2:
+            rest_price = self._rest_prices.get(symbol)
+            if rest_price is not None:
+                cached_price, cached_at = rest_price
+                if now - cached_at <= _REST_PRICE_MAX_AGE:
+                    return cached_price
+
+            if price_age > _LIVE_PRICE_MAX_AGE:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
                     f"({price_age:.2f}s old) — falling back to REST."
@@ -291,6 +306,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     f"[WARN] Live price for {symbol} is invalid — falling back to REST."
                 )
         else:
+            rest_price = self._rest_prices.get(symbol)
+            if rest_price is not None:
+                cached_price, cached_at = rest_price
+                if now - cached_at <= _REST_PRICE_MAX_AGE:
+                    return cached_price
             logger.warning(
                 f"[WARN] Live price for {symbol} not found — fetching via REST."
             )
@@ -299,7 +319,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
             current_price = self.get_future_symbol_price(symbol=symbol)
             if not math.isfinite(current_price) or current_price <= 0:
                 raise ValueError(f"Invalid REST price for {symbol}: {current_price!r}")
-            self.live_prices[symbol] = (current_price, time.time())
+            self._rest_prices[symbol] = (current_price, time.time())
             return current_price
         except Exception as error:
             logger.warning(f"[WARN] Could not fetch a valid price for {symbol}: {error}")
