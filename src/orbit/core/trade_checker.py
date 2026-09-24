@@ -274,7 +274,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
     # ------------------------------------------------------------------
 
     def check_price_freshness(self, symbol: str) -> Optional[float]:
-        """Return a fresh price for *symbol*, falling back to the REST API."""
+        """Return a fresh price for *symbol* without refreshing stale WS data."""
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
             price_age = time.time() - last_updated
@@ -284,8 +284,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
             if price_age > 2:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
-                    f"({price_age:.2f}s old) — falling back to REST."
+                    f"({price_age:.2f}s old) — skipping price-dependent checks."
                 )
+                return None
             else:
                 logger.warning(
                     f"[WARN] Live price for {symbol} is invalid — falling back to REST."

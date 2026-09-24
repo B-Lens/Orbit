@@ -515,15 +515,14 @@ class TestTradeChecker(unittest.TestCase):
         self.assertEqual((symbol, price), ("PAXGUSDT", 4382.40))
         self.assertEqual(timestamp, manager._last_message_time)
 
-    def test_stale_price_is_not_used_when_rest_fallback_fails(self):
+    def test_stale_price_skips_rest_fallback(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.live_prices = {"PAXGUSDT": (4400.0, time.time() - 10)}
-        checker.get_future_symbol_price = MagicMock(
-            side_effect=ValueError("bad ticker")
-        )
+        checker.get_future_symbol_price = MagicMock()
 
         self.assertIsNone(checker.check_price_freshness("PAXGUSDT"))
         self.assertEqual(checker.live_prices["PAXGUSDT"][0], 4400.0)
+        checker.get_future_symbol_price.assert_not_called()
 
     def test_invalid_price_is_replaced_with_valid_rest_price(self):
         checker = TradeChecker.__new__(TradeChecker)
