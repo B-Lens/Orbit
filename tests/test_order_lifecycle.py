@@ -533,6 +533,30 @@ class TestTradeChecker(unittest.TestCase):
         self.assertEqual(checker.check_price_freshness("SKYUSDT"), 0.05)
         self.assertEqual(checker.live_prices["SKYUSDT"][0], 0.05)
 
+    def test_missing_stop_is_not_recreated_after_position_becomes_flat(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "101", "stop_loss_price": 1.804}
+        )
+        checker._position_is_flat = MagicMock(return_value=True)
+
+        orders = checker.ensure_orders(
+            "ATOMUSDT",
+            {
+                "trade_id": "trade-1",
+                "positionSide": "BUY",
+                "quantity": 682.14,
+            },
+            {"stop_loss_percent": 1},
+        )
+
+        self.assertEqual(orders, (None, None))
+        checker._position_is_flat.assert_called_once_with("ATOMUSDT")
+        checker.order_manager.place_sl_order.assert_not_called()
+        checker.order_manager.place_target_order.assert_not_called()
+
     def test_price_outage_persists_reconciled_protective_orders(self):
         checker = TradeChecker.__new__(TradeChecker)
         trade = {
