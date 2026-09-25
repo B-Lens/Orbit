@@ -172,7 +172,17 @@ class CodexOAuthResponsesClient:
             raise ValueError("prompt must not be empty")
 
         for attempt in range(MAX_PREMATURE_STREAM_RETRIES + 1):
-            output_text = self._invoke_stream(prompt, web_search)
+            try:
+                output_text = self._invoke_stream(prompt, web_search)
+            except RuntimeError as error:
+                cause = error.__cause__
+                retryable_url_error = isinstance(
+                    cause, urllib.error.URLError
+                ) and not isinstance(cause, urllib.error.HTTPError)
+                if attempt >= MAX_PREMATURE_STREAM_RETRIES or not retryable_url_error:
+                    raise
+                logger.warning("OpenAI request failed; retrying once: %s", error)
+                continue
             if output_text is not None:
                 logger.info("OpenAI OAuth response generated with %s", self.model)
                 return output_text
