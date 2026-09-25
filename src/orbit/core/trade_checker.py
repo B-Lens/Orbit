@@ -379,6 +379,18 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
                 take_profit_order = None
 
+            missing_protection = stop_loss_order is None or (
+                take_profit_order is None
+                and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+            )
+            if missing_protection and self._position_is_flat(symbol):
+                logger.info(
+                    "[SELF-HEAL] Skipping protective order recreation for %s "
+                    "because broker exposure is flat",
+                    symbol,
+                )
+                return stop_loss_order, take_profit_order
+
             if stop_loss_order is None:
                 sl_price = persisted.get("stop_loss_price") or self.calculate_sl_price(
                     trade, risk_management
