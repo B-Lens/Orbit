@@ -331,6 +331,19 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 if is_take_profit_order(order):
                     take_profit_order = take_profit_order or order
 
+            if (
+                stop_loss_order is None
+                or (
+                    take_profit_order is None
+                    and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+                )
+            ) and self._position_is_flat(symbol):
+                logger.info(
+                    "Skipping protective order recreation for flat %s position",
+                    symbol,
+                )
+                return None, None
+
             if stop_loss_order:
                 self.register_order(str(stop_loss_order.get("algoId", "")), trade_id)
                 self.update_trade_fields(

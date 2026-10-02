@@ -533,6 +533,50 @@ class TestTradeChecker(unittest.TestCase):
         self.assertEqual(checker.check_price_freshness("SKYUSDT"), 0.05)
         self.assertEqual(checker.live_prices["SKYUSDT"][0], 0.05)
 
+    def test_missing_stop_is_not_recreated_after_position_closes(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker._position_is_flat = MagicMock(return_value=True)
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "old-stop", "stop_loss_price": 1.736}
+        )
+
+        orders = checker.ensure_orders(
+            "ATOMUSDT",
+            {"trade_id": "atom-trade", "positionSide": "BUY", "quantity": 690.14},
+            {"stop_loss_percent": 1},
+        )
+
+        self.assertEqual(orders, (None, None))
+        checker._position_is_flat.assert_called_once_with("ATOMUSDT")
+        checker.order_manager.place_sl_order.assert_not_called()
+        checker.order_manager.place_target_order.assert_not_called()
+
+    def test_missing_stop_is_recreated_while_position_remains_open(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker.order_manager.place_sl_order.return_value = {"algoId": "new-stop"}
+        checker._position_is_flat = MagicMock(return_value=False)
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "old-stop", "stop_loss_price": 1.736}
+        )
+        checker.register_order = MagicMock()
+        checker.update_trade_fields = MagicMock()
+        checker.deregister_order = MagicMock()
+
+        with patch("orbit.core.trade_checker.time.sleep"):
+            checker.ensure_orders(
+                "ATOMUSDT",
+                {"trade_id": "atom-trade", "positionSide": "BUY", "quantity": 690.14},
+                {"stop_loss_percent": 1},
+            )
+
+        checker.order_manager.place_sl_order.assert_called_once_with(
+            symbol="ATOMUSDT", side="SELL", stoploss_price=1.736, quantity=690.14
+        )
+
     def test_price_outage_persists_reconciled_protective_orders(self):
         checker = TradeChecker.__new__(TradeChecker)
         trade = {
