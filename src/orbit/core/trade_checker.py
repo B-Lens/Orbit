@@ -365,6 +365,19 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             persisted = self.load_trade(trade_id) or {}
 
+            if (
+                stop_loss_order is None
+                or (
+                    take_profit_order is None
+                    and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+                )
+            ) and self._order_mode_position_is_flat(symbol):
+                logger.info(
+                    "Skipping protective order recreation for flat %s position",
+                    symbol,
+                )
+                return stop_loss_order, take_profit_order
+
             persisted_sl_id = str(persisted.get("sl_order_id", ""))
             if persisted_sl_id and persisted_sl_id not in open_order_ids:
                 logger.warning(
@@ -664,6 +677,15 @@ class TradeChecker(AuthenticationManager, RedisManager):
         return all(
             float(position.get("positionAmt", 0) or 0) == 0
             for client in clients.values()
+            for position in self._get_position_risk(client)
+            if position.get("symbol") == symbol
+        )
+
+    def _order_mode_position_is_flat(self, symbol: str) -> bool:
+        """Check exposure in the environment used for this symbol's orders."""
+        client = self.order_manager.future_client_for(symbol)
+        return all(
+            float(position.get("positionAmt", 0) or 0) == 0
             for position in self._get_position_risk(client)
             if position.get("symbol") == symbol
         )
