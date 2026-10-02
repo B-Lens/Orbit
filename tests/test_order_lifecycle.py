@@ -553,6 +553,43 @@ class TestTradeChecker(unittest.TestCase):
         checker.order_manager.place_sl_order.assert_not_called()
         checker.order_manager.place_target_order.assert_not_called()
 
+    def test_flat_position_retains_discovered_target_for_exit_cleanup(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {"algoId": "live-target", "orderType": "TAKE_PROFIT_MARKET", "triggerPrice": "1.9"}
+        ]
+        checker._position_is_flat = MagicMock(return_value=True)
+        persisted = {"sl_order_id": "old-stop", "tp_order_id": "old-target"}
+        checker.load_trade = MagicMock(side_effect=lambda _trade_id: persisted.copy())
+        checker.update_trade_fields = MagicMock(
+            side_effect=lambda _trade_id, fields: persisted.update(fields)
+        )
+        checker.merge_trade_fields = MagicMock(
+            side_effect=lambda _trade_id, fields: persisted.update(fields)
+        )
+        checker.register_order = MagicMock()
+        checker.trades = {"ATOMUSDT": {"tp_order_id": "old-target"}}
+        trade = {"trade_id": "atom-trade", "positionSide": "BUY", "quantity": 690.14}
+
+        stop_order, target_order = checker.ensure_orders(
+            "ATOMUSDT",
+            trade,
+            {"stop_loss_percent": 1},
+        )
+        checker.update_protective_order_data(
+            "ATOMUSDT", trade, stop_order, target_order
+        )
+        checker._cancel_protective_orders("ATOMUSDT", checker.load_trade("atom-trade"))
+
+        self.assertIsNone(stop_order)
+        self.assertEqual(target_order["algoId"], "live-target")
+        self.assertEqual(persisted["tp_order_id"], "live-target")
+        checker.order_manager.cancel_algo_conditional_order.assert_any_call(
+            "ATOMUSDT", "live-target"
+        )
+        checker.order_manager.place_sl_order.assert_not_called()
+
     def test_missing_stop_is_recreated_while_position_remains_open(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
