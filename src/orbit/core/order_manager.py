@@ -315,6 +315,8 @@ class OrderManager(AuthenticationManager, RedisManager):
         """Cancel a conditional algo order via ``DELETE /fapi/v1/algoOrder``.
 
         Also removes the ``order:{algo_id}`` Redis mapping.
+        Binance error ``-2011`` is treated as an idempotent cancellation because
+        the order became terminal before the cancellation request arrived.
 
         Args:
             symbol: Trading pair.
@@ -325,9 +327,24 @@ class OrderManager(AuthenticationManager, RedisManager):
         """
         params = {"symbol": symbol, "algoId": algo_id, "recvWindow": 60000}
         logger.info(f"[ALGO CANCEL REQUEST] {params}")
-        resp = self.future_client_for(symbol).sign_request(
-            "DELETE", "/fapi/v1/algoOrder", params
-        )
+        try:
+            resp = self.future_client_for(symbol).sign_request(
+                "DELETE", "/fapi/v1/algoOrder", params
+            )
+        except ClientError as error:
+            if getattr(error, "error_code", None) != -2011:
+                raise
+            logger.info(
+                "[ALGO CANCEL] Conditional order %s for %s is already terminal",
+                algo_id,
+                symbol,
+            )
+            self.deregister_order(str(algo_id))
+            return {
+                "algoId": algo_id,
+                "code": "-2011",
+                "msg": "Order was already terminal",
+            }
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
 
         if not isinstance(resp, dict):

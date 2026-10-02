@@ -162,6 +162,26 @@ class TestOrderManager(unittest.TestCase):
 
         self.manager.redis_client.delete.assert_not_called()
 
+    def test_algo_cancellation_treats_unknown_order_as_already_terminal(self):
+        error = ClientError.__new__(ClientError)
+        error.error_code = -2011
+        self.manager.future_client.sign_request.side_effect = error
+
+        response = self.manager.cancel_algo_conditional_order("BTCUSDT", "101")
+
+        self.assertEqual(response["code"], "-2011")
+        self.manager.redis_client.delete.assert_called_once_with("order:101")
+
+    def test_algo_cancellation_propagates_other_client_errors(self):
+        error = ClientError.__new__(ClientError)
+        error.error_code = -1021
+        self.manager.future_client.sign_request.side_effect = error
+
+        with self.assertRaises(ClientError):
+            self.manager.cancel_algo_conditional_order("BTCUSDT", "101")
+
+        self.manager.redis_client.delete.assert_not_called()
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 
@@ -517,13 +537,22 @@ class TestTradeChecker(unittest.TestCase):
 
     def test_stale_price_is_not_used_when_rest_fallback_fails(self):
         checker = TradeChecker.__new__(TradeChecker)
-        checker.live_prices = {"PAXGUSDT": (4400.0, time.time() - 10)}
+        checker.live_prices = {"PAXGUSDT": (4400.0, time.time() - 31)}
         checker.get_future_symbol_price = MagicMock(
             side_effect=ValueError("bad ticker")
         )
 
         self.assertIsNone(checker.check_price_freshness("PAXGUSDT"))
         self.assertEqual(checker.live_prices["PAXGUSDT"][0], 4400.0)
+
+    def test_price_within_websocket_stale_threshold_avoids_rest_fallback(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker._ws_stale_threshold = 30.0
+        checker.live_prices = {"SKYUSDT": (0.05, time.time() - 10)}
+        checker.get_future_symbol_price = MagicMock()
+
+        self.assertEqual(checker.check_price_freshness("SKYUSDT"), 0.05)
+        checker.get_future_symbol_price.assert_not_called()
 
     def test_invalid_price_is_replaced_with_valid_rest_price(self):
         checker = TradeChecker.__new__(TradeChecker)
