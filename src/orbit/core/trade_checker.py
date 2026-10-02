@@ -371,7 +371,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     take_profit_order is None
                     and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
                 )
-            ) and self._position_is_flat(symbol):
+            ) and self._order_mode_position_is_flat(symbol):
                 logger.info(
                     "Skipping protective order recreation for flat %s position",
                     symbol,
@@ -677,6 +677,15 @@ class TradeChecker(AuthenticationManager, RedisManager):
         return all(
             float(position.get("positionAmt", 0) or 0) == 0
             for client in clients.values()
+            for position in self._get_position_risk(client)
+            if position.get("symbol") == symbol
+        )
+
+    def _order_mode_position_is_flat(self, symbol: str) -> bool:
+        """Check exposure in the environment used for this symbol's orders."""
+        client = self.order_manager.future_client_for(symbol)
+        return all(
+            float(position.get("positionAmt", 0) or 0) == 0
             for position in self._get_position_risk(client)
             if position.get("symbol") == symbol
         )
