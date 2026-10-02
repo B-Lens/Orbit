@@ -497,18 +497,18 @@ class TestTradeChecker(unittest.TestCase):
             "[WSManager] WebSocket Issue : connection dropped"
         )
 
-    def test_price_stream_uses_periodic_tickers_and_latest_price(self):
+    def test_price_stream_uses_one_second_mark_prices(self):
         on_price_update = MagicMock()
         manager = BinanceWSManager(["BTCUSDT", "PAXGUSDT"], on_price_update)
 
         self.assertEqual(
             manager._stream_url(),
             "wss://fstream.binance.com/stream?streams="
-            "btcusdt@ticker/paxgusdt@ticker",
+            "btcusdt@markPrice@1s/paxgusdt@markPrice@1s",
         )
         manager._on_message(
             MagicMock(),
-            json.dumps({"data": {"s": "PAXGUSDT", "c": "4382.40"}}),
+            json.dumps({"data": {"s": "PAXGUSDT", "p": "4382.40"}}),
         )
 
         symbol, price, timestamp = on_price_update.call_args.args

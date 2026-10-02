@@ -3,7 +3,7 @@ binance_ws_manager
 ==================
 
 Provides :class:`BinanceWSManager`, a fault-tolerant WebSocket manager for
-Binance Futures real-time ticker price feeds.
+Binance Futures mark-price feeds.
 
 Features
 --------
@@ -177,10 +177,10 @@ class BinanceWSManager:
         # but _stream_url itself is cheap — just read under the lock.
         with self._lock:
             pairs = list(self.trading_pairs)
-        # Ticker streams publish the latest contract price at a fixed cadence.
-        # Trade streams only publish when a trade occurs, which makes quiet
-        # symbols appear stale and causes unnecessary REST fallbacks.
-        streams = "/".join(f"{p.lower()}@ticker" for p in pairs)
+        # The one-second mark-price stream publishes every subscribed symbol
+        # periodically, including quiet markets. It also matches the MARK_PRICE
+        # trigger source used by protective orders.
+        streams = "/".join(f"{p.lower()}@markPrice@1s" for p in pairs)
         return f"wss://fstream.binance.com/stream?streams={streams}"
 
     def _notify_status(self, msg: str) -> None:
@@ -223,7 +223,7 @@ class BinanceWSManager:
             msg = json.loads(raw)
             data = msg.get("data", {})
             symbol = data.get("s")
-            price_str = data.get("c")
+            price_str = data.get("p")
             if symbol and price_str:
                 self._on_price_update(symbol, float(price_str), now)
             else:
