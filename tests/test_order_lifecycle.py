@@ -517,7 +517,8 @@ class TestTradeChecker(unittest.TestCase):
 
     def test_stale_price_is_not_used_when_rest_fallback_fails(self):
         checker = TradeChecker.__new__(TradeChecker)
-        checker.live_prices = {"PAXGUSDT": (4400.0, time.time() - 10)}
+        checker._ws_stale_threshold = 30.0
+        checker.live_prices = {"PAXGUSDT": (4400.0, time.time() - 31)}
         checker.get_future_symbol_price = MagicMock(
             side_effect=ValueError("bad ticker")
         )
@@ -527,11 +528,37 @@ class TestTradeChecker(unittest.TestCase):
 
     def test_invalid_price_is_replaced_with_valid_rest_price(self):
         checker = TradeChecker.__new__(TradeChecker)
+        checker._ws_stale_threshold = 30.0
         checker.live_prices = {"SKYUSDT": (0.0, time.time())}
         checker.get_future_symbol_price = MagicMock(return_value=0.05)
 
         self.assertEqual(checker.check_price_freshness("SKYUSDT"), 0.05)
         self.assertEqual(checker.live_prices["SKYUSDT"][0], 0.05)
+
+    def test_price_freshness_allows_websocket_recovery_window(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker._ws_stale_threshold = 30.0
+        checker.live_prices = {"BTCUSDT": (4400.0, 100.0)}
+        checker.get_future_symbol_price = MagicMock()
+
+        with patch("orbit.core.trade_checker.time.time", return_value=129.0):
+            price = checker.check_price_freshness("BTCUSDT")
+
+        self.assertEqual(price, 4400.0)
+        checker.get_future_symbol_price.assert_not_called()
+
+    def test_price_freshness_falls_back_after_websocket_recovery_window(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker._ws_stale_threshold = 30.0
+        checker.live_prices = {"BTCUSDT": (4400.0, 100.0)}
+        checker.get_future_symbol_price = MagicMock(return_value=4401.0)
+
+        with patch("orbit.core.trade_checker.time.time", return_value=131.0):
+            price = checker.check_price_freshness("BTCUSDT")
+
+        self.assertEqual(price, 4401.0)
+        self.assertEqual(checker.live_prices["BTCUSDT"], (4401.0, 131.0))
+        checker.get_future_symbol_price.assert_called_once_with(symbol="BTCUSDT")
 
     def test_missing_stop_is_not_recreated_after_position_closes(self):
         checker = TradeChecker.__new__(TradeChecker)

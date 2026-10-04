@@ -278,10 +278,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
             price_age = time.time() - last_updated
-            if price_age <= 2 and math.isfinite(current_price) and current_price > 0:
+            if (
+                price_age <= self._ws_stale_threshold
+                and math.isfinite(current_price)
+                and current_price > 0
+            ):
                 return current_price
 
-            if price_age > 2:
+            if price_age > self._ws_stale_threshold:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
                     f"({price_age:.2f}s old) — falling back to REST."
