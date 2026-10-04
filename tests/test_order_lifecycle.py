@@ -114,6 +114,36 @@ class TestOrderManager(unittest.TestCase):
             100.0,
         )
 
+    def test_crossed_take_profit_is_left_for_position_reconciliation(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Order would immediately trigger.")
+        error.status_code = 400
+        error.error_code = -2021
+        error.error_message = "Order would immediately trigger."
+        self.manager.place_algo_conditional_order = MagicMock(side_effect=error)
+        self.manager.clientExceptionHandler = MagicMock()
+
+        response = self.manager._place_exit_order(
+            symbol="BTCUSDT",
+            side="SELL",
+            price=100.0,
+            quantity=0.01,
+            trade_id="decision-1",
+            order_type="TAKE_PROFIT_MARKET",
+            label="Target",
+        )
+
+        self.assertIsNone(response)
+        self.manager.clientExceptionHandler.assert_not_called()
+        self.manager.mongo_handler.append_decision_event.assert_called_once_with(
+            "decision-1",
+            {
+                "status": "protective_order_already_triggered",
+                "protective_order_type": "TAKE_PROFIT_MARKET",
+                "error_code": -2021,
+            },
+        )
+
     def test_get_order_uses_endpoint_that_includes_terminal_state(self):
         self.manager.future_client.query_order.return_value = {
             "orderId": 123,

@@ -450,6 +450,25 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
             return response
         except ClientError as error:
+            if (
+                order_type == "TAKE_PROFIT_MARKET"
+                and getattr(error, "error_code", None) == -2021
+            ):
+                logger.warning(
+                    "[%s] Skipping take-profit recreation because its trigger "
+                    "has already been crossed",
+                    symbol,
+                )
+                if trade_id and self.mongo_handler is not None:
+                    self.mongo_handler.append_decision_event(
+                        trade_id,
+                        {
+                            "status": "protective_order_already_triggered",
+                            "protective_order_type": order_type,
+                            "error_code": -2021,
+                        },
+                    )
+                return None
             if trade_id and self.mongo_handler is not None:
                 self.mongo_handler.append_decision_event(
                     trade_id,
