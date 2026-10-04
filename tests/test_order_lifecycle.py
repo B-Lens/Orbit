@@ -402,6 +402,14 @@ class TestOrderManager(unittest.TestCase):
 
 
 class TestTradeChecker(unittest.TestCase):
+    def test_price_freshness_tolerates_short_websocket_gaps(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"BTCUSDT": (4400.0, time.time() - 3)}
+        checker.get_future_symbol_price = MagicMock()
+
+        self.assertEqual(checker.check_price_freshness("BTCUSDT"), 4400.0)
+        checker.get_future_symbol_price.assert_not_called()
+
     def test_websocket_uses_tolerant_default_stale_threshold(self):
         default_threshold = inspect.signature(TradeChecker).parameters[
             "ws_stale_threshold"
