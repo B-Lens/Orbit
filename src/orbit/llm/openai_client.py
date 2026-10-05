@@ -16,12 +16,17 @@ logger = logging.getLogger("Orbit")
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_OUTPUT_TOKENS = 2_000
 MAX_PREMATURE_STREAM_RETRIES = 1
+RETRYABLE_STREAM_ERROR_CODES = {"server_is_overloaded"}
 DEFAULT_INSTRUCTIONS = (
     "You are Orbit's market-intelligence analyst. Follow the requested output "
     "schema exactly. When JSON is requested, return only valid JSON without "
     "Markdown fences or additional commentary. Do not invent market data."
 )
 DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+
+
+class _RetryableStreamError(RuntimeError):
+    """A transient streaming failure that is safe to retry."""
 
 
 class OpenAIResponsesClient:
@@ -172,7 +177,13 @@ class CodexOAuthResponsesClient:
             raise ValueError("prompt must not be empty")
 
         for attempt in range(MAX_PREMATURE_STREAM_RETRIES + 1):
-            output_text = self._invoke_stream(prompt, web_search)
+            try:
+                output_text = self._invoke_stream(prompt, web_search)
+            except _RetryableStreamError as error:
+                if attempt >= MAX_PREMATURE_STREAM_RETRIES:
+                    raise
+                logger.warning("%s; retrying once", error)
+                continue
             if output_text is not None:
                 logger.info("OpenAI OAuth response generated with %s", self.model)
                 return output_text
@@ -250,7 +261,18 @@ class CodexOAuthResponsesClient:
                     elif event_type == "response.completed":
                         completed = True
                     elif event_type in {"error", "response.failed", "response.incomplete"}:
-                        raise RuntimeError(f"OpenAI streaming error: {event}")
+                        error_details = event.get("error")
+                        error_code = (
+                            error_details.get("code")
+                            if isinstance(error_details, dict)
+                            else None
+                        )
+                        safe_error = error_code or event_type
+                        if error_code in RETRYABLE_STREAM_ERROR_CODES:
+                            raise _RetryableStreamError(
+                                f"OpenAI streaming error: {safe_error}"
+                            )
+                        raise RuntimeError(f"OpenAI streaming error: {safe_error}")
         except urllib.error.HTTPError as error:
             details = error.read().decode("utf-8", errors="replace")
             hint = " Run `codex login` to refresh auth.json." if error.code == 401 else ""

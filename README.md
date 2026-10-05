@@ -57,7 +57,8 @@ CLI `auth.json`. To enable the backup, provision the Antigravity CLI token and
 project files, set their paths with `ANTIGRAVITY_TOKEN_FILE` and
 `ANTIGRAVITY_PROJECT_FILE`, and provide the OAuth client values used to refresh
 the token. Credentials must stay outside the repository. Codex is always tried
-first; if both grounded providers fail, the run preserves cached sentiment.
+first and retries one transient provider-overload stream before falling back;
+if both grounded providers fail, the run preserves cached sentiment.
 
 ## Configuration
 
