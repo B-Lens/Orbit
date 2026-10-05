@@ -1116,9 +1116,14 @@ class TestTradeChecker(unittest.TestCase):
         checker.register_order = MagicMock()
         checker.merge_trade_fields = MagicMock()
 
-        trades = checker.activePosition_coolMaker()
+        with self.assertLogs("Orbit", level="WARNING") as logs:
+            trades = checker.activePosition_coolMaker()
 
         self.assertEqual(trades["ETHUSDT"]["trade_id"], "current")
+        self.assertTrue(
+            any("Resolved 2 Redis trade records" in message for message in logs.output)
+        )
+        self.assertFalse(any(record.levelname == "ERROR" for record in logs.records))
         checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
             "ETHUSDT", "101"
         )
