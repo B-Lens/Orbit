@@ -168,6 +168,30 @@ class BinanceWSManager:
             self.trading_pairs = trading_pairs
         self._close_ws()  # triggers reconnect in _run_loop
 
+    def reconnect_if_stale(self, stale_threshold: float) -> bool:
+        """Reconnect once when no message has arrived within *stale_threshold*.
+
+        Returns ``True`` when this call requested the reconnect.  The watchdog
+        remains the backstop for callers that do not perform price freshness
+        checks.
+        """
+        with self._lock:
+            if (
+                not self._connected
+                or self._reconnect_requested
+                or time.time() - self._last_message_time <= stale_threshold
+            ):
+                return False
+            self._reconnect_requested = True
+            self._reconnect_requested_at = time.time()
+
+        logger.warning(
+            "[WSManager] Price cache is stale and the feed is silent — "
+            "forcing reconnect."
+        )
+        self._close_ws()
+        return True
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
