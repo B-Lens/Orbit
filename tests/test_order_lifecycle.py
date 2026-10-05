@@ -450,6 +450,35 @@ class TestTradeChecker(unittest.TestCase):
 
         manager._close_ws.assert_called_once_with()
 
+    def test_price_check_requests_reconnect_when_feed_is_stale(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"BTCUSDT": (4400.0, time.time() - 10)}
+        checker.get_future_symbol_price = MagicMock(return_value=4401.0)
+        checker._ws_manager = MagicMock()
+
+        self.assertEqual(checker.check_price_freshness("BTCUSDT"), 4401.0)
+
+        checker._ws_manager.reconnect_if_stale.assert_called_once_with(5.0)
+
+    def test_stale_price_reconnect_is_requested_only_once(self):
+        manager = BinanceWSManager(["BTCUSDT"], MagicMock())
+        manager._connected = True
+        manager._last_message_time = time.time() - 10
+        manager._close_ws = MagicMock()
+
+        self.assertTrue(manager.reconnect_if_stale(5.0))
+        self.assertFalse(manager.reconnect_if_stale(5.0))
+        manager._close_ws.assert_called_once_with()
+
+    def test_stale_symbol_does_not_reconnect_active_feed(self):
+        manager = BinanceWSManager(["BTCUSDT", "ETHUSDT"], MagicMock())
+        manager._connected = True
+        manager._last_message_time = time.time()
+        manager._close_ws = MagicMock()
+
+        self.assertFalse(manager.reconnect_if_stale(5.0))
+        manager._close_ws.assert_not_called()
+
     def test_stale_watchdog_retries_when_close_does_not_reconnect(self):
         manager = BinanceWSManager(["BTCUSDT"], MagicMock(), stale_threshold=5.0)
         manager._connected = True
