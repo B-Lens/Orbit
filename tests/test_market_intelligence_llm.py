@@ -256,6 +256,69 @@ def test_codex_oauth_client_rejects_repeated_premature_streams(tmp_path) -> None
     assert urlopen.call_count == 2
 
 
+@pytest.mark.parametrize("status_code", [408, 409, 429, 500, 503])
+def test_codex_oauth_client_retries_transient_http_errors(
+    tmp_path, status_code
+) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+
+    class StreamingResponse:
+        def __enter__(self):
+            return iter(
+                [
+                    b'data: {"type":"response.output_text.delta","delta":"result"}\n',
+                    b'data: {"type":"response.completed"}\n',
+                    b"data: [DONE]\n",
+                ]
+            )
+
+        def __exit__(self, *_args):
+            return False
+
+    error = urllib.error.HTTPError(
+        "https://example.invalid", status_code, "temporary error", {}, None
+    )
+    urlopen = MagicMock(side_effect=[error, StreamingResponse()])
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    assert client.invoke_web_search("Assess markets") == "result"
+    assert urlopen.call_count == 2
+
+
+def test_codex_oauth_client_does_not_retry_authentication_error(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    error = urllib.error.HTTPError(
+        "https://example.invalid", 401, "unauthorized", {}, None
+    )
+    urlopen = MagicMock(side_effect=error)
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    with pytest.raises(RuntimeError, match=r"OpenAI HTTP 401.*codex login"):
+        client.invoke_web_search("Assess markets")
+
+    urlopen.assert_called_once()
+
+
+def test_codex_oauth_client_retries_transport_error(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    urlopen = MagicMock(side_effect=urllib.error.URLError("temporary failure"))
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    with pytest.raises(RuntimeError, match="OpenAI request failed: temporary failure"):
+        client.invoke_web_search("Assess markets")
+
+    assert urlopen.call_count == 2
+
+
 def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> None:
     token_file = tmp_path / "token.json"
     token_file.write_text(
