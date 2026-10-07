@@ -247,7 +247,21 @@ class TestOrderManager(unittest.TestCase):
             "BTCUSDT", "SELL", "STOP_MARKET", 41000, 0.01, trade_id="trade-1"
         )
         self.assertEqual(response, {"algoId": 123})
+        params = self.manager.future_client.sign_request.call_args.args[2]
+        self.assertEqual(params["reduceOnly"], "true")
+        self.assertEqual(params["quantity"], "0.01")
         self.manager.redis_client.set.assert_called_once_with("order:123", "trade-1")
+
+    def test_full_position_algo_order_omits_reduce_only_and_quantity(self):
+        self.manager.place_algo_conditional_order(
+            "BTCUSDT", "SELL", "STOP_MARKET", 41000, 0.01,
+            close_position=True,
+        )
+
+        params = self.manager.future_client.sign_request.call_args.args[2]
+        self.assertEqual(params["closePosition"], "true")
+        self.assertNotIn("reduceOnly", params)
+        self.assertNotIn("quantity", params)
 
     def test_notional_rejection_is_attached_to_decision(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)

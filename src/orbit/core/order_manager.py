@@ -289,6 +289,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             params["closePosition"] = "true"
         else:
             params["quantity"] = str(quantity)
+            params["reduceOnly"] = "true"
 
         if position_side:
             params["positionSide"] = position_side
