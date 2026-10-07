@@ -263,6 +263,17 @@ class TestOrderManager(unittest.TestCase):
         self.assertNotIn("reduceOnly", params)
         self.assertNotIn("quantity", params)
 
+    def test_hedge_mode_algo_order_omits_reduce_only(self):
+        self.manager.place_algo_conditional_order(
+            "BTCUSDT", "SELL", "STOP_MARKET", 41000, 0.01,
+            position_side="LONG",
+        )
+
+        params = self.manager.future_client.sign_request.call_args.args[2]
+        self.assertEqual(params["positionSide"], "LONG")
+        self.assertEqual(params["quantity"], "0.01")
+        self.assertNotIn("reduceOnly", params)
+
     def test_notional_rejection_is_attached_to_decision(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
         self.manager.calculate_risk_position_size = MagicMock(return_value=(0.004, 2))
