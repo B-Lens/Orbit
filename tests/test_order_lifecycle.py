@@ -247,7 +247,32 @@ class TestOrderManager(unittest.TestCase):
             "BTCUSDT", "SELL", "STOP_MARKET", 41000, 0.01, trade_id="trade-1"
         )
         self.assertEqual(response, {"algoId": 123})
+        params = self.manager.future_client.sign_request.call_args.args[2]
+        self.assertEqual(params["reduceOnly"], "true")
+        self.assertEqual(params["quantity"], "0.01")
         self.manager.redis_client.set.assert_called_once_with("order:123", "trade-1")
+
+    def test_full_position_algo_order_omits_reduce_only_and_quantity(self):
+        self.manager.place_algo_conditional_order(
+            "BTCUSDT", "SELL", "STOP_MARKET", 41000, 0.01,
+            close_position=True,
+        )
+
+        params = self.manager.future_client.sign_request.call_args.args[2]
+        self.assertEqual(params["closePosition"], "true")
+        self.assertNotIn("reduceOnly", params)
+        self.assertNotIn("quantity", params)
+
+    def test_hedge_mode_algo_order_omits_reduce_only(self):
+        self.manager.place_algo_conditional_order(
+            "BTCUSDT", "SELL", "STOP_MARKET", 41000, 0.01,
+            position_side="LONG",
+        )
+
+        params = self.manager.future_client.sign_request.call_args.args[2]
+        self.assertEqual(params["positionSide"], "LONG")
+        self.assertEqual(params["quantity"], "0.01")
+        self.assertNotIn("reduceOnly", params)
 
     def test_notional_rejection_is_attached_to_decision(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
@@ -399,6 +424,31 @@ class TestOrderManager(unittest.TestCase):
             )
 
         self.assertEqual(response["orderId"], 123)
+
+    @patch("orbit.core.order_manager.time.sleep", return_value=None)
+    def test_pending_entry_uses_close_position_protective_orders(self, _sleep):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
+        self.manager.future_client.new_order.return_value = {
+            "orderId": 123,
+            "status": "NEW",
+        }
+        self.manager.future_client.sign_request.side_effect = [
+            {"algoId": 1}, {"algoId": 2}
+        ]
+
+        response, _, _ = self.manager.place_order(
+            {"BTCUSDT": 0.01}, "BTCUSDT", "BUY", price=100,
+            sl=99, target=102, quantity=0.1, trade_id="decision-1",
+        )
+
+        self.assertEqual(response["status"], "NEW")
+        self.assertEqual(self.manager.future_client.sign_request.call_count, 2)
+        for call in self.manager.future_client.sign_request.call_args_list:
+            params = call.args[2]
+            self.assertEqual(params["closePosition"], "true")
+            self.assertNotIn("quantity", params)
+            self.assertNotIn("reduceOnly", params)
 
 
 class TestTradeChecker(unittest.TestCase):

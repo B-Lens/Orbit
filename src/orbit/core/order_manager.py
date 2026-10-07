@@ -289,6 +289,8 @@ class OrderManager(AuthenticationManager, RedisManager):
             params["closePosition"] = "true"
         else:
             params["quantity"] = str(quantity)
+            if not position_side or position_side.upper() == "BOTH":
+                params["reduceOnly"] = "true"
 
         if position_side:
             params["positionSide"] = position_side
@@ -355,6 +357,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         stoploss_price: float,
         quantity: float,
         trade_id: Optional[str] = None,
+        close_position: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Place a ``STOP_MARKET`` stop-loss order via the Algo Order API.
 
@@ -374,6 +377,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             price=stoploss_price,
             quantity=quantity,
             trade_id=trade_id,
+            close_position=close_position,
             order_type="STOP_MARKET",
             label="SL",
         )
@@ -385,6 +389,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         target_price: float,
         quantity: float,
         trade_id: Optional[str] = None,
+        close_position: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Place a ``TAKE_PROFIT_MARKET`` order via the Algo Order API.
 
@@ -404,6 +409,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             price=target_price,
             quantity=quantity,
             trade_id=trade_id,
+            close_position=close_position,
             order_type="TAKE_PROFIT_MARKET",
             label="Target",
         )
@@ -416,6 +422,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         price: float,
         quantity: float,
         trade_id: Optional[str],
+        close_position: bool = False,
         order_type: str,
         label: str,
     ) -> Optional[Dict[str, Any]]:
@@ -433,6 +440,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 order_type=order_type,
                 stop_price=trigger_price,
                 quantity=quantity,
+                close_position=close_position,
                 trade_id=trade_id or symbol,
             )
             if trade_id and self.mongo_handler is not None:
@@ -792,6 +800,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 stoploss_price,
                 quantity,
                 trade_id=effective_trade_id,
+                close_position=True,
             )
             time.sleep(1)
 
@@ -802,6 +811,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                     target,
                     quantity,
                     trade_id=effective_trade_id,
+                    close_position=True,
                 )
 
             logger.info(f"Order placed: {order_response}")
