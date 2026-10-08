@@ -162,6 +162,29 @@ class TestOrderManager(unittest.TestCase):
 
         self.manager.redis_client.delete.assert_not_called()
 
+    def test_algo_cancellation_treats_unknown_order_as_already_absent(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Unknown order sent.")
+        error.error_code = -2011
+        self.manager.future_client.sign_request.side_effect = error
+
+        response = self.manager.cancel_algo_conditional_order("BTCUSDT", "101")
+
+        self.assertEqual(response["algoStatus"], "CANCELED")
+        self.assertEqual(response["code"], -2011)
+        self.manager.redis_client.delete.assert_called_once_with("order:101")
+
+    def test_algo_cancellation_propagates_other_exchange_errors(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Invalid symbol.")
+        error.error_code = -1121
+        self.manager.future_client.sign_request.side_effect = error
+
+        with self.assertRaises(ClientError):
+            self.manager.cancel_algo_conditional_order("BTCUSDT", "101")
+
+        self.manager.redis_client.delete.assert_not_called()
+
     def test_risk_position_size_respects_position_notional_limit(self):
         self.manager.get_usdt_balance = MagicMock(return_value=5000)
 
