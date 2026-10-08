@@ -327,9 +327,31 @@ class OrderManager(AuthenticationManager, RedisManager):
         """
         params = {"symbol": symbol, "algoId": algo_id, "recvWindow": 60000}
         logger.info(f"[ALGO CANCEL REQUEST] {params}")
-        resp = self.future_client_for(symbol).sign_request(
-            "DELETE", "/fapi/v1/algoOrder", params
-        )
+        try:
+            resp = self.future_client_for(symbol).sign_request(
+                "DELETE", "/fapi/v1/algoOrder", params
+            )
+        except ClientError as error:
+            if error.error_code != -2011:
+                raise
+
+            # A protective order that filled or was canceled concurrently is
+            # already in the desired terminal state.  Confirm it is absent
+            # from a fresh broker snapshot before treating cancellation as
+            # idempotently successful and dropping its local mapping.
+            open_order_ids = {
+                str(order.get("algoId", ""))
+                for order in self.get_conditional_open_orders(
+                    symbol, raise_on_error=True
+                )
+            }
+            if str(algo_id) in open_order_ids:
+                raise
+            logger.info(
+                "[ALGO CANCEL] %s for %s is already terminal", algo_id, symbol
+            )
+            self.deregister_order(str(algo_id))
+            return {"algoId": str(algo_id), "algoStatus": "TERMINAL"}
         logger.info(f"[ALGO CANCEL RESPONSE] {resp}")
 
         if not isinstance(resp, dict):
