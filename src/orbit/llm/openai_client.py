@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -16,12 +17,17 @@ logger = logging.getLogger("Orbit")
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_OUTPUT_TOKENS = 2_000
 MAX_PREMATURE_STREAM_RETRIES = 1
+SERVICE_OVERLOAD_RETRY_DELAY_SECONDS = 1.0
 DEFAULT_INSTRUCTIONS = (
     "You are Orbit's market-intelligence analyst. Follow the requested output "
     "schema exactly. When JSON is requested, return only valid JSON without "
     "Markdown fences or additional commentary. Do not invent market data."
 )
 DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
+
+
+class _OpenAIServiceOverloadedError(RuntimeError):
+    """Signal that a streaming request can be retried after a short delay."""
 
 
 class OpenAIResponsesClient:
@@ -123,6 +129,7 @@ class CodexOAuthResponsesClient:
         max_output_tokens: Optional[int] = None,
         endpoint: Optional[str] = None,
         urlopen: Callable[..., Any] = urllib.request.urlopen,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.auth_file = Path(auth_file).expanduser() if auth_file else default_auth_file()
         self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
@@ -141,6 +148,7 @@ class CodexOAuthResponsesClient:
             "OPENAI_CODEX_RESPONSES_URL", DEFAULT_CODEX_RESPONSES_URL
         )
         self._urlopen = urlopen
+        self._sleep = sleep
 
     def _credentials(self) -> tuple[str, Optional[str]]:
         try:
@@ -172,7 +180,17 @@ class CodexOAuthResponsesClient:
             raise ValueError("prompt must not be empty")
 
         for attempt in range(MAX_PREMATURE_STREAM_RETRIES + 1):
-            output_text = self._invoke_stream(prompt, web_search)
+            try:
+                output_text = self._invoke_stream(prompt, web_search)
+            except _OpenAIServiceOverloadedError:
+                if attempt >= MAX_PREMATURE_STREAM_RETRIES:
+                    raise
+                logger.warning(
+                    "OpenAI service is overloaded; retrying in %.1fs",
+                    SERVICE_OVERLOAD_RETRY_DELAY_SECONDS,
+                )
+                self._sleep(SERVICE_OVERLOAD_RETRY_DELAY_SECONDS)
+                continue
             if output_text is not None:
                 logger.info("OpenAI OAuth response generated with %s", self.model)
                 return output_text
@@ -250,6 +268,14 @@ class CodexOAuthResponsesClient:
                     elif event_type == "response.completed":
                         completed = True
                     elif event_type in {"error", "response.failed", "response.incomplete"}:
+                        event_error = event.get("error")
+                        if (
+                            isinstance(event_error, dict)
+                            and event_error.get("code") == "server_is_overloaded"
+                        ):
+                            raise _OpenAIServiceOverloadedError(
+                                f"OpenAI streaming error: {event}"
+                            )
                         raise RuntimeError(f"OpenAI streaming error: {event}")
         except urllib.error.HTTPError as error:
             details = error.read().decode("utf-8", errors="replace")
