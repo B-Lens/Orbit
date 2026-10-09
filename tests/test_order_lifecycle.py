@@ -426,12 +426,28 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(response["orderId"], 123)
 
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
-    def test_pending_entry_uses_close_position_protective_orders(self, _sleep):
+    def test_pending_entry_defers_protective_orders_until_position_opens(self, _sleep):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
         self.manager.get_daily_net_pnl = MagicMock(return_value=0)
         self.manager.future_client.new_order.return_value = {
             "orderId": 123,
             "status": "NEW",
+        }
+        response, _, _ = self.manager.place_order(
+            {"BTCUSDT": 0.01}, "BTCUSDT", "BUY", price=100,
+            sl=99, target=102, quantity=0.1, trade_id="decision-1",
+        )
+
+        self.assertEqual(response["status"], "NEW")
+        self.manager.future_client.sign_request.assert_not_called()
+
+    @patch("orbit.core.order_manager.time.sleep", return_value=None)
+    def test_filled_entry_uses_close_position_protective_orders(self, _sleep):
+        self.manager.get_usdt_balance = MagicMock(return_value=1000)
+        self.manager.get_daily_net_pnl = MagicMock(return_value=0)
+        self.manager.future_client.new_order.return_value = {
+            "orderId": 123,
+            "status": "FILLED",
         }
         self.manager.future_client.sign_request.side_effect = [
             {"algoId": 1}, {"algoId": 2}
@@ -442,7 +458,7 @@ class TestOrderManager(unittest.TestCase):
             sl=99, target=102, quantity=0.1, trade_id="decision-1",
         )
 
-        self.assertEqual(response["status"], "NEW")
+        self.assertEqual(response["status"], "FILLED")
         self.assertEqual(self.manager.future_client.sign_request.call_count, 2)
         for call in self.manager.future_client.sign_request.call_args_list:
             params = call.args[2]
