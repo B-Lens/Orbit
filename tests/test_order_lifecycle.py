@@ -426,7 +426,7 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(response["orderId"], 123)
 
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
-    def test_pending_entry_uses_close_position_protective_orders(self, _sleep):
+    def test_pending_entry_uses_quantity_bound_protective_orders(self, _sleep):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
         self.manager.get_daily_net_pnl = MagicMock(return_value=0)
         self.manager.future_client.new_order.return_value = {
@@ -446,9 +446,9 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(self.manager.future_client.sign_request.call_count, 2)
         for call in self.manager.future_client.sign_request.call_args_list:
             params = call.args[2]
-            self.assertEqual(params["closePosition"], "true")
-            self.assertNotIn("quantity", params)
-            self.assertNotIn("reduceOnly", params)
+            self.assertEqual(params["quantity"], "0.1")
+            self.assertEqual(params["reduceOnly"], "true")
+            self.assertNotIn("closePosition", params)
 
 
 class TestTradeChecker(unittest.TestCase):
