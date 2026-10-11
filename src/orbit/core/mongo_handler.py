@@ -361,7 +361,10 @@ class MongoHandler(ExceptionManager):
                 )
                 break
             all_data.extend(data)
-            current_time = data[-1][0] + 1
+            # Advance past the returned candle, rather than one millisecond past
+            # its opening time.  The latter overlaps almost the entire candle
+            # and causes one final request for a candle that has not opened yet.
+            current_time = data[-1][6] + 1
             time.sleep(0.5)
 
         if not all_data:
