@@ -1639,7 +1639,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
             candidate_id = key[len(TRADE_KEY_PREFIX) :]
             candidate = self.load_trade(candidate_id) or {}
             candidate_symbol = str(candidate.get("symbol") or candidate_id)
-            candidate.setdefault("trade_id", candidate_id)
+            # The Redis key is the canonical identity used by load/delete helpers.
+            # A stale payload ID must not redirect duplicate-record cleanup.
+            candidate["trade_id"] = candidate_id
             persisted_by_symbol.setdefault(candidate_symbol, []).append(candidate)
 
         active_symbols = set()
