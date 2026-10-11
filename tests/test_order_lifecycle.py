@@ -460,7 +460,7 @@ class TestTradeChecker(unittest.TestCase):
         self.assertEqual(checker.check_price_freshness("BTCUSDT"), 4400.0)
         checker.get_future_symbol_price.assert_not_called()
 
-    def test_websocket_uses_tolerant_default_stale_threshold(self):
+    def test_websocket_reconnects_at_price_stale_threshold(self):
         default_threshold = inspect.signature(TradeChecker).parameters[
             "ws_stale_threshold"
         ].default
@@ -477,7 +477,7 @@ class TestTradeChecker(unittest.TestCase):
             trading_pairs=["BTCUSDT"],
             on_price_update=checker._handle_price_update,
             on_status_change=checker._handle_ws_status,
-            stale_threshold=30.0,
+            stale_threshold=5.0,
         )
 
     def test_stale_watchdog_requests_only_one_reconnect_per_connection(self):
