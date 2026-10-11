@@ -168,6 +168,26 @@ class BinanceWSManager:
             self.trading_pairs = trading_pairs
         self._close_ws()  # triggers reconnect in _run_loop
 
+    def request_reconnect(self, reason: str) -> bool:
+        """Close a connected socket once so the run-loop reconnects it.
+
+        Returns ``True`` when this call requested the reconnect. Concurrent
+        requests are ignored until the next connection opens.
+        """
+        with self._lock:
+            if (
+                self._stop_event.is_set()
+                or not self._connected
+                or self._reconnect_requested
+            ):
+                return False
+            self._reconnect_requested = True
+            self._reconnect_requested_at = time.time()
+
+        logger.warning(f"[WSManager] {reason} — forcing reconnect.")
+        self._close_ws()
+        return True
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
