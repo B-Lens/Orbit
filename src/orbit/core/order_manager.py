@@ -800,7 +800,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                 stoploss_price,
                 quantity,
                 trade_id=effective_trade_id,
-                close_position=True,
             )
             time.sleep(1)
 
@@ -811,7 +810,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                     target,
                     quantity,
                     trade_id=effective_trade_id,
-                    close_position=True,
                 )
 
             logger.info(f"Order placed: {order_response}")
