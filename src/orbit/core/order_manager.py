@@ -583,6 +583,10 @@ class OrderManager(AuthenticationManager, RedisManager):
         Returns:
             A ``(order_response, used_quantity, field_params)`` tuple.
             All three elements are ``None`` on failure.
+
+        Protective orders are submitted here only when the exchange reports an
+        immediate fill. Pending entries are protected by position reconciliation
+        after a position exists.
         """
         try:
             if price is None:
@@ -777,11 +781,21 @@ class OrderManager(AuthenticationManager, RedisManager):
                     },
                 )
 
-            time.sleep(2)
-
             if ros:
                 logger.info(f"ROS mode: returning after main order for {symbol}")
                 return order_response, quantity, field_params
+
+            entry_status = str(order_response.get("status", "")).upper()
+            if entry_status not in {"FILLED", "PARTIALLY_FILLED"}:
+                logger.info(
+                    "Deferring protective orders for %s entry %s with status %s",
+                    symbol,
+                    order_id,
+                    entry_status or "UNKNOWN",
+                )
+                return order_response, quantity, field_params
+
+            time.sleep(2)
 
             stoploss_price: float
             if sl is not None:
