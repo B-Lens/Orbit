@@ -583,6 +583,10 @@ class OrderManager(AuthenticationManager, RedisManager):
         Returns:
             A ``(order_response, used_quantity, field_params)`` tuple.
             All three elements are ``None`` on failure.
+
+            Protective orders are submitted here only when Binance reports the
+            entry as filled. Pending entries are protected by the position-aware
+            reconciliation loop after a position opens.
         """
         try:
             if price is None:
@@ -781,6 +785,16 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             if ros:
                 logger.info(f"ROS mode: returning after main order for {symbol}")
+                return order_response, quantity, field_params
+
+            entry_status = str(order_response.get("status", "")).upper()
+            if entry_status != "FILLED":
+                logger.info(
+                    "Deferring protective orders for %s until the entry fills "
+                    "(status=%s)",
+                    symbol,
+                    entry_status or "UNKNOWN",
+                )
                 return order_response, quantity, field_params
 
             stoploss_price: float
