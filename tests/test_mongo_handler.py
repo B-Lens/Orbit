@@ -339,6 +339,65 @@ def test_data_collector_converts_binance_klines() -> None:
     assert frame.index.name == "timestamp"
 
 
+@patch("orbit.core.mongo_handler.datetime")
+def test_data_collector_keeps_closed_final_candle(mock_datetime: MagicMock) -> None:
+    end_time = 1_700_001_000_000
+    mock_datetime.now.return_value.timestamp.return_value = end_time / 1000
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.get_binance_klines = MagicMock(
+        return_value=[
+            [
+                1_700_000_000_000,
+                "100",
+                "105",
+                "99",
+                "103",
+                "42",
+                1_700_000_899_999,
+                "0",
+                1,
+                "0",
+                "0",
+                "0",
+            ]
+        ]
+    )
+
+    frame = handler.data_collector("BTCUSDT", start_time=1_700_000_000_000)
+
+    assert frame.index.tolist() == [pd.Timestamp("2023-11-14 22:13:20")]
+    handler.get_binance_klines.assert_called_once()
+
+
+@patch("orbit.core.mongo_handler.datetime")
+def test_data_collector_excludes_open_final_candle(mock_datetime: MagicMock) -> None:
+    end_time = 1_700_000_500_000
+    mock_datetime.now.return_value.timestamp.return_value = end_time / 1000
+    handler = MongoHandler.__new__(MongoHandler)
+    handler.get_binance_klines = MagicMock(
+        return_value=[
+            [
+                1_700_000_000_000,
+                "100",
+                "105",
+                "99",
+                "103",
+                "42",
+                1_700_000_899_999,
+                "0",
+                1,
+                "0",
+                "0",
+                "0",
+            ]
+        ]
+    )
+
+    frame = handler.data_collector("BTCUSDT", start_time=1_700_000_000_000)
+
+    assert frame.empty
+
+
 def test_handle_mongo_data_normalizes_legacy_microsecond_timestamp() -> None:
     handler = MongoHandler.__new__(MongoHandler)
     handler.get_mongo_historical_data = MagicMock(
@@ -384,7 +443,7 @@ def test_handle_mongo_data_persists_datetime_index_as_epoch_seconds() -> None:
     handler.handle_mongo_data("BTCUSDT")
 
     stored = handler.store_historical_data.call_args.args[1]
-    assert stored["timestamp"].tolist() == [1_700_000_000]
+    assert stored["timestamp"].tolist() == [1_700_000_000, 1_700_000_900]
 
 
 def test_store_historical_data_normalizes_timestamp_before_insert() -> None:

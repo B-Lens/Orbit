@@ -356,19 +356,18 @@ class MongoHandler(ExceptionManager):
                 execution_mode=execution_mode,
             )
             if not data:
-                logger.warning(
-                    f"No data found for {symbol} at {datetime.utcfromtimestamp(current_time / 1000)}"
-                )
                 break
             all_data.extend(data)
             current_time = data[-1][0] + 1
+            if len(data) < 1000:
+                break
             time.sleep(0.5)
 
         if not all_data:
             return pd.DataFrame()
 
         df = pd.DataFrame(
-            all_data,
+            [candle for candle in all_data if candle[6] <= end_time],
             columns=[
                 "timestamp",
                 "open",
@@ -447,8 +446,6 @@ class MongoHandler(ExceptionManager):
             start_time=timestamp_ms,
             execution_mode=execution_mode,
         )
-        new_data = new_data.iloc[:-1]
-
         historical_data = (
             pd.concat([existing_data, new_data]).drop_duplicates()
             if not existing_data.empty
@@ -460,8 +457,8 @@ class MongoHandler(ExceptionManager):
 
         if not new_data.empty:
             historical_data_db = new_data.copy().reset_index()
-            historical_data_db["timestamp"] = (
-                historical_data_db["timestamp"].astype("int64") // 1_000_000_000
+            historical_data_db["timestamp"] = historical_data_db["timestamp"].map(
+                lambda value: int(pd.Timestamp(value).timestamp())
             )
             self.store_historical_data(
                 symbol, historical_data_db, execution_mode=execution_mode
