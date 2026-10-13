@@ -165,6 +165,8 @@ class BinanceAutomation(ExceptionManager):
         quantity: float,
         price: float,
         decision_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
+        target: Optional[float] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
 
@@ -176,6 +178,9 @@ class BinanceAutomation(ExceptionManager):
             action: ``"BUY"`` or ``"SELL"``.
             quantity: Order quantity.
             price: Limit price used for the order.
+            decision_id: Parent decision identifier for persistence.
+            stop_loss: Stop-loss price to submit after the entry fills.
+            target: Take-profit price to submit after the entry fills.
         """
         start_time = time.time()
         timeout_seconds = 600  # 10 minutes
@@ -209,6 +214,25 @@ class BinanceAutomation(ExceptionManager):
                         return
 
                     if status == "FILLED":
+                        exit_side = self.order_manager._get_opposite_side(action)
+                        if stop_loss is not None:
+                            self.order_manager.place_sl_order(
+                                symbol,
+                                exit_side,
+                                stop_loss,
+                                quantity,
+                                trade_id=decision_id or symbol,
+                                close_position=True,
+                            )
+                        if target is not None:
+                            self.order_manager.place_target_order(
+                                symbol,
+                                exit_side,
+                                target,
+                                quantity,
+                                trade_id=decision_id or symbol,
+                                close_position=True,
+                            )
                         if decision_id and self.order_manager.mongo_handler is not None:
                             self.order_manager.mongo_handler.append_decision_event(
                                 decision_id,
@@ -368,7 +392,7 @@ class BinanceAutomation(ExceptionManager):
 
         time.sleep(0.5)
 
-        if not order_response:
+        if not order_response or quantity is None or order_request is None:
             self.send_alerts(data=None, description=f"Order failed for {symbol}")
             return
 
@@ -382,6 +406,8 @@ class BinanceAutomation(ExceptionManager):
                 quantity,
                 order_request["price"],
                 decision_id,
+                order_request.get("stop_loss"),
+                order_request.get("target"),
             ),
             daemon=True,
             name=f"OrderMonitor-{symbol}-{order_id}",

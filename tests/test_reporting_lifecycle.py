@@ -162,6 +162,27 @@ class TestReportingLifecycle(unittest.TestCase):
 
         automation.order_manager.get_order.assert_called_once_with("ETHUSDT", 123)
 
+    def test_filled_order_places_deferred_protective_orders(self):
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.order_manager = MagicMock()
+        automation.order_manager.get_order.return_value = {"status": "FILLED"}
+        automation.order_manager._get_opposite_side.return_value = "SELL"
+        automation.trade_checker = MagicMock()
+        automation.trades = {}
+
+        automation.monitor_order_execution(
+            "LINKUSDT", 123, "BUY", 2.0, 12.5, "decision-1", 12.0, 13.0
+        )
+
+        automation.order_manager.place_sl_order.assert_called_once_with(
+            "LINKUSDT", "SELL", 12.0, 2.0,
+            trade_id="decision-1", close_position=True,
+        )
+        automation.order_manager.place_target_order.assert_called_once_with(
+            "LINKUSDT", "SELL", 13.0, 2.0,
+            trade_id="decision-1", close_position=True,
+        )
+
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
     def test_protective_order_submission_is_appended_to_decision_ledger(self, _sleep):
         manager = OrderManager.__new__(OrderManager)

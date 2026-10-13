@@ -730,6 +730,8 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "action": side,
                 "quantity": quantity,
                 "price": price,
+                "stop_loss": sl,
+                "target": target,
                 "WalletBalance": balance_available,
                 "orderPlaceTime": get_indian_time(),
                 "leverage": leverage,
@@ -781,6 +783,13 @@ class OrderManager(AuthenticationManager, RedisManager):
 
             if ros:
                 logger.info(f"ROS mode: returning after main order for {symbol}")
+                return order_response, quantity, field_params
+
+            if str(order_response.get("status", "")).upper() != "FILLED":
+                logger.info(
+                    "Deferring protective orders for %s until the entry is filled",
+                    symbol,
+                )
                 return order_response, quantity, field_params
 
             stoploss_price: float
