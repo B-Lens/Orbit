@@ -75,6 +75,7 @@ def test_core_uses_configured_leverage_for_every_asset() -> None:
         automation.process_signal(signal)
 
     assert automation.order_manager.place_order.call_args.args[6] == 5
+    assert automation.order_manager.place_order.call_args.kwargs["ros"] is True
 
 
 def test_entry_order_is_serialized_with_position_cleanup() -> None:

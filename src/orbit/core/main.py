@@ -165,6 +165,8 @@ class BinanceAutomation(ExceptionManager):
         quantity: float,
         price: float,
         decision_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
+        target: Optional[float] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
 
@@ -244,6 +246,25 @@ class BinanceAutomation(ExceptionManager):
                         self.trade_checker.merge_trade_fields(
                             decision_id or symbol, self.trades[symbol]
                         )
+                        exit_side = self.order_manager._get_opposite_side(action)
+                        if stop_loss is not None:
+                            self.order_manager.place_sl_order(
+                                symbol,
+                                exit_side,
+                                stop_loss,
+                                quantity,
+                                trade_id=decision_id or symbol,
+                                close_position=True,
+                            )
+                        if target is not None:
+                            self.order_manager.place_target_order(
+                                symbol,
+                                exit_side,
+                                target,
+                                quantity,
+                                trade_id=decision_id or symbol,
+                                close_position=True,
+                            )
                         return
 
                 time.sleep(30)
@@ -363,6 +384,7 @@ class BinanceAutomation(ExceptionManager):
                 stop_loss,
                 target,
                 self.future_leverage,
+                ros=True,
                 trade_id=decision_id,
             )
 
@@ -382,6 +404,8 @@ class BinanceAutomation(ExceptionManager):
                 quantity,
                 order_request["price"],
                 decision_id,
+                stop_loss,
+                target,
             ),
             daemon=True,
             name=f"OrderMonitor-{symbol}-{order_id}",
