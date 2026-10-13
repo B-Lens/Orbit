@@ -9,8 +9,8 @@ Features
 --------
 * **Auto-reconnect** with exponential backoff (capped at 60 s).
 * **Ping/pong keepalive** via ``websocket-client`` built-in support.
-* **Stale-connection detection** — restarts if no message is received within
-  ``stale_threshold`` seconds (default 30 s).
+* **Stale-stream detection** — restarts if any subscribed symbol receives no
+  valid price update within ``stale_threshold`` seconds (default 30 s).
 * **Thread safety** — guarantees only one WebSocket thread runs at a time
   using a :class:`threading.Lock`.
 * **Clean shutdown** — :meth:`stop` signals the run-loop to exit and closes
@@ -65,8 +65,8 @@ class BinanceWSManager:
             whenever a new ticker update arrives.
         on_status_change: Optional callback invoked with a human-readable
             status string on connect / disconnect / error events.
-        stale_threshold: Seconds without a message before the connection is
-            considered stale and forcibly restarted.
+        stale_threshold: Seconds without a price update for any subscribed
+            symbol before the connection is forcibly restarted.
         ping_interval: Seconds between WebSocket ping frames.
         ping_timeout: Seconds to wait for a pong before treating the
             connection as dead.
@@ -99,6 +99,7 @@ class BinanceWSManager:
 
         self._stop_event = threading.Event()
         self._last_message_time: float = 0.0
+        self._last_message_by_symbol: dict[str, float] = {}
         self._connected: bool = False
         self._reconnect_requested: bool = False
         self._reconnect_requested_at: float = 0.0
@@ -166,6 +167,7 @@ class BinanceWSManager:
         # _stream_url() which may be called concurrently from _run_loop.
         with self._lock:
             self.trading_pairs = trading_pairs
+            self._last_message_by_symbol = {}
         self._close_ws()  # triggers reconnect in _run_loop
 
     # ------------------------------------------------------------------
@@ -210,22 +212,33 @@ class BinanceWSManager:
         with self._lock:
             self._reconnect_requested = False
             self._reconnect_requested_at = 0.0
-            self._last_message_time = time.time()
+            opened_at = time.time()
+            self._last_message_time = opened_at
+            self._last_message_by_symbol = {
+                symbol.upper(): opened_at for symbol in self.trading_pairs
+            }
         self._notify_status("WebSocket connection opened.")
 
     def _on_message(self, ws: websocket.WebSocketApp, raw: str) -> None:
-        # Fix #8 — protect _last_message_time write (belt-and-braces for
-        # non-CPython runtimes; no-op overhead on CPython due to the GIL).
         now = time.time()
-        with self._lock:
-            self._last_message_time = now
         try:
             msg = json.loads(raw)
             data = msg.get("data", {})
             symbol = data.get("s")
             price_str = data.get("p")
             if symbol and price_str:
-                self._on_price_update(symbol, float(price_str), now)
+                symbol = str(symbol).upper()
+                price = float(price_str)
+                with self._lock:
+                    if symbol not in self._last_message_by_symbol:
+                        logger.debug(
+                            "[WSManager] Ignoring update for unsubscribed symbol %s",
+                            symbol,
+                        )
+                        return
+                    self._last_message_time = now
+                    self._last_message_by_symbol[symbol] = now
+                self._on_price_update(symbol, price, now)
             else:
                 logger.debug(f"[WSManager] Unrecognised message format: {msg}")
         except Exception:
@@ -325,7 +338,7 @@ class BinanceWSManager:
     # ------------------------------------------------------------------
 
     def _stale_checker(self) -> None:
-        """Background thread that restarts the WebSocket if it goes stale.
+        """Restart the WebSocket when the connection or any symbol goes stale.
 
         The poll interval is ``max(1, stale_threshold / 3)`` seconds, so
         even short thresholds are caught within a single polling cycle
@@ -344,14 +357,20 @@ class BinanceWSManager:
                 last_msg = self._last_message_time
                 reconnect_requested = self._reconnect_requested
                 reconnect_requested_at = self._reconnect_requested_at
+                last_messages = dict(self._last_message_by_symbol)
 
             now = time.time()
             age = now - last_msg
+            stale_symbols = [
+                symbol
+                for symbol, last_symbol_message in last_messages.items()
+                if now - last_symbol_message > self.stale_threshold
+            ]
             reconnect_latch_expired = (
                 reconnect_requested
                 and now - reconnect_requested_at >= self.stale_threshold
             )
-            if age > self.stale_threshold and (
+            if (age > self.stale_threshold or stale_symbols) and (
                 not reconnect_requested or reconnect_latch_expired
             ):
                 with self._lock:
@@ -367,10 +386,18 @@ class BinanceWSManager:
                         continue
                     self._reconnect_requested = True
                     self._reconnect_requested_at = now
-                logger.warning(
-                    f"[WSManager] No message received for {age:.1f}s "
-                    f"(threshold={self.stale_threshold}s) — forcing reconnect."
-                )
+                if stale_symbols:
+                    logger.warning(
+                        "[WSManager] No price update for %s within %.1fs — "
+                        "forcing reconnect.",
+                        ", ".join(stale_symbols),
+                        self.stale_threshold,
+                    )
+                else:
+                    logger.warning(
+                        f"[WSManager] No message received for {age:.1f}s "
+                        f"(threshold={self.stale_threshold}s) — forcing reconnect."
+                    )
                 self._close_ws()
 
         logger.info("[WSManager] Stale-checker exited.")
