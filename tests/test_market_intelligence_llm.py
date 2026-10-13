@@ -256,6 +256,83 @@ def test_codex_oauth_client_rejects_repeated_premature_streams(tmp_path) -> None
     assert urlopen.call_count == 2
 
 
+def test_codex_oauth_client_retries_service_overload(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+
+    class StreamingResponse:
+        def __init__(self, lines):
+            self.lines = lines
+
+        def __enter__(self):
+            return iter(self.lines)
+
+        def __exit__(self, *_args):
+            return False
+
+    responses = iter(
+        [
+            StreamingResponse(
+                [
+                    b'data: {"type":"error","error":{"type":"service_unavailable_error",'
+                    b'"code":"server_is_overloaded","message":"Try again later"}}\n'
+                ]
+            ),
+            StreamingResponse(
+                [
+                    b'data: {"type":"response.output_text.delta","delta":"result"}\n',
+                    b'data: {"type":"response.completed"}\n',
+                    b"data: [DONE]\n",
+                ]
+            ),
+        ]
+    )
+    urlopen = MagicMock(side_effect=lambda _request, timeout: next(responses))
+    sleep = MagicMock()
+    client = CodexOAuthResponsesClient(
+        auth_file=auth_file, urlopen=urlopen, sleep=sleep
+    )
+
+    assert client.invoke_web_search("Assess markets") == "result"
+    assert urlopen.call_count == 2
+    sleep.assert_called_once_with(1.0)
+
+
+def test_codex_oauth_client_does_not_retry_non_transient_stream_error(
+    tmp_path,
+) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+
+    class StreamingResponse:
+        def __enter__(self):
+            return iter(
+                [
+                    b'data: {"type":"error","error":{"type":"invalid_request_error",'
+                    b'"code":"invalid_prompt","message":"Invalid prompt"}}\n'
+                ]
+            )
+
+        def __exit__(self, *_args):
+            return False
+
+    urlopen = MagicMock(side_effect=lambda _request, timeout: StreamingResponse())
+    sleep = MagicMock()
+    client = CodexOAuthResponsesClient(
+        auth_file=auth_file, urlopen=urlopen, sleep=sleep
+    )
+
+    with pytest.raises(RuntimeError, match="invalid_prompt"):
+        client.invoke_web_search("Assess markets")
+
+    urlopen.assert_called_once()
+    sleep.assert_not_called()
+
+
 def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> None:
     token_file = tmp_path / "token.json"
     token_file.write_text(
