@@ -558,6 +558,7 @@ class TestTradeChecker(unittest.TestCase):
     def test_price_stream_uses_one_second_mark_prices(self):
         on_price_update = MagicMock()
         manager = BinanceWSManager(["BTCUSDT", "PAXGUSDT"], on_price_update)
+        manager._on_open(MagicMock())
 
         self.assertEqual(
             manager._stream_url(),
@@ -572,6 +573,38 @@ class TestTradeChecker(unittest.TestCase):
         symbol, price, timestamp = on_price_update.call_args.args
         self.assertEqual((symbol, price), ("PAXGUSDT", 4382.40))
         self.assertEqual(timestamp, manager._last_message_time)
+
+    def test_stale_watchdog_reconnects_when_one_symbol_stops_updating(self):
+        manager = BinanceWSManager(
+            ["BTCUSDT", "PAXGUSDT"], MagicMock(), stale_threshold=5.0
+        )
+        now = time.time()
+        manager._connected = True
+        manager._last_message_time = now
+        manager._last_message_by_symbol = {
+            "BTCUSDT": now,
+            "PAXGUSDT": now - 10,
+        }
+        manager._close_ws = MagicMock()
+
+        def stop_after_check(timeout):
+            if manager._close_ws.called:
+                manager._stop_event.set()
+            return False
+
+        manager._stop_event.wait = MagicMock(side_effect=stop_after_check)
+
+        manager._stale_checker()
+
+        manager._close_ws.assert_called_once_with()
+
+    def test_invalid_message_does_not_refresh_websocket_watchdog(self):
+        manager = BinanceWSManager(["BTCUSDT"], MagicMock())
+        manager._last_message_time = 123.0
+
+        manager._on_message(MagicMock(), json.dumps({"result": None}))
+
+        self.assertEqual(manager._last_message_time, 123.0)
 
     def test_stale_price_is_not_used_when_rest_fallback_fails(self):
         checker = TradeChecker.__new__(TradeChecker)
