@@ -292,6 +292,11 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     f"[WARN] Price for {symbol} is stale "
                     f"({price_age:.2f}s old) — falling back to REST."
                 )
+                ws_manager = getattr(self, "_ws_manager", None)
+                if ws_manager is not None:
+                    ws_manager.request_reconnect(
+                        f"Price for {symbol} is stale ({price_age:.2f}s old)"
+                    )
             else:
                 logger.warning(
                     f"[WARN] Live price for {symbol} is invalid — falling back to REST."
