@@ -191,6 +191,61 @@ class TestReportingLifecycle(unittest.TestCase):
             close_position=True,
         )
 
+    def test_partially_filled_cancelled_entry_is_recorded_and_protected(self):
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.order_manager = MagicMock()
+        automation.order_manager.get_order.return_value = {
+            "status": "CANCELED",
+            "executedQty": "0.2",
+            "avgPrice": "100.25",
+        }
+        automation.order_manager._get_opposite_side.return_value = "SELL"
+        automation.trade_checker = MagicMock()
+        automation.trades = {}
+        automation.send_alerts = MagicMock()
+
+        automation.monitor_order_execution(
+            "ETHUSDT", 123, "BUY", 0.5, 100.0, "decision-1", 98.0, 104.0
+        )
+
+        self.assertEqual(automation.trades["ETHUSDT"]["quantity"], 0.2)
+        automation.order_manager.place_sl_order.assert_called_once_with(
+            "ETHUSDT",
+            "SELL",
+            98.0,
+            0.2,
+            trade_id="decision-1",
+            close_position=True,
+        )
+
+    @patch("orbit.core.main.time.time", side_effect=[0, 601])
+    def test_partially_filled_timeout_is_recorded_and_protected(self, _time):
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.order_manager = MagicMock()
+        automation.order_manager.cancel_order.return_value = {
+            "status": "CANCELED",
+            "executedQty": "0.2",
+            "avgPrice": "100.25",
+        }
+        automation.order_manager._get_opposite_side.return_value = "SELL"
+        automation.trade_checker = MagicMock()
+        automation.trades = {}
+        automation.send_alerts = MagicMock()
+
+        automation.monitor_order_execution(
+            "ETHUSDT", 123, "BUY", 0.5, 100.0, "decision-1", 98.0, 104.0
+        )
+
+        self.assertEqual(automation.trades["ETHUSDT"]["quantity"], 0.2)
+        automation.order_manager.place_sl_order.assert_called_once_with(
+            "ETHUSDT",
+            "SELL",
+            98.0,
+            0.2,
+            trade_id="decision-1",
+            close_position=True,
+        )
+
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
     def test_protective_order_submission_is_appended_to_decision_ledger(self, _sleep):
         manager = OrderManager.__new__(OrderManager)
