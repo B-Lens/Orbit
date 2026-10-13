@@ -133,6 +133,55 @@ class TestReportingLifecycle(unittest.TestCase):
             "2024-08-01T00:00:00+00:00",
         )
 
+    @patch("orbit.core.main.time.sleep", return_value=None)
+    def test_protective_orders_wait_for_entry_fill(self, _sleep):
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.order_manager = MagicMock()
+        automation.order_manager.get_order.side_effect = [
+            {"status": "NEW"},
+            {"status": "FILLED", "executedQty": "0.5"},
+        ]
+        automation.order_manager._get_opposite_side.return_value = "SELL"
+        automation.order_manager.place_sl_order.return_value = {"algoId": 1}
+        automation.order_manager.place_target_order.return_value = {"algoId": 2}
+        automation.trade_checker = MagicMock()
+        automation.trades = {}
+        automation.send_signal_updates = MagicMock()
+
+        def assert_no_early_protection(_seconds):
+            automation.order_manager.place_sl_order.assert_not_called()
+            automation.order_manager.place_target_order.assert_not_called()
+
+        _sleep.side_effect = assert_no_early_protection
+
+        automation.monitor_order_execution(
+            "ETHUSDT",
+            123,
+            "BUY",
+            0.5,
+            100.0,
+            "decision-1",
+            98.0,
+            104.0,
+        )
+
+        automation.order_manager.place_sl_order.assert_called_once_with(
+            "ETHUSDT",
+            "SELL",
+            98.0,
+            0.5,
+            trade_id="decision-1",
+            close_position=True,
+        )
+        automation.order_manager.place_target_order.assert_called_once_with(
+            "ETHUSDT",
+            "SELL",
+            104.0,
+            0.5,
+            trade_id="decision-1",
+            close_position=True,
+        )
+
     def test_filled_order_is_appended_to_decision_ledger(self):
         automation = BinanceAutomation.__new__(BinanceAutomation)
         automation.order_manager = MagicMock()

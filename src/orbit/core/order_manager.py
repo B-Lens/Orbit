@@ -487,7 +487,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         return None
 
     # -------------------------------------------------------------------------
-    # Limit order with optional auto SL/TP
+    # Limit order with protective levels for fill-time submission
     # -------------------------------------------------------------------------
 
     def calculate_risk_position_size(
@@ -563,7 +563,11 @@ class OrderManager(AuthenticationManager, RedisManager):
         ros: bool = False,
         trade_id: Optional[str] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[float], Optional[Dict[str, Any]]]:
-        """Place a ``LIMIT`` order on Binance Futures with optional SL/TP.
+        """Place a ``LIMIT`` order and return its normalized protective levels.
+
+        Protective orders must be submitted by the fill monitor only after the
+        entry has created exchange exposure. Binance rejects close-position
+        orders submitted while a LIMIT entry is still pending.
 
         Args:
             risk_management: Config dict (must contain ``"stop_loss_percent"``).
@@ -575,8 +579,7 @@ class OrderManager(AuthenticationManager, RedisManager):
             leverage: Leverage to apply on Binance before placing the order.
             quantity: Explicit coin quantity. When omitted, it is calculated
                 from the configured risk limit and stop-loss distance.
-            ros: *Return On Signal* mode — when ``True`` the method returns
-                immediately after the main order without placing SL/TP.
+            ros: *Return On Signal* mode retained for bridge-order callers.
             trade_id: Parent trade identifier for Redis order mappings.  Falls
                 back to *symbol* when ``None``.
 
@@ -594,8 +597,6 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 self._record_order_rejection(trade_id, "missing_limit_price")
                 return None, None, None
-
-            effective_trade_id = trade_id or symbol
 
             adjusted_price = self.adjust_price_tick(symbol, price)
             if adjusted_price != price:
@@ -730,6 +731,8 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "action": side,
                 "quantity": quantity,
                 "price": price,
+                "stop_loss": sl,
+                "take_profit": target,
                 "WalletBalance": balance_available,
                 "orderPlaceTime": get_indian_time(),
                 "leverage": leverage,
@@ -782,37 +785,6 @@ class OrderManager(AuthenticationManager, RedisManager):
             if ros:
                 logger.info(f"ROS mode: returning after main order for {symbol}")
                 return order_response, quantity, field_params
-
-            stoploss_price: float
-            if sl is not None:
-                stoploss_price = sl
-            else:
-                sl_percent = float(risk_management.get("stop_loss_percent", 0))
-                if side == "BUY":
-                    stoploss_price = round(price * ((100.0 - sl_percent) / 100.0), 1)
-                else:
-                    stoploss_price = round(price * ((100.0 + sl_percent) / 100.0), 1)
-
-            sl_target_side = exit_side
-            self.place_sl_order(
-                symbol,
-                sl_target_side,
-                stoploss_price,
-                quantity,
-                trade_id=effective_trade_id,
-                close_position=True,
-            )
-            time.sleep(1)
-
-            if target is not None:
-                self.place_target_order(
-                    symbol,
-                    sl_target_side,
-                    target,
-                    quantity,
-                    trade_id=effective_trade_id,
-                    close_position=True,
-                )
 
             logger.info(f"Order placed: {order_response}")
             return order_response, quantity, field_params
