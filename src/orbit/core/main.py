@@ -165,6 +165,8 @@ class BinanceAutomation(ExceptionManager):
         quantity: float,
         price: float,
         decision_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
 
@@ -176,9 +178,13 @@ class BinanceAutomation(ExceptionManager):
             action: ``"BUY"`` or ``"SELL"``.
             quantity: Order quantity.
             price: Limit price used for the order.
+            decision_id: Parent decision identifier.
+            stop_loss: Stop trigger to submit after the first fill.
+            take_profit: Optional take-profit trigger to submit after the first fill.
         """
         start_time = time.time()
         timeout_seconds = 600  # 10 minutes
+        protection_placed = False
 
         while time.time() - start_time < timeout_seconds:
             try:
@@ -188,7 +194,43 @@ class BinanceAutomation(ExceptionManager):
                 for order in order_list:
                     status = order.get("status")
 
-                    if status in ("NEW",):
+                    if status == "NEW":
+                        break
+
+                    if (
+                        status in ("PARTIALLY_FILLED", "FILLED")
+                        and not protection_placed
+                        and stop_loss is not None
+                    ):
+                        exit_side = self.order_manager._get_opposite_side(action)
+                        stop_order = self.order_manager.place_sl_order(
+                            symbol,
+                            exit_side,
+                            stop_loss,
+                            quantity,
+                            trade_id=decision_id or symbol,
+                            close_position=True,
+                        )
+                        target_order = None
+                        if take_profit is not None:
+                            target_order = self.order_manager.place_target_order(
+                                symbol,
+                                exit_side,
+                                take_profit,
+                                quantity,
+                                trade_id=decision_id or symbol,
+                                close_position=True,
+                            )
+                        protection_placed = bool(stop_order) and (
+                            take_profit is None or bool(target_order)
+                        )
+                        if not protection_placed:
+                            logger.error(
+                                "Protective orders were not fully placed for %s after entry fill",
+                                symbol,
+                            )
+
+                    if status == "PARTIALLY_FILLED":
                         break
 
                     if status in ("CANCELED", "REJECTED", "EXPIRED"):
@@ -246,7 +288,8 @@ class BinanceAutomation(ExceptionManager):
                         )
                         return
 
-                time.sleep(30)
+                # Keep the unprotected interval after a fill as short as practical.
+                time.sleep(2)
 
             except Exception as e:
                 self.handle_exception(
@@ -382,6 +425,8 @@ class BinanceAutomation(ExceptionManager):
                 quantity,
                 order_request["price"],
                 decision_id,
+                order_request["stop_loss"],
+                order_request["take_profit"],
             ),
             daemon=True,
             name=f"OrderMonitor-{symbol}-{order_id}",
