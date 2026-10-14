@@ -56,8 +56,6 @@ _POSITION_LIFECYCLE_LOCKS: Dict[str, Any] = {}
 _POSITION_LIFECYCLE_LOCKS_GUARD = threading.Lock()
 _POSITION_LIFECYCLE_LOCK_TIMEOUT = 120
 _POSITION_LIFECYCLE_LOCK_WAIT = 10
-# Leave room for scheduling and network jitter around the one-second stream.
-_PRICE_STALE_THRESHOLD = 5.0
 
 
 def _quantity_is_complete(actual: float, expected: float) -> bool:
@@ -277,17 +275,21 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
     def check_price_freshness(self, symbol: str) -> Optional[float]:
         """Return a fresh price for *symbol*, falling back to the REST API."""
+        # Treat the socket watchdog as the authority on feed health.  Falling
+        # back sooner makes a healthy one-second stream generate avoidable REST
+        # traffic while a busy reconciliation pass is in progress.
+        stale_threshold = self._ws_stale_threshold
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
             price_age = time.time() - last_updated
             if (
-                price_age <= _PRICE_STALE_THRESHOLD
+                price_age <= stale_threshold
                 and math.isfinite(current_price)
                 and current_price > 0
             ):
                 return current_price
 
-            if price_age > _PRICE_STALE_THRESHOLD:
+            if price_age > stale_threshold:
                 logger.warning(
                     f"[WARN] Price for {symbol} is stale "
                     f"({price_age:.2f}s old) — falling back to REST."
