@@ -783,6 +783,17 @@ class OrderManager(AuthenticationManager, RedisManager):
                 logger.info(f"ROS mode: returning after main order for {symbol}")
                 return order_response, quantity, field_params
 
+            # Reduce-only conditional orders require an existing position.  A
+            # newly accepted LIMIT order may still be waiting to fill; its
+            # monitor installs protection after the exchange confirms FILLED.
+            if str(order_response.get("status", "")).upper() != "FILLED":
+                logger.info(
+                    "Entry order %s for %s is pending; deferring protective orders",
+                    order_id,
+                    symbol,
+                )
+                return order_response, quantity, field_params
+
             stoploss_price: float
             if sl is not None:
                 stoploss_price = sl
