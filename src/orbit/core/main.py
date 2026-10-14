@@ -165,6 +165,8 @@ class BinanceAutomation(ExceptionManager):
         quantity: float,
         price: float,
         decision_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
+        target: Optional[float] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
 
@@ -176,6 +178,9 @@ class BinanceAutomation(ExceptionManager):
             action: ``"BUY"`` or ``"SELL"``.
             quantity: Order quantity.
             price: Limit price used for the order.
+            decision_id: Parent trade decision identifier.
+            stop_loss: Stop-loss trigger to submit after the entry fills.
+            target: Take-profit trigger to submit after the entry fills.
         """
         start_time = time.time()
         timeout_seconds = 600  # 10 minutes
@@ -230,10 +235,11 @@ class BinanceAutomation(ExceptionManager):
                                 )
                         except (TypeError, ValueError, OSError):
                             pass
-                        self.trades[symbol] = {
+                        filled_quantity = float(order.get("executedQty") or quantity)
+                        trade = {
                             "symbol": symbol,
                             "positionSide": action,
-                            "quantity": quantity,
+                            "quantity": filled_quantity,
                             "orderId": order_id,
                             "price": price,
                             "trade_id": decision_id or symbol,
@@ -241,6 +247,34 @@ class BinanceAutomation(ExceptionManager):
                             # partial fills belonging to this order.
                             "entered_at": entered_at.isoformat(),
                         }
+                        exit_side = "SELL" if action == "BUY" else "BUY"
+                        if stop_loss is not None:
+                            stop_order = self.order_manager.place_sl_order(
+                                symbol,
+                                exit_side,
+                                stop_loss,
+                                filled_quantity,
+                                trade_id=decision_id or symbol,
+                                close_position=True,
+                            )
+                            trade["stop_loss_price"] = stop_loss
+                            if stop_order:
+                                trade["sl_order_id"] = str(stop_order.get("algoId", ""))
+                        if target is not None:
+                            target_order = self.order_manager.place_target_order(
+                                symbol,
+                                exit_side,
+                                target,
+                                filled_quantity,
+                                trade_id=decision_id or symbol,
+                                close_position=True,
+                            )
+                            trade["target"] = target
+                            if target_order:
+                                trade["tp_order_id"] = str(
+                                    target_order.get("algoId", "")
+                                )
+                        self.trades[symbol] = trade
                         self.trade_checker.merge_trade_fields(
                             decision_id or symbol, self.trades[symbol]
                         )
@@ -373,6 +407,11 @@ class BinanceAutomation(ExceptionManager):
             return
 
         order_id = order_response.get("orderId")
+        entry_pending = str(order_response.get("status", "")).upper() in {
+            "NEW",
+            "PARTIALLY_FILLED",
+            "PENDING_NEW",
+        }
         monitor_thread = threading.Thread(
             target=self.monitor_order_execution,
             args=(
@@ -382,6 +421,8 @@ class BinanceAutomation(ExceptionManager):
                 quantity,
                 order_request["price"],
                 decision_id,
+                stop_loss if entry_pending else None,
+                target if entry_pending else None,
             ),
             daemon=True,
             name=f"OrderMonitor-{symbol}-{order_id}",

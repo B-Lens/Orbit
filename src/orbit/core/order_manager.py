@@ -783,6 +783,15 @@ class OrderManager(AuthenticationManager, RedisManager):
                 logger.info(f"ROS mode: returning after main order for {symbol}")
                 return order_response, quantity, field_params
 
+            order_status = str(order_response.get("status", "")).upper()
+            if order_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
+                logger.info(
+                    "Deferring protective orders for %s until entry order %s is filled",
+                    symbol,
+                    order_id,
+                )
+                return order_response, quantity, field_params
+
             stoploss_price: float
             if sl is not None:
                 stoploss_price = sl
