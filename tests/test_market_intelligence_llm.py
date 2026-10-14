@@ -256,6 +256,76 @@ def test_codex_oauth_client_rejects_repeated_premature_streams(tmp_path) -> None
     assert urlopen.call_count == 2
 
 
+def test_codex_oauth_client_retries_overloaded_stream(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+
+    class StreamingResponse:
+        def __init__(self, lines):
+            self.lines = lines
+
+        def __enter__(self):
+            return iter(self.lines)
+
+        def __exit__(self, *_args):
+            return False
+
+    responses = iter(
+        [
+            StreamingResponse(
+                [
+                    b'data: {"type":"error","error":'
+                    b'{"type":"service_unavailable_error",'
+                    b'"code":"server_is_overloaded","message":"try later"}}\n'
+                ]
+            ),
+            StreamingResponse(
+                [
+                    b'data: {"type":"response.output_text.delta","delta":"result"}\n',
+                    b'data: {"type":"response.completed"}\n',
+                ]
+            ),
+        ]
+    )
+    urlopen = MagicMock(side_effect=lambda _request, timeout: next(responses))
+    client = CodexOAuthResponsesClient(auth_file=auth_file, urlopen=urlopen)
+
+    assert client.invoke_web_search("Assess markets") == "result"
+    assert urlopen.call_count == 2
+
+
+def test_codex_oauth_client_redacts_stream_error_details(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+
+    class StreamingResponse:
+        def __enter__(self):
+            return iter(
+                [
+                    b'data: {"type":"response.failed","error":'
+                    b'{"message":"sensitive response"}}\n'
+                ]
+            )
+
+        def __exit__(self, *_args):
+            return False
+
+    client = CodexOAuthResponsesClient(
+        auth_file=auth_file, urlopen=lambda _request, timeout: StreamingResponse()
+    )
+
+    with pytest.raises(
+        RuntimeError, match=r"^OpenAI streaming error: response.failed$"
+    ) as raised:
+        client.invoke_web_search("Assess markets")
+
+    assert "sensitive" not in str(raised.value)
+
+
 def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> None:
     token_file = tmp_path / "token.json"
     token_file.write_text(
