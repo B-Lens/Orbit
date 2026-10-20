@@ -319,6 +319,7 @@ class TestOrderManager(unittest.TestCase):
         self.manager.risk_guard.evaluate = MagicMock(
             return_value=MagicMock(allowed=False, reason="test_rejection", metrics={})
         )
+        self.manager.send_alerts = MagicMock()
 
         self.manager.place_order(
             {},
@@ -331,6 +332,7 @@ class TestOrderManager(unittest.TestCase):
             trade_id="decision-1",
         )
 
+        self.manager.send_alerts.assert_not_called()
         risk_inputs = self.manager.risk_guard.evaluate.call_args.kwargs
         self.assertEqual(risk_inputs["entry_price"], 100.0)
         self.assertEqual(risk_inputs["stop_loss"], 99.9)
@@ -1572,3 +1574,4 @@ def test_testnet_order_probe():
     assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "PASSED"
     manager.place_order.assert_called_once()
     manager.cancel_order.assert_called_once_with("BTCUSDT", 123)
+
