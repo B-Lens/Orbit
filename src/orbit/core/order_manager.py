@@ -690,11 +690,6 @@ class OrderManager(AuthenticationManager, RedisManager):
             )
             if not risk_decision.allowed:
                 logger.warning("Order rejected by risk guard: %s", risk_decision.reason)
-                self.send_alerts(
-                    data=None,
-                    description=f"Order rejected by risk guard: {risk_decision.reason}",
-                    fields={"symbol": symbol, **risk_decision.metrics},
-                )
                 self._record_order_rejection(
                     trade_id, risk_decision.reason, **risk_decision.metrics
                 )
