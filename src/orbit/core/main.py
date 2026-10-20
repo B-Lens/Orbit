@@ -369,7 +369,7 @@ class BinanceAutomation(ExceptionManager):
         time.sleep(0.5)
 
         if not order_response:
-            self.send_alerts(data=None, description=f"Order failed for {symbol}")
+            logger.warning("Order failed for %s", symbol)
             return
 
         order_id = order_response.get("orderId")
@@ -702,3 +702,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
