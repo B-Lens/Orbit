@@ -586,7 +586,12 @@ class OrderManager(AuthenticationManager, RedisManager):
         """
         try:
             if price is None:
-                logger.error("place_order called without price (LIMIT): %s %s", symbol, side)
+                logger.error("place_order called without price (LIMIT).")
+                self.send_alerts(
+                    data=None,
+                    description="place_order called without price",
+                    fields={"symbol": symbol, "side": side},
+                )
                 self._record_order_rejection(trade_id, "missing_limit_price")
                 return None, None, None
 
@@ -623,9 +628,10 @@ class OrderManager(AuthenticationManager, RedisManager):
                 quantity = qty_from_alloc
 
             if quantity <= 0:
-                logger.warning(
-                    "Insufficient funds or quantity for %s: quantity=%s, balance=%s",
-                    symbol, quantity, balance_available,
+                self.send_alerts(
+                    data=None,
+                    description=f"Not Enough funds for {symbol}, quantity: {quantity}, balance_available: {balance_available}",
+                    fields=None,
                 )
                 self._record_order_rejection(
                     trade_id,
@@ -644,7 +650,16 @@ class OrderManager(AuthenticationManager, RedisManager):
             )
 
             if quantity <= 0:
-                logger.warning("Computed quantity <= 0 for %s: %s", symbol, quantity)
+                self.send_alerts(
+                    data=None,
+                    description=f"Computed quantity <= 0 for {symbol}",
+                    fields={
+                        "symbol": symbol,
+                        "raw_quantity": quantity,
+                        "leverage": leverage,
+                        "balance_available": balance_available,
+                    },
+                )
                 self._record_order_rejection(
                     trade_id, "quantity_non_positive", quantity=quantity
                 )
@@ -674,10 +689,7 @@ class OrderManager(AuthenticationManager, RedisManager):
                 available_margin=available_margin,
             )
             if not risk_decision.allowed:
-                logger.warning(
-                    "Order rejected by risk guard for %s: %s | metrics: %s",
-                    symbol, risk_decision.reason, risk_decision.metrics,
-                )
+                logger.warning("Order rejected by risk guard: %s", risk_decision.reason)
                 self._record_order_rejection(
                     trade_id, risk_decision.reason, **risk_decision.metrics
                 )
@@ -693,6 +705,11 @@ class OrderManager(AuthenticationManager, RedisManager):
                 logger.error(
                     f"[NOTIONAL ERROR] {symbol} LIMIT order rejected. "
                     f"Required: {minimum_notional}, Got: {price * quantity}"
+                )
+                self.send_alerts(
+                    data=None,
+                    description="Order rejected – Notional too small",
+                    fields={"symbol": symbol, "price": price, "qty": quantity},
                 )
                 self._record_order_rejection(
                     trade_id,
@@ -800,14 +817,12 @@ class OrderManager(AuthenticationManager, RedisManager):
                 error_code=getattr(error, "error_code", None),
             )
             self.clientExceptionHandler(
-                symbol=symbol, error=error, Location="Order Manager -> place_order",
-                notify_discord=False,
+                symbol=symbol, error=error, Location="Order Manager -> place_order"
             )
         except Exception as e:
             self._record_order_rejection(trade_id, "order_exception")
             self.handle_exception(
-                e, context_description="Exception caught while Placing order",
-                notify_discord=False,
+                e, context_description="Exception caught while Placing order"
             )
 
         return None, None, None
@@ -848,7 +863,11 @@ class OrderManager(AuthenticationManager, RedisManager):
             quantity = qty_valid
 
             if quantity <= 0:
-                logger.warning("Computed MARKET quantity <= 0 for %s", symbol)
+                self.send_alerts(
+                    data=None,
+                    description=f"Computed MARKET quantity <= 0 for {symbol}",
+                    fields={"symbol": symbol},
+                )
                 return None
 
             if not self.validate_notional(symbol, current_price, quantity):
@@ -860,6 +879,11 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 logger.error(
                     f"[NOTIONAL ERROR] {symbol} MARKET order rejected. Required: {min_notional}, Got: {current_price * quantity}"
+                )
+                self.send_alerts(
+                    data=None,
+                    description="Market order rejected – Notional too small",
+                    fields={"symbol": symbol, "price": current_price, "qty": quantity},
                 )
                 return None
 
@@ -882,12 +906,10 @@ class OrderManager(AuthenticationManager, RedisManager):
                 symbol=symbol,
                 error=error,
                 Location="Order Manager -> place_market_order",
-                notify_discord=False,
             )
         except Exception as e:
             self.handle_exception(
-                e, context_description="Exception caught while placing market order",
-                notify_discord=False,
+                e, context_description="Exception caught while placing market order"
             )
 
         return None
@@ -1282,4 +1304,3 @@ class OrderManager(AuthenticationManager, RedisManager):
             )
 
         return []
-
