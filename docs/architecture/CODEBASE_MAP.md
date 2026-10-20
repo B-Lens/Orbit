@@ -28,7 +28,9 @@ work to the order manager. Redis stores active trades and order-to-trade mapping
 MongoDB stores OHLCV, sentiment, decisions, income history, completed-trade
 lifecycle records, and aggregate duration/P&L distributions. Before order
 submission, the core asks the LLM to approve or reject each candidate using the
-strategy signal and cached market intelligence. The trade checker reconciles Redis
+strategy signal and cached market intelligence. Protective stop-loss and
+take-profit orders are submitted only after Binance confirms the entry is filled.
+The trade checker reconciles Redis
 with Binance, maintains protective orders, and asks the LLM for a post-exit review
 after the broker confirms a position is flat. Live position prices come from each
 symbol's one-second Binance Futures mark-price stream, matching the trigger source
