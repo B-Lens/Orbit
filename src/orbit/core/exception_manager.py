@@ -50,8 +50,6 @@ class ExceptionManager(DiscordManager):
         error: Exception,
         Location: Optional[str] = None,
         msg: Optional[str] = None,
-        *,
-        notify_discord: bool = True,
     ) -> None:
         """Handle a :class:`binance.error.ClientError` (or similar).
 
@@ -63,8 +61,6 @@ class ExceptionManager(DiscordManager):
             error: The caught exception instance.
             Location: Human-readable description of where the error occurred.
             msg: Optional extra context message.
-            notify_discord: Whether to send Discord notifications; logging and
-                command-center records are always retained.
         """
         traceback_str = "".join(
             traceback.format_exception(type(error), error, error.__traceback__)
@@ -89,9 +85,6 @@ class ExceptionManager(DiscordManager):
         origin_line = tb[-1].lineno if tb else -1
 
         commit_id = commit_id[:7] if commit_id != "unknown" else commit_id
-        if not notify_discord:
-            return
-
         self.exception_trigger(
             data=f"Commit ID: {commit_id}",
             description=(
@@ -108,8 +101,6 @@ class ExceptionManager(DiscordManager):
         self,
         exception: Exception,
         context_description: str,
-        *,
-        notify_discord: bool = True,
     ) -> None:
         """Handle a generic exception with full traceback reporting.
 
@@ -117,8 +108,6 @@ class ExceptionManager(DiscordManager):
             exception: The caught exception instance.
             context_description: Human-readable context of where the error
                 occurred (e.g. ``"ensure_orders"``).
-            notify_discord: Whether to send Discord notifications; logging and
-                command-center records are always retained.
         """
         tb = traceback.extract_tb(exception.__traceback__)
         origin_file = tb[-1].filename if tb else "unknown"
@@ -150,9 +139,6 @@ class ExceptionManager(DiscordManager):
         # logger.error(exception_message)
 
         commit_id = commit_id[:7] if commit_id != "unknown" else commit_id
-        if not notify_discord:
-            return
-
         self.exception_trigger(
             data=f"Commit ID: {commit_id}",
             description=(
@@ -180,4 +166,3 @@ class ExceptionManager(DiscordManager):
         if isinstance(description, tuple):
             description = "".join(str(s) for s in description)
         self.send_exception(data=data, description=description)
-
