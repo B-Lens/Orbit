@@ -6,6 +6,7 @@ from binance.error import ClientError
 
 from orbit.core.exception_manager import ExceptionManager
 from orbit.core.order_manager import OrderManager
+from orbit.core.main import BinanceAutomation
 
 
 class TestOrderFailureNotifications(unittest.TestCase):
@@ -119,3 +120,30 @@ class TestOrderFailureNotifications(unittest.TestCase):
                 manager.exception_trigger.assert_not_called()
                 method(**kwargs)
                 manager.exception_trigger.assert_called_once()
+
+
+class TestSignalOrderFailureNotifications(unittest.TestCase):
+    @patch("orbit.core.main.threading.Thread")
+    @patch("orbit.core.main.time.sleep")
+    @patch("orbit.core.main.position_lifecycle_lock")
+    @patch("orbit.core.main.record_runtime_activity")
+    def test_failed_order_does_not_alert_or_start_monitor(
+        self, _activity, _lock, _sleep, thread,
+    ):
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.order_manager = Mock()
+        automation.order_manager.place_order.return_value = (None, None, None)
+        automation._trade_reasoner = Mock()
+        automation._trade_reasoner.review_entry.return_value.take_trade = True
+        automation.risk_management = {}
+        automation.future_leverage = 5
+        automation.send_alerts = Mock()
+
+        automation.process_signal({
+            "symbol": "ETHUSDT", "signal": "BUY", "entry_price": 1000,
+            "stop_loss": 990, "take_profit": 1015,
+        })
+
+        automation.order_manager.place_order.assert_called_once()
+        automation.send_alerts.assert_not_called()
+        thread.assert_not_called()
