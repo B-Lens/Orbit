@@ -195,6 +195,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
         self.mongo_handler: MongoHandler = mongo_handler or MongoHandler()
         self.live_prices: Dict[str, Tuple[float, float]] = {}
         self._ws_stale_threshold = ws_stale_threshold
+        self._rest_price_last_attempt: Dict[str, float] = {}
+        self._rest_price_attempt_lock = threading.Lock()
         self._ws_manager: Optional[BinanceWSManager] = None
         self._trade_reasoner = trade_reasoner
 
@@ -277,9 +279,10 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
     def check_price_freshness(self, symbol: str) -> Optional[float]:
         """Return a fresh price for *symbol*, falling back to the REST API."""
+        now = time.time()
         if symbol in self.live_prices:
             current_price, last_updated = self.live_prices[symbol]
-            price_age = time.time() - last_updated
+            price_age = now - last_updated
             if (
                 price_age <= _PRICE_STALE_THRESHOLD
                 and math.isfinite(current_price)
@@ -287,18 +290,33 @@ class TradeChecker(AuthenticationManager, RedisManager):
             ):
                 return current_price
 
-            if price_age > _PRICE_STALE_THRESHOLD:
-                logger.warning(
-                    f"[WARN] Price for {symbol} is stale "
-                    f"({price_age:.2f}s old) — falling back to REST."
-                )
-            else:
-                logger.warning(
-                    f"[WARN] Live price for {symbol} is invalid — falling back to REST."
-                )
-        else:
+        retry_interval = getattr(
+            self, "_ws_stale_threshold", _PRICE_STALE_THRESHOLD
+        )
+        attempt_lock = getattr(self, "_rest_price_attempt_lock", None)
+        if attempt_lock is None:
+            attempt_lock = self._rest_price_attempt_lock = threading.Lock()
+        with attempt_lock:
+            last_attempts = getattr(self, "_rest_price_last_attempt", None)
+            if last_attempts is None:
+                last_attempts = self._rest_price_last_attempt = {}
+            last_attempt = last_attempts.get(symbol)
+            if last_attempt is not None and now - last_attempt < retry_interval:
+                return None
+            last_attempts[symbol] = now
+
+        if symbol not in self.live_prices:
             logger.warning(
                 f"[WARN] Live price for {symbol} not found — fetching via REST."
+            )
+        elif price_age > _PRICE_STALE_THRESHOLD:
+            logger.warning(
+                f"[WARN] Price for {symbol} is stale "
+                f"({price_age:.2f}s old) — falling back to REST."
+            )
+        else:
+            logger.warning(
+                f"[WARN] Live price for {symbol} is invalid — falling back to REST."
             )
 
         try:

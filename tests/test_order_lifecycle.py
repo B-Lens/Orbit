@@ -1,5 +1,6 @@
 import inspect
 import json
+import threading
 import time
 import unittest
 from unittest.mock import MagicMock, patch
@@ -619,6 +620,42 @@ class TestTradeChecker(unittest.TestCase):
 
         self.assertIsNone(checker.check_price_freshness("PAXGUSDT"))
         self.assertEqual(checker.live_prices["PAXGUSDT"][0], 4400.0)
+
+    def test_stale_price_does_not_trigger_repeated_rest_fallback(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"PAXGUSDT": (4400.0, 90.0)}
+        checker._ws_stale_threshold = 30.0
+        checker._rest_price_last_attempt = {}
+        checker._rest_price_attempt_lock = threading.Lock()
+        checker.get_future_symbol_price = MagicMock(
+            side_effect=ValueError("bad ticker")
+        )
+
+        with patch("orbit.core.trade_checker.logger.warning"), patch(
+            "orbit.core.trade_checker.time.time", side_effect=[100.0, 110.0]
+        ):
+            self.assertIsNone(checker.check_price_freshness("PAXGUSDT"))
+            self.assertIsNone(checker.check_price_freshness("PAXGUSDT"))
+
+        checker.get_future_symbol_price.assert_called_once_with(symbol="PAXGUSDT")
+
+    def test_stale_price_retries_rest_after_websocket_stale_interval(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.live_prices = {"PAXGUSDT": (4400.0, 90.0)}
+        checker._ws_stale_threshold = 30.0
+        checker._rest_price_last_attempt = {}
+        checker._rest_price_attempt_lock = threading.Lock()
+        checker.get_future_symbol_price = MagicMock(
+            side_effect=ValueError("bad ticker")
+        )
+
+        with patch("orbit.core.trade_checker.logger.warning"), patch(
+            "orbit.core.trade_checker.time.time", side_effect=[100.0, 130.0]
+        ):
+            self.assertIsNone(checker.check_price_freshness("PAXGUSDT"))
+            self.assertIsNone(checker.check_price_freshness("PAXGUSDT"))
+
+        self.assertEqual(checker.get_future_symbol_price.call_count, 2)
 
     def test_invalid_price_is_replaced_with_valid_rest_price(self):
         checker = TradeChecker.__new__(TradeChecker)
