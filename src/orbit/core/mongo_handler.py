@@ -361,6 +361,8 @@ class MongoHandler(ExceptionManager):
                 )
                 break
             all_data.extend(data)
+            if len(data) < 1000:
+                break
             current_time = data[-1][0] + 1
             time.sleep(0.5)
 
