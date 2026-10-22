@@ -339,6 +339,42 @@ def test_data_collector_converts_binance_klines() -> None:
     assert frame.index.name == "timestamp"
 
 
+@patch("orbit.core.mongo_handler.time.sleep")
+@patch("orbit.core.mongo_handler.datetime")
+def test_data_collector_advances_past_candle_close(
+    mock_datetime: MagicMock, mock_sleep: MagicMock
+) -> None:
+    handler = MongoHandler.__new__(MongoHandler)
+    start_time = 1_700_000_000_000
+    close_time = start_time + 899_999
+    mock_datetime.now.return_value.timestamp.return_value = (close_time + 1) / 1000
+    mock_datetime.utcfromtimestamp.side_effect = datetime.utcfromtimestamp
+    handler.get_binance_klines = MagicMock(
+        return_value=[
+            [
+                start_time,
+                "100",
+                "105",
+                "99",
+                "103",
+                "42",
+                close_time,
+                "0",
+                1,
+                "0",
+                "0",
+                "0",
+            ]
+        ]
+    )
+
+    frame = handler.data_collector("BTCUSDT", start_time=start_time)
+
+    assert len(frame) == 1
+    handler.get_binance_klines.assert_called_once()
+    mock_sleep.assert_called_once_with(0.5)
+
+
 def test_handle_mongo_data_normalizes_legacy_microsecond_timestamp() -> None:
     handler = MongoHandler.__new__(MongoHandler)
     handler.get_mongo_historical_data = MagicMock(
