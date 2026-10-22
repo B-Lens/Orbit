@@ -1262,6 +1262,57 @@ class TestTradeChecker(unittest.TestCase):
         checker.deregister_order.assert_not_called()
         checker.register_order.assert_called_once_with("202", "current")
 
+    def test_duplicate_reconciliation_uses_redis_key_as_trade_identity(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.execution_settings.active_modes = ["testnet"]
+        checker.order_manager.futures_clients = {"testnet": MagicMock()}
+        checker._get_position_risk = MagicMock(
+            return_value=[
+                {"symbol": "SKYUSDT", "entryPrice": "0.05", "positionAmt": "10"}
+            ]
+        )
+        checker.scan_trade_keys = MagicMock(
+            return_value=["trade:stale", "trade:current"]
+        )
+        records = {
+            "stale": {
+                "trade_id": "SKYUSDT",
+                "symbol": "SKYUSDT",
+                "sl_order_id": "101",
+                "entered_at": "2026-08-01T00:00:00+00:00",
+            },
+            "current": {
+                "trade_id": "SKYUSDT",
+                "symbol": "SKYUSDT",
+                "sl_order_id": "202",
+                "entered_at": "2026-08-02T00:00:00+00:00",
+            },
+        }
+        checker.load_trade = MagicMock(side_effect=lambda trade_id: records[trade_id])
+        checker.order_manager.get_conditional_open_orders.return_value = [
+            {
+                "algoId": "202",
+                "quantity": "10",
+                "side": "SELL",
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+            }
+        ]
+        checker.delete_trade = MagicMock()
+        checker.deregister_order = MagicMock()
+        checker.register_order = MagicMock()
+        checker.merge_trade_fields = MagicMock()
+
+        trades = checker.activePosition_coolMaker()
+
+        self.assertEqual(trades["SKYUSDT"]["trade_id"], "current")
+        checker.order_manager.cancel_algo_conditional_order.assert_called_once_with(
+            "SKYUSDT", "101"
+        )
+        checker.delete_trade.assert_called_once_with("stale")
+        checker.deregister_order.assert_called_once_with("101")
+
     def test_duplicate_reconciliation_rejects_wrong_side_stop(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
