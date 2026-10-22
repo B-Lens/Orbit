@@ -1703,7 +1703,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                         "full-position protective coverage; preserving all orders"
                     )
                 persisted = max(fully_covered, key=candidate_rank)
-                logger.error(
+                logger.warning(
                     "Resolved %d Redis trade records for %s to %s using protective "
                     "order identity, entry recency, and trade ID ordering.",
                     len(candidates),
