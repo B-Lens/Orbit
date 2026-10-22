@@ -256,6 +256,24 @@ def test_codex_oauth_client_rejects_repeated_premature_streams(tmp_path) -> None
     assert urlopen.call_count == 2
 
 
+def test_codex_oauth_client_does_not_expose_http_error_body(tmp_path) -> None:
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "secret"}}), encoding="utf-8"
+    )
+    error = urllib.error.HTTPError("https://example.invalid", 500, "error", {}, None)
+    error.read = MagicMock(return_value=b"sensitive prompt content")
+    client = CodexOAuthResponsesClient(
+        auth_file=auth_file, urlopen=MagicMock(side_effect=error)
+    )
+
+    with pytest.raises(RuntimeError, match=r"^OpenAI HTTP 500\.$") as raised:
+        client.invoke_web_search("sensitive prompt")
+
+    assert "sensitive" not in str(raised.value)
+    error.read.assert_not_called()
+
+
 def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> None:
     token_file = tmp_path / "token.json"
     token_file.write_text(
