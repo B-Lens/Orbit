@@ -174,8 +174,8 @@ class AuthenticationManager(ExceptionManager):
 
     def get_future_symbol_price(self, symbol: str) -> float:
         """Return the current Futures mark price for *symbol*."""
-        ticker = self.future_client_for(symbol).ticker_price(symbol=symbol)
-        return float(ticker["price"])
+        ticker = self.future_client_for(symbol).mark_price(symbol=symbol)
+        return float(ticker["markPrice"])
 
     def future_client_for(self, symbol: str) -> UMFutures:
         """Return the Binance client for the symbol's configured environment."""

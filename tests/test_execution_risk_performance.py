@@ -151,6 +151,20 @@ class TestExecutionSettings(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "No execution mode configured"):
             manager.future_client_for("BTCUSDT")
 
+    def test_futures_price_uses_mark_price_for_selected_asset_mode(self):
+        testnet_client = MagicMock()
+        testnet_client.mark_price.return_value = {"markPrice": "82391.4"}
+        settings = ExecutionSettings({"BTCUSDT": ExecutionMode.TESTNET})
+        manager = AuthenticationManager(
+            spot_client=MagicMock(),
+            futures_clients={ExecutionMode.TESTNET: testnet_client},
+            execution_settings=settings,
+        )
+
+        self.assertEqual(manager.get_future_symbol_price("BTCUSDT"), 82391.4)
+        testnet_client.mark_price.assert_called_once_with(symbol="BTCUSDT")
+        testnet_client.ticker_price.assert_not_called()
+
     def test_live_asset_is_routed_only_to_live_client(self):
         live_client = MagicMock()
         settings = ExecutionSettings(
