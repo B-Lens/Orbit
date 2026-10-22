@@ -1,0 +1,97 @@
+
+All loops in `main.py`, `signal_analyzer.py`, `trade_checker.py`, and `sentimen_cron.py` wrap their bodies in `try/except` and call one of the above handlers, then sleep before retrying — preventing any single error from crashing a thread permanently.
+
+---
+
+## Discord Webhook Channels
+
+`DiscordManager` routes notifications to named webhooks configured via environment variables. All messages are sent as Discord embeds with a timestamp title and red colour.
+
+| Method | Env Variable | Channel purpose |
+|---|---|---|
+| `send_logs` | `LOGS_WEBHOOK` | General operational logs |
+| `send_signal_updates` | `SIGNAL_WEBHOOK` | Signal and order events |
+| `send_active_trades_info` | `ACTIVE_TRADES_WEBHOOK` | Active position status |
+| `send_parameters` | `PARAMS_WEBHOOK` | Strategy parameter snapshots |
+| `send_exception` | `EXCEPTION_WEBHOOK` | Exception alerts |
+| `send_exception_params_debug` | `EXCEPTION_PARAMS_WEBHOOK` | Exception debug data |
+| `send_cooldown_update` | `COOLDOWN_WEBHOOK` | Cooldown notifications |
+| `send_sl_update_notifier` | `SL_UPDATE_WEBHOOK` | Stop-loss update events |
+| `send_true_alarm` | `TRUE_ALARM_WEBHOOK` | Target hit (profitable exit) |
+| `send_false_alarm` | `FALSE_ALARM_WEBHOOK` | SL hit (loss exit) |
+| `send_average_alarm` | `AVERAGE_ALARM_WEBHOOK` | Average/breakeven SL hit |
+| `send_active_trade_prices` | `ACTIVE_TRADE_PRICES_WEBHOOK` | Live price updates |
+| `send_market_sentiment` | `MARKET_SENTIMENT_WEBHOOK` | Hourly sentiment result |
+| `send_alerts` | `ALERTS_WEBHOOK` | General alerts |
+| `send_websocket_logs` | `WEBSOCKET_WEBHOOK` | WebSocket lifecycle events |
+| `send_chart_to_webhook` | `CHART_SIGNAL_WEBHOOK` | Chart image uploads |
+| `send_levels_info` | `LEVELS_WEBHOOK` | Support/resistance levels |
+| `send_prediction` | `AI_PREDICTIONS_WEBHOOK` | AI prediction outputs |
+
+Discord enforces size limits; `DiscordManager.send_to_webhook()` automatically truncates content, descriptions, and field values and appends a `⚠ Warning` field when truncation occurs.
+
+---
+
+## Environment Variables Reference
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `BINANE_API_KEY` | `AuthenticationManager` | Binance API key *(note: typo in source — one 'C')* |
+| `SECRET_KEY` | `AuthenticationManager` | Binance API secret |
+| `REDDIT_CLIENT_ID` | `RedditClient` | Reddit API client ID |
+| `REDDIT_CLIENT_SECRET` | `RedditClient` | Reddit API client secret |
+| `REDDIT_USER_AGENT` | `RedditClient` | Reddit user agent string |
+| `MONGODB_URI` | `MongoHandler`, `MongoDBManager` | MongoDB connection string |
+| `OPENAI_API_KEY` | `AIClient` | OpenAI API key |
+| `MODEL_TOKEN` | `GitHubModelClient` | GitHub Models API token |
+| `GROQ_API_KEY` | `LLM` | Groq LLM API key |
+| `LOGS_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `SIGNAL_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `EXCEPTION_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `SL_UPDATE_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `COOLDOWN_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `ACTIVE_TRADES_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `TRUE_ALARM_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `FALSE_ALARM_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `AVERAGE_ALARM_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `ACTIVE_TRADE_PRICES_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `MARKET_SENTIMENT_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `ALERTS_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `WEBSOCKET_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `CHART_SIGNAL_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `LEVELS_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `AI_PREDICTIONS_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `PARAMS_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+| `EXCEPTION_PARAMS_WEBHOOK` | `DiscordManager` | Discord webhook URL |
+
+---
+
+## Key Design Decisions
+
+### Dependency Injection
+Every class accepts pre-built clients (`Spot`, `UMFutures`, `redis.StrictRedis`, `MongoClient`) via its constructor. This makes unit testing straightforward — pass mocks in, no monkey-patching required.
+
+### Redis as Shared State
+Trade state, order-to-trade mappings, cooldowns, and sentiment scores all live in Redis. Because all workers run in separate threads within the same process, Redis provides a consistent, thread-safe store without requiring Python-level locks.
+
+### Algo/Conditional Orders for SL/TP
+Stop-loss and take-profit orders are placed via Binance's `/fapi/v1/algoOrder` endpoint (`CONDITIONAL` type) rather than standard orders. This allows server-side trigger logic and avoids the `-4045` duplicate-stop-order error. The `ensure_orders` self-healing mechanism re-creates any missing SL/TP orders on every 5-minute reconciliation cycle.
+
+### Lazy Strategy Registry
+`_LazyStrategyRegistry` defers importing strategy classes until first access, keeping startup time fast regardless of how many strategies are registered.
+
+### Watchdog Without Auto-Restart
+`monitor_workers()` checks thread liveness every 300 seconds and sends a Discord alert if any worker has stopped. It does **not** auto-restart threads — this is intentional to avoid masking persistent errors. Manual intervention or a process supervisor (e.g. `systemd`, `supervisord`) is expected for restarts.
+
+### Locale-Based Endpoint Selection
+`AuthenticationManager` and `MongoHandler` both check `locale.getdefaultlocale()` to select `api.binance.us` (US locale) vs `api.binance.com` (all others).
+
+---
+
+## Related Documentation
+
+- [`docs/architecture/`](./) — Architecture overview directory
+- [`src/orbit/strategies/`](../../src/orbit/strategies/) — Strategy implementations and registry
+- [`src/orbit/market_intelligence/`](../../src/orbit/market_intelligence/) — Sentiment analysis pipeline
+- [`config/config.py`](../../config/config.py) — Application configuration loader
+- [`tests/test_core.py`](../../tests/test_core.py) — Core module test suite

@@ -1,0 +1,41 @@
+
+---
+
+## MongoDB Collections
+
+| Collection | Managed by | Documents contain |
+|---|---|---|
+| `OHLCVData` | `MongoHandler` | `symbol`, `interval`, `timestamp`, OHLCV floats, `expireAt` (60-day TTL) |
+| `contradict_trades` | `MongoHandler` | `symbol`, `entry_price`, `stop_loss`, `target`, `sentiment`, `timestamp` |
+| `simulated_trades` | `MongoHandler` | `symbol`, `signal`, `entry_price`, `stop_loss`, `take_profit`, `sentiment`, `outcome`, `duration_seconds`, timestamps |
+| `sentiment_history` | `MongoDBManager` | Full sentiment analysis records |
+| `trends` | `MongoDBManager` | Aggregated sentiment trend data |
+
+OHLCV documents have a compound unique index on `(symbol, interval, timestamp)` — duplicate inserts are silently ignored via `insert_many(ordered=False)`.
+
+---
+
+## Binance API Endpoints Used
+
+| Method | Endpoint | Used by | Purpose |
+|---|---|---|---|
+| `GET` | `/fapi/v1/ticker/price` | `AuthenticationManager`, `OrderManager` | Current mark price |
+| `GET` | `/fapi/v2/positionRisk` | `TradeChecker` | Active positions |
+| `POST` | `/fapi/v1/order` | `OrderManager` | Place LIMIT / MARKET order |
+| `DELETE` | `/fapi/v1/order` | `OrderManager` | Cancel order |
+| `GET` | `/fapi/v1/allOrders` | `OrderManager` | Query order status |
+| `POST` | `/fapi/v1/leverage` | `OrderManager` | Set leverage |
+| `POST` | `/fapi/v1/algoOrder` | `OrderManager` | Place conditional SL/TP |
+| `DELETE` | `/fapi/v1/algoOrder` | `OrderManager` | Cancel conditional SL/TP |
+| `GET` | `/fapi/v1/allAlgoOrders` | `OrderManager` | List open conditional orders |
+| `PUT` | `/fapi/v1/order` | `OrderManager` | Modify existing order |
+| `GET` | `/fapi/v1/exchangeInfo` | `OrderManager` | Symbol filters (cached) |
+| `GET` | `/api/v3/klines` | `MongoHandler` | Historical OHLCV candles |
+| `WSS` | `fstream.binance.com/stream` | `TradeChecker` | Real-time trade price stream |
+
+---
+
+## Exchange Filter Validation
+
+Before every order, `OrderManager` applies three Binance exchange filters (cached per symbol after first fetch):
+

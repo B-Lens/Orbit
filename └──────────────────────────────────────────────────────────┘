@@ -1,0 +1,7 @@
+
+---
+
+## Thread Architecture
+
+`BinanceAutomation.run()` starts four threads and then enters the signal-analysis loop on the main thread:
+
