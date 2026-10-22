@@ -305,24 +305,21 @@ def test_testnet_ohlcv_is_stored_in_separate_collection() -> None:
 def test_data_collector_converts_binance_klines() -> None:
     handler = MongoHandler.__new__(MongoHandler)
     handler.get_binance_klines = MagicMock(
-        side_effect=[
+        return_value=[
             [
-                [
-                    1_700_000_000_000,
-                    "100",
-                    "105",
-                    "99",
-                    "103",
-                    "42",
-                    1_700_000_899_999,
-                    "0",
-                    1,
-                    "0",
-                    "0",
-                    "0",
-                ]
-            ],
-            [],
+                1_700_000_000_000,
+                "100",
+                "105",
+                "99",
+                "103",
+                "42",
+                1_700_000_899_999,
+                "0",
+                1,
+                "0",
+                "0",
+                "0",
+            ]
         ]
     )
 
@@ -337,6 +334,7 @@ def test_data_collector_converts_binance_klines() -> None:
         42,
     ]
     assert frame.index.name == "timestamp"
+    handler.get_binance_klines.assert_called_once()
 
 
 def test_handle_mongo_data_normalizes_legacy_microsecond_timestamp() -> None:
