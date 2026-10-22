@@ -559,26 +559,38 @@ class TestTradeChecker(unittest.TestCase):
             "[WSManager] WebSocket Issue : connection dropped"
         )
 
-    def test_price_stream_uses_one_second_mark_prices(self):
+    def test_price_stream_uses_all_market_one_second_mark_prices(self):
         on_price_update = MagicMock()
         manager = BinanceWSManager(["BTCUSDT", "PAXGUSDT"], on_price_update)
         manager._on_open(MagicMock())
 
         self.assertEqual(
             manager._stream_url(),
-            "wss://fstream.binance.com/stream?streams="
-            "btcusdt@markPrice@1s/paxgusdt@markPrice@1s",
+            "wss://fstream.binance.com/stream?streams=!markPrice@arr@1s",
         )
         manager._on_message(
             MagicMock(),
-            json.dumps({"data": {"s": "PAXGUSDT", "p": "4382.40"}}),
+            json.dumps(
+                {
+                    "data": [
+                        {"s": "BTCUSDT", "p": "68000.00"},
+                        {"s": "PAXGUSDT", "p": "4382.40"},
+                        {"s": "UNSUBSCRIBED", "p": "1.00"},
+                    ]
+                }
+            ),
         )
 
-        symbol, price, timestamp = on_price_update.call_args.args
-        self.assertEqual((symbol, price), ("PAXGUSDT", 4382.40))
-        self.assertEqual(timestamp, manager._last_message_time)
+        self.assertEqual(on_price_update.call_count, 2)
+        self.assertEqual(
+            [(call.args[0], call.args[1]) for call in on_price_update.call_args_list],
+            [("BTCUSDT", 68000.0), ("PAXGUSDT", 4382.40)],
+        )
+        self.assertEqual(
+            on_price_update.call_args.args[2], manager._last_message_time
+        )
 
-    def test_stale_watchdog_reconnects_when_one_symbol_stops_updating(self):
+    def test_all_market_update_keeps_watchdog_fresh_when_symbol_is_unavailable(self):
         manager = BinanceWSManager(
             ["BTCUSDT", "PAXGUSDT"], MagicMock(), stale_threshold=5.0
         )
@@ -592,15 +604,14 @@ class TestTradeChecker(unittest.TestCase):
         manager._close_ws = MagicMock()
 
         def stop_after_check(timeout):
-            if manager._close_ws.called:
-                manager._stop_event.set()
+            manager._stop_event.set()
             return False
 
         manager._stop_event.wait = MagicMock(side_effect=stop_after_check)
 
         manager._stale_checker()
 
-        manager._close_ws.assert_called_once_with()
+        manager._close_ws.assert_not_called()
 
     def test_invalid_message_does_not_refresh_websocket_watchdog(self):
         manager = BinanceWSManager(["BTCUSDT"], MagicMock())
@@ -1574,4 +1585,3 @@ def test_testnet_order_probe():
     assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "PASSED"
     manager.place_order.assert_called_once()
     manager.cancel_order.assert_called_once_with("BTCUSDT", 123)
-

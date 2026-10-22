@@ -9,8 +9,8 @@ Features
 --------
 * **Auto-reconnect** with exponential backoff (capped at 60 s).
 * **Ping/pong keepalive** via ``websocket-client`` built-in support.
-* **Stale-stream detection** — restarts if any subscribed symbol receives no
-  valid price update within ``stale_threshold`` seconds (default 30 s).
+* **Stale-stream detection** — restarts if the all-market mark-price stream
+  receives no valid update within ``stale_threshold`` seconds (default 30 s).
 * **Thread safety** — guarantees only one WebSocket thread runs at a time
   using a :class:`threading.Lock`.
 * **Clean shutdown** — :meth:`stop` signals the run-loop to exit and closes
@@ -38,6 +38,7 @@ Fixes applied (2026-05-14)
 
 import json
 import logging
+import math
 import threading
 import time
 from typing import Callable, List, Optional
@@ -65,8 +66,8 @@ class BinanceWSManager:
             whenever a new ticker update arrives.
         on_status_change: Optional callback invoked with a human-readable
             status string on connect / disconnect / error events.
-        stale_threshold: Seconds without a price update for any subscribed
-            symbol before the connection is forcibly restarted.
+        stale_threshold: Seconds without a valid mark-price update before the
+            connection is forcibly restarted.
         ping_interval: Seconds between WebSocket ping frames.
         ping_timeout: Seconds to wait for a pong before treating the
             connection as dead.
@@ -175,15 +176,10 @@ class BinanceWSManager:
     # ------------------------------------------------------------------
 
     def _stream_url(self) -> str:
-        # Called from _run_loop which already holds _lock at ws-creation time,
-        # but _stream_url itself is cheap — just read under the lock.
-        with self._lock:
-            pairs = list(self.trading_pairs)
-        # The one-second mark-price stream publishes every subscribed symbol
-        # periodically, including quiet markets. It also matches the MARK_PRICE
-        # trigger source used by protective orders.
-        streams = "/".join(f"{p.lower()}@markPrice@1s" for p in pairs)
-        return f"wss://fstream.binance.com/stream?streams={streams}"
+        # A named combined stream can stop all prices when one requested symbol
+        # is unavailable (for example, after a delisting).  The all-market
+        # stream keeps active symbols flowing; _on_message filters it locally.
+        return "wss://fstream.binance.com/stream?streams=!markPrice@arr@1s"
 
     def _notify_status(self, msg: str) -> None:
         logger.info(f"[WSManager] {msg}")
@@ -214,9 +210,7 @@ class BinanceWSManager:
             self._reconnect_requested_at = 0.0
             opened_at = time.time()
             self._last_message_time = opened_at
-            self._last_message_by_symbol = {
-                symbol.upper(): opened_at for symbol in self.trading_pairs
-            }
+            self._last_message_by_symbol = {}
         self._notify_status("WebSocket connection opened.")
 
     def _on_message(self, ws: websocket.WebSocketApp, raw: str) -> None:
@@ -224,23 +218,40 @@ class BinanceWSManager:
         try:
             msg = json.loads(raw)
             data = msg.get("data", {})
-            symbol = data.get("s")
-            price_str = data.get("p")
-            if symbol and price_str:
+            updates = data if isinstance(data, list) else [data]
+            with self._lock:
+                subscribed = {symbol.upper() for symbol in self.trading_pairs}
+
+            valid_update = False
+            prices: List[tuple[str, float]] = []
+            for update in updates:
+                if not isinstance(update, dict):
+                    continue
+                symbol = update.get("s")
+                price_str = update.get("p")
+                if not symbol or not price_str:
+                    continue
+                try:
+                    price = float(price_str)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(price) or price <= 0:
+                    continue
+                valid_update = True
                 symbol = str(symbol).upper()
-                price = float(price_str)
-                with self._lock:
-                    if symbol not in self._last_message_by_symbol:
-                        logger.debug(
-                            "[WSManager] Ignoring update for unsubscribed symbol %s",
-                            symbol,
-                        )
-                        return
-                    self._last_message_time = now
-                    self._last_message_by_symbol[symbol] = now
-                self._on_price_update(symbol, price, now)
-            else:
+                if symbol in subscribed:
+                    prices.append((symbol, price))
+
+            if not valid_update:
                 logger.debug(f"[WSManager] Unrecognised message format: {msg}")
+                return
+
+            with self._lock:
+                self._last_message_time = now
+                for symbol, _ in prices:
+                    self._last_message_by_symbol[symbol] = now
+            for symbol, price in prices:
+                self._on_price_update(symbol, price, now)
         except Exception:
             logger.exception("[WSManager] Error parsing WebSocket message")
 
@@ -338,7 +349,7 @@ class BinanceWSManager:
     # ------------------------------------------------------------------
 
     def _stale_checker(self) -> None:
-        """Restart the WebSocket when the connection or any symbol goes stale.
+        """Restart the WebSocket when the all-market price feed goes stale.
 
         The poll interval is ``max(1, stale_threshold / 3)`` seconds, so
         even short thresholds are caught within a single polling cycle
@@ -357,20 +368,14 @@ class BinanceWSManager:
                 last_msg = self._last_message_time
                 reconnect_requested = self._reconnect_requested
                 reconnect_requested_at = self._reconnect_requested_at
-                last_messages = dict(self._last_message_by_symbol)
 
             now = time.time()
             age = now - last_msg
-            stale_symbols = [
-                symbol
-                for symbol, last_symbol_message in last_messages.items()
-                if now - last_symbol_message > self.stale_threshold
-            ]
             reconnect_latch_expired = (
                 reconnect_requested
                 and now - reconnect_requested_at >= self.stale_threshold
             )
-            if (age > self.stale_threshold or stale_symbols) and (
+            if age > self.stale_threshold and (
                 not reconnect_requested or reconnect_latch_expired
             ):
                 with self._lock:
@@ -386,18 +391,10 @@ class BinanceWSManager:
                         continue
                     self._reconnect_requested = True
                     self._reconnect_requested_at = now
-                if stale_symbols:
-                    logger.warning(
-                        "[WSManager] No price update for %s within %.1fs — "
-                        "forcing reconnect.",
-                        ", ".join(stale_symbols),
-                        self.stale_threshold,
-                    )
-                else:
-                    logger.warning(
-                        f"[WSManager] No message received for {age:.1f}s "
-                        f"(threshold={self.stale_threshold}s) — forcing reconnect."
-                    )
+                logger.warning(
+                    f"[WSManager] No mark-price update received for {age:.1f}s "
+                    f"(threshold={self.stale_threshold}s) — forcing reconnect."
+                )
                 self._close_ws()
 
         logger.info("[WSManager] Stale-checker exited.")
