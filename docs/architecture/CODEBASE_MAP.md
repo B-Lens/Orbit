@@ -30,10 +30,12 @@ lifecycle records, and aggregate duration/P&L distributions. Before order
 submission, the core asks the LLM to approve or reject each candidate using the
 strategy signal and cached market intelligence. The trade checker reconciles Redis
 with Binance, maintains protective orders, and asks the LLM for a post-exit review
-after the broker confirms a position is flat. Live position prices come from each
-symbol's one-second Binance Futures mark-price stream, matching the trigger source
-used by protective orders; the checker falls back to REST when those updates exceed
-its freshness limit. The sentiment cron
+after the broker confirms a position is flat. Live position prices come from the
+one-second Binance Futures all-market mark-price stream, filtered to active trades
+and matching the trigger source used by protective orders. This keeps an
+unavailable symbol from interrupting prices for other trades; the checker falls
+back to REST when a requested symbol's updates exceed its freshness limit. The
+sentiment cron
 runs web-grounded Responses analysis every 30 minutes using provisioned Codex
 credentials.
 
