@@ -371,6 +371,14 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             persisted = self.load_trade(trade_id) or {}
 
+            in_memory_trade = getattr(self, "trades", {}).get(symbol, {})
+            if persisted.get("exit_pending") or in_memory_trade.get("exit_pending"):
+                logger.info(
+                    "Skipping protective order recreation for exit-pending %s trade",
+                    symbol,
+                )
+                return stop_loss_order, take_profit_order
+
             if (
                 stop_loss_order is None
                 or (

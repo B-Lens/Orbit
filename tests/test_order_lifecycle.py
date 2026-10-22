@@ -648,6 +648,31 @@ class TestTradeChecker(unittest.TestCase):
         checker.order_manager.place_sl_order.assert_not_called()
         checker.order_manager.place_target_order.assert_not_called()
 
+    def test_missing_stop_is_not_recreated_while_exit_is_pending(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker._order_mode_position_is_flat = MagicMock(return_value=False)
+        checker.load_trade = MagicMock(
+            return_value={
+                "sl_order_id": "triggered-stop",
+                "stop_loss_price": 1.736,
+                "exit_pending": True,
+            }
+        )
+        checker.trades = {}
+
+        orders = checker.ensure_orders(
+            "ATOMUSDT",
+            {"trade_id": "atom-trade", "positionSide": "BUY", "quantity": 690.14},
+            {"stop_loss_percent": 1},
+        )
+
+        self.assertEqual(orders, (None, None))
+        checker.order_manager.place_sl_order.assert_not_called()
+        checker.order_manager.place_target_order.assert_not_called()
+        checker._order_mode_position_is_flat.assert_not_called()
+
     def test_flat_position_retains_discovered_target_for_exit_cleanup(self):
         checker = TradeChecker.__new__(TradeChecker)
         checker.order_manager = MagicMock()
@@ -1574,4 +1599,3 @@ def test_testnet_order_probe():
     assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "PASSED"
     manager.place_order.assert_called_once()
     manager.cancel_order.assert_called_once_with("BTCUSDT", 123)
-
