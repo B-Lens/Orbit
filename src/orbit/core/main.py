@@ -201,11 +201,12 @@ class BinanceAutomation(ExceptionManager):
                                     "order_id": order_id,
                                 },
                             )
-                        self.send_alerts(
-                            data=None,
-                            description=f"Order {order_id} for {symbol} was {status.lower()}",
-                            fields=order,
-                        )
+                        if status != "CANCELED":
+                            self.send_alerts(
+                                data=None,
+                                description=f"Order {order_id} for {symbol} was {status.lower()}",
+                                fields=order,
+                            )
                         return
 
                     if status == "FILLED":
@@ -270,11 +271,6 @@ class BinanceAutomation(ExceptionManager):
                         "order_id": order_id,
                     },
                 )
-            self.send_alerts(
-                data=None,
-                description=f"Order {order_id} for {symbol} cancelled (10 min timeout)",
-                fields=cancel_result,
-            )
         except Exception as e:
             self.handle_exception(
                 e,
