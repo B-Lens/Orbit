@@ -6,6 +6,61 @@ from orbit.core.main import BinanceAutomation
 
 
 class TestSignalOrderFailureNotifications(unittest.TestCase):
+    def test_terminal_order_status_preserves_ledger_and_only_alerts_failures(self) -> None:
+        for status in ("CANCELED", "REJECTED", "EXPIRED"):
+            with self.subTest(status=status):
+                automation = BinanceAutomation.__new__(BinanceAutomation)
+                automation.order_manager = Mock()
+                order = {"status": status}
+                automation.order_manager.get_order.return_value = order
+                automation.send_alerts = Mock()
+
+                automation.monitor_order_execution(
+                    "ETHUSDT", 123, "SELL", 0.389, 2406.99, "decision-1"
+                )
+
+                automation.order_manager.mongo_handler.append_decision_event.assert_called_once_with(
+                    "decision-1",
+                    {
+                        "event_id": f"order_{status.lower()}:ETHUSDT:123",
+                        "status": f"order_{status.lower()}",
+                        "order_id": 123,
+                    },
+                )
+                automation.order_manager.cancel_order.assert_not_called()
+                if status == "CANCELED":
+                    automation.send_alerts.assert_not_called()
+                else:
+                    automation.send_alerts.assert_called_once_with(
+                        data=None,
+                        description=f"Order 123 for ETHUSDT was {status.lower()}",
+                        fields=order,
+                    )
+
+    @patch("orbit.core.main.time.time", side_effect=[0, 600])
+    def test_timeout_cancels_and_records_order_without_alert(self, _time: Mock) -> None:
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.order_manager = Mock()
+        automation.order_manager.cancel_order.return_value = {"status": "CANCELED"}
+        automation.send_alerts = Mock()
+        automation.handle_exception = Mock()
+
+        automation.monitor_order_execution(
+            "ETHUSDT", 123, "SELL", 0.389, 2406.99, "decision-1"
+        )
+
+        automation.order_manager.cancel_order.assert_called_once_with("ETHUSDT", 123)
+        automation.order_manager.mongo_handler.append_decision_event.assert_called_once_with(
+            "decision-1",
+            {
+                "event_id": "order_timeout_cancelled:ETHUSDT:123",
+                "status": "order_timeout_cancelled",
+                "order_id": 123,
+            },
+        )
+        automation.send_alerts.assert_not_called()
+        automation.handle_exception.assert_not_called()
+
     @patch("orbit.core.main.threading.Thread")
     @patch("orbit.core.main.time.sleep")
     @patch("orbit.core.main.position_lifecycle_lock")
