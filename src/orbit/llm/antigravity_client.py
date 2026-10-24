@@ -19,7 +19,7 @@ DEFAULT_BACKEND_URL = (
     "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
 )
 DEFAULT_TOKEN_URL = "https://oauth2.googleapis.com/token"
-DEFAULT_MODEL = "gemini-3.7-flash-tiered"
+DEFAULT_MODEL = "gemini-3.8-flash-medium"
 DEFAULT_USER_AGENT = "antigravity/1.1.22 (orbit; direct-backend)"
 
 logger = logging.getLogger("Orbit")
