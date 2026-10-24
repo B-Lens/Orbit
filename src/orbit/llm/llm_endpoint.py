@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from orbit.core.exception_manager import ExceptionManager
 from orbit.llm.antigravity_client import (
     AntigravityClient,
+    WebSearchUnsupportedError,
     default_token_file,
 )
 from orbit.llm.openai_client import (
@@ -220,7 +221,15 @@ class LLM(ExceptionManager):
                 logger.exception(
                     "%s market-intelligence web search failed", provider_name
                 )
-        raise RuntimeError("All configured web-search providers failed") from last_error
+        # All web-search-capable providers failed.  Log the root cause and
+        # degrade gracefully to a plain (non-grounded) invocation so the
+        # sentiment workflow still produces a result.
+        logger.warning(
+            "All web-search providers failed (%s); falling back to plain invoke",
+            last_error,
+        )
+        content = self.invoke(prompt)
+        return WebSearchInvocation(content=content, provider="invoke-fallback")
 
     # -----------------------------------------------------------------------
     # Helpers
