@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 import urllib.error
 import urllib.parse
@@ -256,7 +257,10 @@ def test_codex_oauth_client_rejects_repeated_premature_streams(tmp_path) -> None
     assert urlopen.call_count == 2
 
 
-def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> None:
+def test_antigravity_client_uses_google_search_with_valid_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ANTIGRAVITY_MODEL", raising=False)
     token_file = tmp_path / "token.json"
     token_file.write_text(
         json.dumps(
@@ -312,6 +316,7 @@ def test_antigravity_client_uses_google_search_with_valid_token(tmp_path) -> Non
     assert client.invoke_web_search("Assess markets") == '{"sentiment":"NEUTRAL"}'
     request, timeout = requests[0]
     payload = json.loads(request.data)
+    assert payload["model"] == "gemini-3.8-flash-medium"
     assert timeout == 120.0
     assert request.full_url == (
         "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
