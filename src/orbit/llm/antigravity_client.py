@@ -25,6 +25,10 @@ DEFAULT_USER_AGENT = "antigravity/1.1.22 (orbit; direct-backend)"
 logger = logging.getLogger("Orbit")
 
 
+class WebSearchUnsupportedError(RuntimeError):
+    """Raised when the Antigravity backend does not support web-search grounding."""
+
+
 def default_token_file() -> Path:
     """Return the Antigravity CLI OAuth credential location."""
     configured = os.getenv("ANTIGRAVITY_TOKEN_FILE")
@@ -138,6 +142,11 @@ class AntigravityClient:
             with self._urlopen(request, timeout=self.timeout) as response:
                 result = cast(dict[str, Any], json.load(response))
         except urllib.error.HTTPError as error:
+            if web_search and error.code == 404:
+                raise WebSearchUnsupportedError(
+                    "Antigravity backend does not support web-search grounding "
+                    f"(HTTP {error.code})"
+                ) from error
             raise RuntimeError(f"Antigravity HTTP {error.code}") from error
         except urllib.error.URLError as error:
             raise RuntimeError(f"Antigravity request failed: {error.reason}") from error

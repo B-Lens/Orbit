@@ -700,3 +700,89 @@ def test_llm_requires_at_least_one_provider(
 
     with pytest.raises(RuntimeError, match="No market-intelligence LLM configured"):
         LLM(redis_client=_redis_mock())
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: web-search fallback to plain invoke
+# ---------------------------------------------------------------------------
+
+def test_llm_web_search_falls_back_to_invoke_when_all_web_providers_fail() -> None:
+    """When every web-search provider fails, invoke_web_search_with_provider
+    must degrade gracefully to a plain invoke and label the result
+    'invoke-fallback' instead of raising."""
+    from orbit.llm.antigravity_client import WebSearchUnsupportedError
+
+    openai_client = MagicMock()
+    openai_client.invoke_web_search.side_effect = RuntimeError("OpenAI web search unavailable")
+    # Use spec=str so MagicMock does not auto-create a .content attribute,
+    # matching how LLM.invoke() treats a plain-string response.
+    antigravity_client = MagicMock()
+    # Simulate the HTTP-404 path that originally triggered the bug
+    antigravity_client.invoke_web_search.side_effect = WebSearchUnsupportedError(
+        "Antigravity backend does not support web-search grounding (HTTP 404)"
+    )
+    # Return a SimpleNamespace without a .content attr so LLM.invoke() uses the
+    # string value directly, matching the real provider behaviour.
+    from types import SimpleNamespace as _SN
+    antigravity_client.invoke.return_value = "plain antigravity result"
+    # Patch LLM.invoke on the instance to bypass the hasattr content branch
+    # by returning a value with no .content attribute.
+    antigravity_client.invoke.return_value = MagicMock(spec=str, **{"__str__": lambda s: "plain antigravity result"})
+
+    llm = LLM(
+        openai_client=openai_client,
+        antigravity_client=antigravity_client,
+        redis_client=_redis_mock(),
+    )
+
+    # Patch invoke() directly on the LLM instance to return a clean string
+    llm.invoke = lambda prompt: "plain antigravity result"  # type: ignore[method-assign]
+
+    result = llm.invoke_web_search_with_provider("market prompt")
+
+    assert result.content == "plain antigravity result"
+    assert result.provider == "invoke-fallback"
+    antigravity_client.invoke_web_search.assert_called_once_with("market prompt")
+
+
+def test_antigravity_client_raises_web_search_unsupported_on_404() -> None:
+    """AntigravityClient._invoke must raise WebSearchUnsupportedError (not the
+    generic RuntimeError) when the backend returns HTTP 404 for a grounded
+    web-search request."""
+    import io
+    import urllib.error
+    from orbit.llm.antigravity_client import AntigravityClient, WebSearchUnsupportedError
+
+    token_data = json.dumps(
+        {
+            "token": {
+                "access_token": "tok",
+                "expiry": "2999-01-01T00:00:00+00:00",
+            }
+        }
+    )
+
+    def _failing_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            url="https://example.com",
+            code=404,
+            msg="Not Found",
+            hdrs={},  # type: ignore[arg-type]
+            fp=io.BytesIO(b""),
+        )
+
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        token_file = pathlib.Path(tmp) / "token.json"
+        token_file.write_text(token_data, encoding="utf-8")
+        project_file = pathlib.Path(tmp) / "project.txt"
+        project_file.write_text("orbit-project", encoding="utf-8")
+
+        client = AntigravityClient(
+            token_file=token_file,
+            project_file=project_file,
+            urlopen=_failing_urlopen,
+        )
+
+        with pytest.raises(WebSearchUnsupportedError):
+            client.invoke_web_search("Assess crypto markets")
