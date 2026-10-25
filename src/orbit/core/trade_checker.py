@@ -321,7 +321,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
         trade: Dict[str, Any],
         risk_management: Dict[str, Any],
     ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        """Guarantee that exactly one SL (and optionally one TP) exists."""
+        """Reconcile protective orders unless the trade is already exiting."""
         try:
             trade_id = trade.get("trade_id") or symbol
 
@@ -370,6 +370,17 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
 
             persisted = self.load_trade(trade_id) or {}
+
+            if (
+                trade.get("exit_pending")
+                or persisted.get("exit_pending")
+                or self.trades.get(symbol, {}).get("exit_pending")
+            ):
+                logger.info(
+                    "Skipping protective order recreation for exit-pending %s trade",
+                    symbol,
+                )
+                return stop_loss_order, take_profit_order
 
             if (
                 stop_loss_order is None
