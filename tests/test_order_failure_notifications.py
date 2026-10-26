@@ -65,6 +65,32 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
         automation.send_alerts.assert_not_called()
         automation.handle_exception.assert_not_called()
 
+    @patch("orbit.core.main.time.time", side_effect=[0, 600])
+    def test_timeout_cancellation_protects_racing_partial_fill(self, _time: Mock) -> None:
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.order_manager = Mock()
+        automation.order_manager.cancel_order.return_value = {
+            "status": "CANCELED",
+            "executedQty": "0.2",
+            "avgPrice": "100.0",
+        }
+        automation.trade_checker = Mock()
+        automation.trade_checker.ensure_orders.return_value = (
+            {"algoId": "sl-1"}, {"algoId": "tp-1"}
+        )
+        automation.risk_management = {}
+        automation.trades = {}
+        automation.handle_exception = Mock()
+
+        automation.monitor_order_execution(
+            "ETHUSDT", 123, "BUY", 0.5, 100.0, 98.0, 105.0, "decision-1"
+        )
+
+        automation.trade_checker.ensure_orders.assert_called_once()
+        automation.trade_checker.delete_trade.assert_not_called()
+        self.assertEqual(automation.trades["ETHUSDT"]["quantity"], 0.2)
+        automation.handle_exception.assert_not_called()
+
     @patch("orbit.core.main.threading.Thread")
     @patch("orbit.core.main.time.sleep")
     @patch("orbit.core.main.position_lifecycle_lock")
