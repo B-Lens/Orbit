@@ -184,20 +184,18 @@ class BinanceAutomation(ExceptionManager):
         start_time = time.time()
         timeout_seconds = 600  # 10 minutes
 
-        def protect_executed_quantity(
-            order: Dict[str, Any], event_status: str
-        ) -> bool:
-            """Persist and protect the final nonzero fill reported by Binance."""
+        def protect_filled_entry(order: Dict[str, Any]) -> None:
+            """Persist and protect an entry after Binance confirms it filled."""
             executed_quantity = float(order.get("executedQty") or 0)
             if executed_quantity <= 0:
-                return False
+                raise RuntimeError(f"Filled entry {order_id} reported no quantity")
 
             if decision_id and self.order_manager.mongo_handler is not None:
                 self.order_manager.mongo_handler.append_decision_event(
                     decision_id,
                     {
-                        "event_id": f"order_{event_status}:{symbol}:{order_id}",
-                        "status": f"order_{event_status}",
+                        "event_id": f"order_filled:{symbol}:{order_id}",
+                        "status": "order_filled",
                         "order_id": order_id,
                         "executed_quantity": order.get("executedQty"),
                         "average_price": order.get("avgPrice"),
@@ -249,7 +247,6 @@ class BinanceAutomation(ExceptionManager):
                     }
                 )
                 self.trades[symbol] = trade
-            return True
 
         while time.time() - start_time < timeout_seconds:
             try:
@@ -262,19 +259,7 @@ class BinanceAutomation(ExceptionManager):
                     if status in ("NEW",):
                         break
 
-                    if status == "PARTIALLY_FILLED":
-                        cancel_result = self.order_manager.cancel_order(symbol, order_id)
-                        if not cancel_result or cancel_result.get("status") != "CANCELED":
-                            raise RuntimeError(
-                                f"Could not cancel partially filled entry {order_id}"
-                            )
-                        order = {**order, **cancel_result}
-                        status = "CANCELED"
-
                     if status in ("CANCELED", "REJECTED", "EXPIRED"):
-                        has_fill = protect_executed_quantity(
-                            order, "partially_filled"
-                        )
                         if decision_id and self.order_manager.mongo_handler is not None:
                             self.order_manager.mongo_handler.append_decision_event(
                                 decision_id,
@@ -290,12 +275,11 @@ class BinanceAutomation(ExceptionManager):
                                 description=f"Order {order_id} for {symbol} was {status.lower()}",
                                 fields=order,
                             )
-                        if not has_fill:
-                            self.trade_checker.delete_trade(decision_id or symbol)
+                        self.trade_checker.delete_trade(decision_id or symbol)
                         return
 
                     if status == "FILLED":
-                        protect_executed_quantity(order, "filled")
+                        protect_filled_entry(order)
                         return
 
                 time.sleep(30)
@@ -313,9 +297,6 @@ class BinanceAutomation(ExceptionManager):
             assert (
                 cancel_result and cancel_result.get("status") == "CANCELED"
             ), "Cancellation failed"
-            has_fill = protect_executed_quantity(
-                cancel_result, "partially_filled"
-            )
             if decision_id and self.order_manager.mongo_handler is not None:
                 self.order_manager.mongo_handler.append_decision_event(
                     decision_id,
@@ -325,8 +306,7 @@ class BinanceAutomation(ExceptionManager):
                         "order_id": order_id,
                     },
                 )
-            if not has_fill:
-                self.trade_checker.delete_trade(decision_id or symbol)
+            self.trade_checker.delete_trade(decision_id or symbol)
         except Exception as e:
             self.handle_exception(
                 e,

@@ -175,63 +175,6 @@ class TestReportingLifecycle(unittest.TestCase):
             {},
         )
 
-    @patch("orbit.core.main.time.sleep", return_value=None)
-    def test_partial_fill_is_protected_before_entry_completes(self, _sleep):
-        automation = BinanceAutomation.__new__(BinanceAutomation)
-        automation.order_manager = MagicMock()
-        automation.order_manager.get_order.side_effect = [
-            {
-                "status": "PARTIALLY_FILLED",
-                "executedQty": "0.2",
-                "avgPrice": "100.0",
-            }
-        ]
-        automation.order_manager.cancel_order.return_value = {
-            "status": "CANCELED",
-            "executedQty": "0.2",
-            "avgPrice": "100.0",
-        }
-        automation.trade_checker = MagicMock()
-        automation.trade_checker.ensure_orders.return_value = (
-            {"algoId": "sl-1"}, {"algoId": "tp-1"}
-        )
-        automation.risk_management = {}
-        automation.trades = {}
-
-        automation.monitor_order_execution(
-            "ETHUSDT", 123, "BUY", 0.5, 100.0, 98.0, 105.0, "decision-1"
-        )
-
-        first_trade = automation.trade_checker.ensure_orders.call_args_list[0].args[1]
-        self.assertEqual(first_trade["quantity"], 0.2)
-        self.assertFalse(first_trade["entry_pending"])
-        self.assertEqual(automation.trade_checker.ensure_orders.call_count, 1)
-        self.assertFalse(automation.trades["ETHUSDT"]["entry_pending"])
-        automation.order_manager.cancel_order.assert_called_once_with("ETHUSDT", 123)
-
-    def test_terminal_canceled_entry_preserves_and_protects_reported_fill(self):
-        automation = BinanceAutomation.__new__(BinanceAutomation)
-        automation.order_manager = MagicMock()
-        automation.order_manager.get_order.return_value = {
-            "status": "CANCELED",
-            "executedQty": "0.2",
-            "avgPrice": "100.0",
-        }
-        automation.trade_checker = MagicMock()
-        automation.trade_checker.ensure_orders.return_value = (
-            {"algoId": "sl-1"}, {"algoId": "tp-1"}
-        )
-        automation.risk_management = {}
-        automation.trades = {}
-
-        automation.monitor_order_execution(
-            "ETHUSDT", 123, "BUY", 0.5, 100.0, 98.0, 105.0, "decision-1"
-        )
-
-        self.assertEqual(automation.trades["ETHUSDT"]["quantity"], 0.2)
-        automation.trade_checker.delete_trade.assert_not_called()
-        automation.trade_checker.ensure_orders.assert_called_once()
-
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
     def test_protective_order_submission_is_appended_to_decision_ledger(self, _sleep):
         manager = OrderManager.__new__(OrderManager)
