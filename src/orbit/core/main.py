@@ -164,6 +164,8 @@ class BinanceAutomation(ExceptionManager):
         action: str,
         quantity: float,
         price: float,
+        stop_loss: float,
+        target: Optional[float],
         decision_id: Optional[str] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
@@ -176,6 +178,8 @@ class BinanceAutomation(ExceptionManager):
             action: ``"BUY"`` or ``"SELL"``.
             quantity: Order quantity.
             price: Limit price used for the order.
+            stop_loss: Trigger price for the post-fill stop order.
+            target: Optional trigger price for the post-fill target order.
         """
         start_time = time.time()
         timeout_seconds = 600  # 10 minutes
@@ -231,13 +235,46 @@ class BinanceAutomation(ExceptionManager):
                                 )
                         except (TypeError, ValueError, OSError):
                             pass
+                        executed_quantity = float(order.get("executedQty") or quantity)
+                        exit_side = "SELL" if action == "BUY" else "BUY"
+                        stop_order = self.order_manager.place_sl_order(
+                            symbol=symbol,
+                            side=exit_side,
+                            stoploss_price=stop_loss,
+                            quantity=executed_quantity,
+                            trade_id=decision_id or symbol,
+                            close_position=True,
+                        )
+                        target_order = None
+                        if target is not None:
+                            target_order = self.order_manager.place_target_order(
+                                symbol=symbol,
+                                side=exit_side,
+                                target_price=target,
+                                quantity=executed_quantity,
+                                trade_id=decision_id or symbol,
+                                close_position=True,
+                            )
+
                         self.trades[symbol] = {
                             "symbol": symbol,
                             "positionSide": action,
-                            "quantity": quantity,
+                            "quantity": executed_quantity,
                             "orderId": order_id,
                             "price": price,
                             "trade_id": decision_id or symbol,
+                            "stop_loss_price": stop_loss,
+                            "target": target,
+                            "stop_loss_order": stop_order,
+                            "take_profit_order": target_order,
+                            "sl_order_id": (
+                                str(stop_order.get("algoId", "")) if stop_order else ""
+                            ),
+                            "tp_order_id": (
+                                str(target_order.get("algoId", ""))
+                                if target_order
+                                else ""
+                            ),
                             # Creation time is a conservative lower bound for all
                             # partial fills belonging to this order.
                             "entered_at": entered_at.isoformat(),
@@ -359,12 +396,13 @@ class BinanceAutomation(ExceptionManager):
                 stop_loss,
                 target,
                 self.future_leverage,
+                ros=True,
                 trade_id=decision_id,
             )
 
         time.sleep(0.5)
 
-        if not order_response:
+        if not order_response or quantity is None or order_request is None:
             logger.warning("Order failed for %s", symbol)
             return
 
@@ -377,6 +415,8 @@ class BinanceAutomation(ExceptionManager):
                 action,
                 quantity,
                 order_request["price"],
+                stop_loss,
+                target,
                 decision_id,
             ),
             daemon=True,

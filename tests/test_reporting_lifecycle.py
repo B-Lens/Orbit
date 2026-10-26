@@ -124,7 +124,7 @@ class TestReportingLifecycle(unittest.TestCase):
         automation.send_signal_updates = MagicMock()
 
         automation.monitor_order_execution(
-            "ETHUSDT", 123, "BUY", 0.5, 100.0, "decision-1"
+            "ETHUSDT", 123, "BUY", 0.5, 100.0, 98.0, 105.0, "decision-1"
         )
 
         automation.trade_checker.set_cooldown.assert_not_called()
@@ -146,7 +146,7 @@ class TestReportingLifecycle(unittest.TestCase):
         automation.send_signal_updates = MagicMock()
 
         automation.monitor_order_execution(
-            "ETHUSDT", 123, "BUY", 0.5, 100.0, "decision-1"
+            "ETHUSDT", 123, "BUY", 0.5, 100.0, 98.0, 105.0, "decision-1"
         )
 
         automation.order_manager.mongo_handler.append_decision_event.assert_called_once_with(
@@ -161,6 +161,22 @@ class TestReportingLifecycle(unittest.TestCase):
         )
 
         automation.order_manager.get_order.assert_called_once_with("ETHUSDT", 123)
+        automation.order_manager.place_sl_order.assert_called_once_with(
+            symbol="ETHUSDT",
+            side="SELL",
+            stoploss_price=98.0,
+            quantity=0.5,
+            trade_id="decision-1",
+            close_position=True,
+        )
+        automation.order_manager.place_target_order.assert_called_once_with(
+            symbol="ETHUSDT",
+            side="SELL",
+            target_price=105.0,
+            quantity=0.5,
+            trade_id="decision-1",
+            close_position=True,
+        )
 
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
     def test_protective_order_submission_is_appended_to_decision_ledger(self, _sleep):

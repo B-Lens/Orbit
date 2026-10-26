@@ -16,7 +16,8 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
                 automation.send_alerts = Mock()
 
                 automation.monitor_order_execution(
-                    "ETHUSDT", 123, "SELL", 0.389, 2406.99, "decision-1"
+                    "ETHUSDT", 123, "SELL", 0.389, 2406.99, 2420.0, 2380.0,
+                    "decision-1"
                 )
 
                 automation.order_manager.mongo_handler.append_decision_event.assert_called_once_with(
@@ -46,7 +47,8 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
         automation.handle_exception = Mock()
 
         automation.monitor_order_execution(
-            "ETHUSDT", 123, "SELL", 0.389, 2406.99, "decision-1"
+            "ETHUSDT", 123, "SELL", 0.389, 2406.99, 2420.0, 2380.0,
+            "decision-1"
         )
 
         automation.order_manager.cancel_order.assert_called_once_with("ETHUSDT", 123)
@@ -83,5 +85,6 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
         })
 
         automation.order_manager.place_order.assert_called_once()
+        self.assertTrue(automation.order_manager.place_order.call_args.kwargs["ros"])
         automation.send_alerts.assert_not_called()
         thread.assert_not_called()
