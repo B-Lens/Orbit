@@ -241,6 +241,46 @@ class TestOrderManager(unittest.TestCase):
             1.543,
         )
 
+    def test_immediate_stop_trigger_retries_once_beyond_current_price(self):
+        immediate_trigger = ClientError.__new__(ClientError)
+        Exception.__init__(immediate_trigger, "Order would immediately trigger")
+        immediate_trigger.error_code = -2021
+        self.manager.get_symbol_filters.return_value["PRICE_FILTER"] = {
+            "tickSize": "0.001",
+            "minPrice": "0.001",
+        }
+        self.manager.get_mark_price = MagicMock(return_value=1.638)
+        self.manager.place_algo_conditional_order = MagicMock(
+            side_effect=[immediate_trigger, {"algoId": "replacement-stop"}]
+        )
+
+        response = self.manager.place_sl_order(
+            "BTCUSDT", "BUY", 1.638, 716.06, "atom-trade"
+        )
+
+        self.assertEqual(response, {"algoId": "replacement-stop"})
+        calls = self.manager.place_algo_conditional_order.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1].kwargs["stop_price"], 1.639)
+        self.assertEqual(calls[1].kwargs["trade_id"], "atom-trade")
+
+    def test_immediate_take_profit_trigger_is_not_repositioned(self):
+        immediate_trigger = ClientError.__new__(ClientError)
+        Exception.__init__(immediate_trigger, "Order would immediately trigger")
+        immediate_trigger.error_code = -2021
+        self.manager.place_algo_conditional_order = MagicMock(
+            side_effect=immediate_trigger
+        )
+        self.manager.get_mark_price = MagicMock()
+
+        response = self.manager.place_target_order(
+            "BTCUSDT", "SELL", 1.638, 716.06, "atom-trade"
+        )
+
+        self.assertIsNone(response)
+        self.manager.place_algo_conditional_order.assert_called_once()
+        self.manager.get_mark_price.assert_not_called()
+
     def test_algo_order_registers_parent_trade(self):
         self.manager.future_client.sign_request.return_value = {"algoId": 123}
         response = self.manager.place_algo_conditional_order(
