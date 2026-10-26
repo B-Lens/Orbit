@@ -398,6 +398,54 @@ class TradeChecker(AuthenticationManager, RedisManager):
                 )
                 take_profit_order = None
 
+            if stop_loss_order is None or (
+                take_profit_order is None
+                and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+            ):
+                current_price = self.check_price_freshness(symbol)
+                if current_price is None:
+                    logger.warning(
+                        "[SELF-HEAL] Skipping protective order recreation for %s "
+                        "because a fresh price is unavailable",
+                        symbol,
+                    )
+                    return stop_loss_order, take_profit_order
+
+                stop_price = persisted.get("stop_loss_price")
+                target_price = persisted.get("target")
+                position_side = trade["positionSide"]
+                stop_reached = stop_loss_order is None and stop_price is not None and (
+                    (position_side == "BUY" and current_price <= float(stop_price))
+                    or (position_side != "BUY" and current_price >= float(stop_price))
+                )
+                target_reached = (
+                    take_profit_order is None
+                    and COIN_TRADE_TYPE[symbol] == TradeType.BRACKET_TRADE
+                    and target_price is not None
+                    and (
+                        (position_side == "BUY" and current_price >= float(target_price))
+                        or (
+                            position_side != "BUY"
+                            and current_price <= float(target_price)
+                        )
+                    )
+                )
+                if stop_reached or target_reached:
+                    logger.warning(
+                        "[SELF-HEAL] Protective trigger for %s was already reached "
+                        "at fresh price %s; exiting at market",
+                        symbol,
+                        current_price,
+                    )
+                    exit_side = "SELL" if position_side == "BUY" else "BUY"
+                    response = self.order_manager.place_market_order(
+                        symbol, exit_side, trade["quantity"]
+                    )
+                    if response:
+                        self._mark_exit_pending(symbol, trade_id)
+                        self._exit_trade(symbol, trade_id)
+                    return stop_loss_order, take_profit_order
+
             if stop_loss_order is None:
                 sl_price = persisted.get("stop_loss_price") or self.calculate_sl_price(
                     trade, risk_management

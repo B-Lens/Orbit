@@ -691,6 +691,7 @@ class TestTradeChecker(unittest.TestCase):
         checker.order_manager.get_conditional_open_orders.return_value = []
         checker.order_manager.place_sl_order.return_value = {"algoId": "new-stop"}
         checker._order_mode_position_is_flat = MagicMock(return_value=False)
+        checker.check_price_freshness = MagicMock(return_value=1.8)
         checker.load_trade = MagicMock(
             return_value={"sl_order_id": "old-stop", "stop_loss_price": 1.736}
         )
@@ -708,6 +709,53 @@ class TestTradeChecker(unittest.TestCase):
         checker.order_manager.place_sl_order.assert_called_once_with(
             symbol="ATOMUSDT", side="SELL", stoploss_price=1.736, quantity=690.14
         )
+
+    def test_missing_stop_is_not_recreated_after_fresh_price_crosses_trigger(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker.order_manager.place_market_order.return_value = {"orderId": "exit-1"}
+        checker._order_mode_position_is_flat = MagicMock(return_value=False)
+        checker.check_price_freshness = MagicMock(return_value=1.63)
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "old-stop", "stop_loss_price": 1.638}
+        )
+        checker._mark_exit_pending = MagicMock()
+        checker._exit_trade = MagicMock()
+
+        orders = checker.ensure_orders(
+            "ATOMUSDT",
+            {"trade_id": "atom-trade", "positionSide": "BUY", "quantity": 716.06},
+            {"stop_loss_percent": 1},
+        )
+
+        self.assertEqual(orders, (None, None))
+        checker.check_price_freshness.assert_called_once_with("ATOMUSDT")
+        checker.order_manager.place_market_order.assert_called_once_with(
+            "ATOMUSDT", "SELL", 716.06
+        )
+        checker._mark_exit_pending.assert_called_once_with("ATOMUSDT", "atom-trade")
+        checker._exit_trade.assert_called_once_with("ATOMUSDT", "atom-trade")
+        checker.order_manager.place_sl_order.assert_not_called()
+
+    def test_missing_stop_is_not_recreated_without_fresh_price(self):
+        checker = TradeChecker.__new__(TradeChecker)
+        checker.order_manager = MagicMock()
+        checker.order_manager.get_conditional_open_orders.return_value = []
+        checker._order_mode_position_is_flat = MagicMock(return_value=False)
+        checker.check_price_freshness = MagicMock(return_value=None)
+        checker.load_trade = MagicMock(
+            return_value={"sl_order_id": "old-stop", "stop_loss_price": 1.638}
+        )
+
+        orders = checker.ensure_orders(
+            "ATOMUSDT",
+            {"trade_id": "atom-trade", "positionSide": "BUY", "quantity": 716.06},
+            {"stop_loss_percent": 1},
+        )
+
+        self.assertEqual(orders, (None, None))
+        checker.order_manager.place_sl_order.assert_not_called()
 
     def test_missing_stop_uses_symbol_execution_mode_for_flat_check(self):
         checker = TradeChecker.__new__(TradeChecker)
@@ -1574,4 +1622,3 @@ def test_testnet_order_probe():
     assert SCRIPT.check_symbol(manager, "BTCUSDT", 10.0).status == "PASSED"
     manager.place_order.assert_called_once()
     manager.cancel_order.assert_called_once_with("BTCUSDT", 123)
-
