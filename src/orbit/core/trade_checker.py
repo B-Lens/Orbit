@@ -407,6 +407,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
                     stoploss_price=sl_price,
                     quantity=trade["quantity"],
+                    close_position=True,
                 )
                 time.sleep(0.5)
                 if stop_loss_order:
@@ -431,6 +432,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
                     target_price=target_price,
                     quantity=trade["quantity"],
+                    close_position=True,
                 )
                 time.sleep(0.5)
                 if take_profit_order:
@@ -1784,6 +1786,8 @@ class TradeChecker(AuthenticationManager, RedisManager):
             trade_id = key[len(TRADE_KEY_PREFIX) :]
             persisted = self.load_trade(trade_id) or {}
             symbol = str(persisted.get("symbol") or trade_id)
+            if persisted.get("entry_pending"):
+                continue
             if symbol not in active_symbols:
                 if len(persisted_by_symbol.get(symbol, [])) > 1:
                     if symbol in handled_ambiguous_symbols:
@@ -1955,15 +1959,18 @@ class TradeChecker(AuthenticationManager, RedisManager):
                             continue
 
                         any_trade_active = True
-                        stop_loss_order, take_profit_order = self.ensure_orders(
-                            symbol, tradesFound[symbol], risk_management
-                        )
-                        self.update_protective_order_data(
-                            symbol,
-                            tradesFound[symbol],
-                            stop_loss_order,
-                            take_profit_order,
-                        )
+                        with position_lifecycle_lock(
+                            symbol, getattr(self, "redis_client", None)
+                        ):
+                            stop_loss_order, take_profit_order = self.ensure_orders(
+                                symbol, tradesFound[symbol], risk_management
+                            )
+                            self.update_protective_order_data(
+                                symbol,
+                                tradesFound[symbol],
+                                stop_loss_order,
+                                take_profit_order,
+                            )
                         current_price = self.check_price_freshness(symbol)
                         if current_price is None:
                             continue

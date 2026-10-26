@@ -706,7 +706,8 @@ class TestTradeChecker(unittest.TestCase):
             )
 
         checker.order_manager.place_sl_order.assert_called_once_with(
-            symbol="ATOMUSDT", side="SELL", stoploss_price=1.736, quantity=690.14
+            symbol="ATOMUSDT", side="SELL", stoploss_price=1.736, quantity=690.14,
+            close_position=True,
         )
 
     def test_missing_stop_uses_symbol_execution_mode_for_flat_check(self):

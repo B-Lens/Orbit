@@ -164,6 +164,8 @@ class BinanceAutomation(ExceptionManager):
         action: str,
         quantity: float,
         price: float,
+        stop_loss: float,
+        target: Optional[float],
         decision_id: Optional[str] = None,
     ) -> None:
         """Poll order status for up to 10 minutes; cancel on timeout.
@@ -176,9 +178,75 @@ class BinanceAutomation(ExceptionManager):
             action: ``"BUY"`` or ``"SELL"``.
             quantity: Order quantity.
             price: Limit price used for the order.
+            stop_loss: Trigger price for the post-fill stop order.
+            target: Optional trigger price for the post-fill target order.
         """
         start_time = time.time()
         timeout_seconds = 600  # 10 minutes
+
+        def protect_filled_entry(order: Dict[str, Any]) -> None:
+            """Persist and protect an entry after Binance confirms it filled."""
+            executed_quantity = float(order.get("executedQty") or 0)
+            if executed_quantity <= 0:
+                raise RuntimeError(f"Filled entry {order_id} reported no quantity")
+
+            if decision_id and self.order_manager.mongo_handler is not None:
+                self.order_manager.mongo_handler.append_decision_event(
+                    decision_id,
+                    {
+                        "event_id": f"order_filled:{symbol}:{order_id}",
+                        "status": "order_filled",
+                        "order_id": order_id,
+                        "executed_quantity": order.get("executedQty"),
+                        "average_price": order.get("avgPrice"),
+                    },
+                )
+
+            entered_at = get_indian_time()
+            try:
+                if order.get("time") is not None:
+                    entered_at = datetime.fromtimestamp(
+                        int(order["time"]) / 1000, tz=timezone.utc
+                    )
+            except (TypeError, ValueError, OSError):
+                pass
+
+            trade_id = decision_id or symbol
+            trade = {
+                "symbol": symbol,
+                "positionSide": action,
+                "quantity": executed_quantity,
+                "orderId": order_id,
+                "price": price,
+                "trade_id": trade_id,
+                "stop_loss_price": stop_loss,
+                "target": target,
+                "entry_pending": False,
+                "entered_at": entered_at.isoformat(),
+            }
+            with position_lifecycle_lock(symbol, self.order_manager.redis_client):
+                self.trade_checker.merge_trade_fields(trade_id, trade)
+                stop_order, target_order = self.trade_checker.ensure_orders(
+                    symbol, trade, self.risk_management
+                )
+                self.trade_checker.update_protective_order_data(
+                    symbol, trade, stop_order, target_order
+                )
+                trade.update(
+                    {
+                        "stop_loss_order": stop_order,
+                        "take_profit_order": target_order,
+                        "sl_order_id": (
+                            str(stop_order.get("algoId", "")) if stop_order else ""
+                        ),
+                        "tp_order_id": (
+                            str(target_order.get("algoId", ""))
+                            if target_order
+                            else ""
+                        ),
+                    }
+                )
+                self.trades[symbol] = trade
 
         while time.time() - start_time < timeout_seconds:
             try:
@@ -207,44 +275,11 @@ class BinanceAutomation(ExceptionManager):
                                 description=f"Order {order_id} for {symbol} was {status.lower()}",
                                 fields=order,
                             )
+                        self.trade_checker.delete_trade(decision_id or symbol)
                         return
 
                     if status == "FILLED":
-                        if decision_id and self.order_manager.mongo_handler is not None:
-                            self.order_manager.mongo_handler.append_decision_event(
-                                decision_id,
-                                {
-                                    "event_id": f"order_filled:{symbol}:{order_id}",
-                                    "status": "order_filled",
-                                    "order_id": order_id,
-                                    "executed_quantity": order.get(
-                                        "executedQty", quantity
-                                    ),
-                                    "average_price": order.get("avgPrice"),
-                                },
-                            )
-                        entered_at = get_indian_time()
-                        try:
-                            if order.get("time") is not None:
-                                entered_at = datetime.fromtimestamp(
-                                    int(order["time"]) / 1000, tz=timezone.utc
-                                )
-                        except (TypeError, ValueError, OSError):
-                            pass
-                        self.trades[symbol] = {
-                            "symbol": symbol,
-                            "positionSide": action,
-                            "quantity": quantity,
-                            "orderId": order_id,
-                            "price": price,
-                            "trade_id": decision_id or symbol,
-                            # Creation time is a conservative lower bound for all
-                            # partial fills belonging to this order.
-                            "entered_at": entered_at.isoformat(),
-                        }
-                        self.trade_checker.merge_trade_fields(
-                            decision_id or symbol, self.trades[symbol]
-                        )
+                        protect_filled_entry(order)
                         return
 
                 time.sleep(30)
@@ -271,6 +306,7 @@ class BinanceAutomation(ExceptionManager):
                         "order_id": order_id,
                     },
                 )
+            self.trade_checker.delete_trade(decision_id or symbol)
         except Exception as e:
             self.handle_exception(
                 e,
@@ -359,12 +395,28 @@ class BinanceAutomation(ExceptionManager):
                 stop_loss,
                 target,
                 self.future_leverage,
+                ros=True,
                 trade_id=decision_id,
             )
+            if order_response and quantity is not None and order_request is not None:
+                self.trade_checker.merge_trade_fields(
+                    decision_id or symbol,
+                    {
+                        "symbol": symbol,
+                        "positionSide": action,
+                        "quantity": quantity,
+                        "orderId": order_response.get("orderId"),
+                        "price": order_request["price"],
+                        "trade_id": decision_id or symbol,
+                        "stop_loss_price": stop_loss,
+                        "target": target,
+                        "entry_pending": True,
+                    },
+                )
 
         time.sleep(0.5)
 
-        if not order_response:
+        if not order_response or quantity is None or order_request is None:
             logger.warning("Order failed for %s", symbol)
             return
 
@@ -377,6 +429,8 @@ class BinanceAutomation(ExceptionManager):
                 action,
                 quantity,
                 order_request["price"],
+                stop_loss,
+                target,
                 decision_id,
             ),
             daemon=True,

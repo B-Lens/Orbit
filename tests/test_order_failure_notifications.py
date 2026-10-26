@@ -11,12 +11,14 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
             with self.subTest(status=status):
                 automation = BinanceAutomation.__new__(BinanceAutomation)
                 automation.order_manager = Mock()
+                automation.trade_checker = Mock()
                 order = {"status": status}
                 automation.order_manager.get_order.return_value = order
                 automation.send_alerts = Mock()
 
                 automation.monitor_order_execution(
-                    "ETHUSDT", 123, "SELL", 0.389, 2406.99, "decision-1"
+                    "ETHUSDT", 123, "SELL", 0.389, 2406.99, 2420.0, 2380.0,
+                    "decision-1"
                 )
 
                 automation.order_manager.mongo_handler.append_decision_event.assert_called_once_with(
@@ -41,12 +43,14 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
     def test_timeout_cancels_and_records_order_without_alert(self, _time: Mock) -> None:
         automation = BinanceAutomation.__new__(BinanceAutomation)
         automation.order_manager = Mock()
+        automation.trade_checker = Mock()
         automation.order_manager.cancel_order.return_value = {"status": "CANCELED"}
         automation.send_alerts = Mock()
         automation.handle_exception = Mock()
 
         automation.monitor_order_execution(
-            "ETHUSDT", 123, "SELL", 0.389, 2406.99, "decision-1"
+            "ETHUSDT", 123, "SELL", 0.389, 2406.99, 2420.0, 2380.0,
+            "decision-1"
         )
 
         automation.order_manager.cancel_order.assert_called_once_with("ETHUSDT", 123)
@@ -83,5 +87,6 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
         })
 
         automation.order_manager.place_order.assert_called_once()
+        self.assertTrue(automation.order_manager.place_order.call_args.kwargs["ros"])
         automation.send_alerts.assert_not_called()
         thread.assert_not_called()
