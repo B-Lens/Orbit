@@ -152,6 +152,26 @@ class OrderManager(AuthenticationManager, RedisManager):
         )
         return self.adjust_price_tick(symbol, price, round_up=round_up)
 
+    def _next_stop_trigger(self, symbol: str, side: str) -> float:
+        """Return the nearest stop trigger strictly beyond the current price."""
+        current_price = Decimal(str(self.get_mark_price(symbol)))
+        price_filter = self.get_symbol_filters(symbol).get("PRICE_FILTER")
+        if not price_filter:
+            raise RuntimeError(f"PRICE_FILTER unavailable for {symbol}")
+
+        tick = Decimal(str(price_filter["tickSize"]))
+        if tick <= 0:
+            raise RuntimeError(f"Invalid tick size for {symbol}: {tick}")
+
+        offset_price = (
+            current_price + tick
+            if side.upper() == "BUY"
+            else current_price - tick
+        )
+        return self.adjust_price_tick(
+            symbol, float(offset_price), round_up=side.upper() == "BUY"
+        )
+
     def adjust_quantity_step(self, symbol: str, qty: float) -> float:
         """Round *qty* down to the nearest valid step size for *symbol*."""
         filters = self.get_symbol_filters(symbol)
@@ -191,6 +211,11 @@ class OrderManager(AuthenticationManager, RedisManager):
         """Return the current Futures ticker price for *symbol*."""
         ticker = self.future_client_for(symbol).ticker_price(symbol=symbol)
         return float(ticker["price"])
+
+    def get_mark_price(self, symbol: str) -> float:
+        """Return the Futures mark price used by protective triggers."""
+        mark = self.future_client_for(symbol).mark_price(symbol=symbol)
+        return float(mark["markPrice"])
 
     def get_future_symbol_price(self, symbol: str) -> float:
         """Backwards-compatible alias for :meth:`get_symbol_price`."""
@@ -458,6 +483,44 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
             return response
         except ClientError as error:
+            if (
+                getattr(error, "error_code", None) == -2021
+                and order_type.upper() == "STOP_MARKET"
+            ):
+                try:
+                    retry_price = self._next_stop_trigger(symbol, side)
+                    logger.warning(
+                        "[%s] %s trigger %s would execute immediately; "
+                        "retrying once at %s",
+                        symbol,
+                        label,
+                        trigger_price,
+                        retry_price,
+                    )
+                    response = self.place_algo_conditional_order(
+                        symbol=symbol,
+                        side=side,
+                        order_type=order_type,
+                        stop_price=retry_price,
+                        quantity=quantity,
+                        close_position=close_position,
+                        trade_id=trade_id or symbol,
+                    )
+                    if trade_id and self.mongo_handler is not None:
+                        self.mongo_handler.append_decision_event(
+                            trade_id,
+                            {
+                                "status": "protective_order_submitted",
+                                "protective_order_type": order_type,
+                                "order_id": response.get("algoId") if response else None,
+                            },
+                        )
+                    return response
+                except Exception as retry_error:
+                    self.handle_exception(
+                        retry_error,
+                        f"Failed immediate-trigger retry for {symbol} {label}",
+                    )
             if trade_id and self.mongo_handler is not None:
                 self.mongo_handler.append_decision_event(
                     trade_id,

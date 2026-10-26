@@ -46,6 +46,9 @@ credentials.
 - Entry and exit LLM reasoning, execution rejections, and other trade blocks are
   appended to the MongoDB decision ledger. Active-position and post-exit cooldown
   states remain availability safeguards rather than LLM-reviewed candidates.
+- A stop rejected because its trigger has already crossed the mark price is retried
+  once at the nearest valid tick beyond a fresh mark price; take-profit triggers
+  are never repositioned by this recovery path.
 - `RedisManager` owns trade and order key formats.
 - External services must be mocked at their boundary in unit tests.
 
