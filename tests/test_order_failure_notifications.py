@@ -11,6 +11,7 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
             with self.subTest(status=status):
                 automation = BinanceAutomation.__new__(BinanceAutomation)
                 automation.order_manager = Mock()
+                automation.trade_checker = Mock()
                 order = {"status": status}
                 automation.order_manager.get_order.return_value = order
                 automation.send_alerts = Mock()
@@ -42,6 +43,7 @@ class TestSignalOrderFailureNotifications(unittest.TestCase):
     def test_timeout_cancels_and_records_order_without_alert(self, _time: Mock) -> None:
         automation = BinanceAutomation.__new__(BinanceAutomation)
         automation.order_manager = Mock()
+        automation.trade_checker = Mock()
         automation.order_manager.cancel_order.return_value = {"status": "CANCELED"}
         automation.send_alerts = Mock()
         automation.handle_exception = Mock()

@@ -183,6 +183,7 @@ class BinanceAutomation(ExceptionManager):
         """
         start_time = time.time()
         timeout_seconds = 600  # 10 minutes
+        has_fill = False
 
         while time.time() - start_time < timeout_seconds:
             try:
@@ -211,19 +212,27 @@ class BinanceAutomation(ExceptionManager):
                                 description=f"Order {order_id} for {symbol} was {status.lower()}",
                                 fields=order,
                             )
+                        if not has_fill:
+                            self.trade_checker.delete_trade(decision_id or symbol)
+                        else:
+                            self.trade_checker.merge_trade_fields(
+                                decision_id or symbol, {"entry_pending": False}
+                            )
                         return
 
-                    if status == "FILLED":
+                    if status in ("PARTIALLY_FILLED", "FILLED"):
+                        executed_quantity = float(order.get("executedQty") or 0)
+                        if executed_quantity <= 0:
+                            break
+                        has_fill = True
                         if decision_id and self.order_manager.mongo_handler is not None:
                             self.order_manager.mongo_handler.append_decision_event(
                                 decision_id,
                                 {
-                                    "event_id": f"order_filled:{symbol}:{order_id}",
-                                    "status": "order_filled",
+                                    "event_id": f"order_{status.lower()}:{symbol}:{order_id}",
+                                    "status": f"order_{status.lower()}",
                                     "order_id": order_id,
-                                    "executed_quantity": order.get(
-                                        "executedQty", quantity
-                                    ),
+                                    "executed_quantity": order.get("executedQty"),
                                     "average_price": order.get("avgPrice"),
                                 },
                             )
@@ -235,54 +244,51 @@ class BinanceAutomation(ExceptionManager):
                                 )
                         except (TypeError, ValueError, OSError):
                             pass
-                        executed_quantity = float(order.get("executedQty") or quantity)
-                        exit_side = "SELL" if action == "BUY" else "BUY"
-                        stop_order = self.order_manager.place_sl_order(
-                            symbol=symbol,
-                            side=exit_side,
-                            stoploss_price=stop_loss,
-                            quantity=executed_quantity,
-                            trade_id=decision_id or symbol,
-                            close_position=True,
-                        )
-                        target_order = None
-                        if target is not None:
-                            target_order = self.order_manager.place_target_order(
-                                symbol=symbol,
-                                side=exit_side,
-                                target_price=target,
-                                quantity=executed_quantity,
-                                trade_id=decision_id or symbol,
-                                close_position=True,
-                            )
-
-                        self.trades[symbol] = {
+                        trade_id = decision_id or symbol
+                        trade = {
                             "symbol": symbol,
                             "positionSide": action,
                             "quantity": executed_quantity,
                             "orderId": order_id,
                             "price": price,
-                            "trade_id": decision_id or symbol,
+                            "trade_id": trade_id,
                             "stop_loss_price": stop_loss,
                             "target": target,
-                            "stop_loss_order": stop_order,
-                            "take_profit_order": target_order,
-                            "sl_order_id": (
-                                str(stop_order.get("algoId", "")) if stop_order else ""
-                            ),
-                            "tp_order_id": (
-                                str(target_order.get("algoId", ""))
-                                if target_order
-                                else ""
-                            ),
+                            "entry_pending": status != "FILLED",
                             # Creation time is a conservative lower bound for all
                             # partial fills belonging to this order.
                             "entered_at": entered_at.isoformat(),
                         }
-                        self.trade_checker.merge_trade_fields(
-                            decision_id or symbol, self.trades[symbol]
-                        )
-                        return
+                        with position_lifecycle_lock(
+                            symbol, self.order_manager.redis_client
+                        ):
+                            self.trade_checker.merge_trade_fields(trade_id, trade)
+                            stop_order, target_order = self.trade_checker.ensure_orders(
+                                symbol, trade, self.risk_management
+                            )
+                            self.trade_checker.update_protective_order_data(
+                                symbol, trade, stop_order, target_order
+                            )
+                            trade.update(
+                                {
+                                    "stop_loss_order": stop_order,
+                                    "take_profit_order": target_order,
+                                    "sl_order_id": (
+                                        str(stop_order.get("algoId", ""))
+                                        if stop_order
+                                        else ""
+                                    ),
+                                    "tp_order_id": (
+                                        str(target_order.get("algoId", ""))
+                                        if target_order
+                                        else ""
+                                    ),
+                                }
+                            )
+                            self.trades[symbol] = trade
+                        if status == "FILLED":
+                            return
+                        break
 
                 time.sleep(30)
 
@@ -307,6 +313,12 @@ class BinanceAutomation(ExceptionManager):
                         "status": "order_timeout_cancelled",
                         "order_id": order_id,
                     },
+                )
+            if not has_fill:
+                self.trade_checker.delete_trade(decision_id or symbol)
+            else:
+                self.trade_checker.merge_trade_fields(
+                    decision_id or symbol, {"entry_pending": False}
                 )
         except Exception as e:
             self.handle_exception(
@@ -399,6 +411,21 @@ class BinanceAutomation(ExceptionManager):
                 ros=True,
                 trade_id=decision_id,
             )
+            if order_response and quantity is not None and order_request is not None:
+                self.trade_checker.merge_trade_fields(
+                    decision_id or symbol,
+                    {
+                        "symbol": symbol,
+                        "positionSide": action,
+                        "quantity": quantity,
+                        "orderId": order_response.get("orderId"),
+                        "price": order_request["price"],
+                        "trade_id": decision_id or symbol,
+                        "stop_loss_price": stop_loss,
+                        "target": target,
+                        "entry_pending": True,
+                    },
+                )
 
         time.sleep(0.5)
 

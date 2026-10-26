@@ -120,6 +120,10 @@ class TestReportingLifecycle(unittest.TestCase):
             "time": 1_722_470_400_000,
         }
         automation.trade_checker = MagicMock()
+        automation.trade_checker.ensure_orders.return_value = (
+            {"algoId": "sl-1"}, {"algoId": "tp-1"}
+        )
+        automation.risk_management = {}
         automation.trades = {}
         automation.send_signal_updates = MagicMock()
 
@@ -142,6 +146,10 @@ class TestReportingLifecycle(unittest.TestCase):
             "avgPrice": "100.25",
         }
         automation.trade_checker = MagicMock()
+        automation.trade_checker.ensure_orders.return_value = (
+            {"algoId": "sl-1"}, {"algoId": "tp-1"}
+        )
+        automation.risk_management = {}
         automation.trades = {}
         automation.send_signal_updates = MagicMock()
 
@@ -161,22 +169,44 @@ class TestReportingLifecycle(unittest.TestCase):
         )
 
         automation.order_manager.get_order.assert_called_once_with("ETHUSDT", 123)
-        automation.order_manager.place_sl_order.assert_called_once_with(
-            symbol="ETHUSDT",
-            side="SELL",
-            stoploss_price=98.0,
-            quantity=0.5,
-            trade_id="decision-1",
-            close_position=True,
+        automation.trade_checker.ensure_orders.assert_called_once_with(
+            "ETHUSDT",
+            automation.trades["ETHUSDT"],
+            {},
         )
-        automation.order_manager.place_target_order.assert_called_once_with(
-            symbol="ETHUSDT",
-            side="SELL",
-            target_price=105.0,
-            quantity=0.5,
-            trade_id="decision-1",
-            close_position=True,
+
+    @patch("orbit.core.main.time.sleep", return_value=None)
+    def test_partial_fill_is_protected_before_entry_completes(self, _sleep):
+        automation = BinanceAutomation.__new__(BinanceAutomation)
+        automation.order_manager = MagicMock()
+        automation.order_manager.get_order.side_effect = [
+            {
+                "status": "PARTIALLY_FILLED",
+                "executedQty": "0.2",
+                "avgPrice": "100.0",
+            },
+            {
+                "status": "FILLED",
+                "executedQty": "0.5",
+                "avgPrice": "100.1",
+            },
+        ]
+        automation.trade_checker = MagicMock()
+        automation.trade_checker.ensure_orders.return_value = (
+            {"algoId": "sl-1"}, {"algoId": "tp-1"}
         )
+        automation.risk_management = {}
+        automation.trades = {}
+
+        automation.monitor_order_execution(
+            "ETHUSDT", 123, "BUY", 0.5, 100.0, 98.0, 105.0, "decision-1"
+        )
+
+        first_trade = automation.trade_checker.ensure_orders.call_args_list[0].args[1]
+        self.assertEqual(first_trade["quantity"], 0.2)
+        self.assertTrue(first_trade["entry_pending"])
+        self.assertEqual(automation.trade_checker.ensure_orders.call_count, 2)
+        self.assertFalse(automation.trades["ETHUSDT"]["entry_pending"])
 
     @patch("orbit.core.order_manager.time.sleep", return_value=None)
     def test_protective_order_submission_is_appended_to_decision_ledger(self, _sleep):
