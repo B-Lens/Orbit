@@ -316,7 +316,7 @@ def test_antigravity_client_uses_google_search_with_valid_token(
     assert client.invoke_web_search("Assess markets") == '{"sentiment":"NEUTRAL"}'
     request, timeout = requests[0]
     payload = json.loads(request.data)
-    assert payload["model"] == "gemini-3.8-flash-medium"
+    assert payload["model"] == "gemini-2.5-flash"
     assert timeout == 120.0
     assert request.full_url == (
         "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
