@@ -75,6 +75,28 @@ class TestOrderManager(unittest.TestCase):
         self.assertIn("if not current then", script)
         self.assertIn("return 0", script)
 
+    def test_trade_cleanup_removes_emergency_close_order_mapping(self):
+        redis_client = MagicMock()
+        manager = RedisManager(redis_client=redis_client)
+        manager.load_trade = MagicMock(
+            return_value={
+                "sl_order_id": "101",
+                "tp_order_id": "202",
+                "emergency_close_order_id": "303",
+            }
+        )
+
+        manager.delete_trade_with_orders("trade-1")
+
+        redis_client.delete.assert_has_calls(
+            [
+                unittest.mock.call("order:101"),
+                unittest.mock.call("order:202"),
+                unittest.mock.call("order:303"),
+                unittest.mock.call("trade:trade-1"),
+            ]
+        )
+
     def test_exchange_filter_normalization(self):
         self.assertEqual(self.manager.adjust_price_tick("BTCUSDT", 12.34), 12.3)
         self.assertEqual(self.manager.adjust_quantity_step("BTCUSDT", 0.0056), 0.005)
@@ -273,6 +295,123 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(params["positionSide"], "LONG")
         self.assertEqual(params["quantity"], "0.01")
         self.assertNotIn("reduceOnly", params)
+
+    def test_reduce_only_market_close_uses_same_quantity(self):
+        self.manager.get_symbol_price = MagicMock()
+
+        response = self.manager.place_market_order(
+            "BTCUSDT", "SELL", 0.01, reduce_only=True
+        )
+
+        self.assertEqual(response, self.manager.future_client.new_order.return_value)
+        self.manager.future_client.new_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side="SELL",
+            type="MARKET",
+            quantity=0.01,
+            recvWindow=60000,
+            reduceOnly="true",
+        )
+        self.manager.get_symbol_price.assert_not_called()
+
+    def test_immediate_trigger_rejection_closes_same_quantity_at_market(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Order would immediately trigger")
+        error.status_code = 400
+        error.error_code = -2021
+        error.error_message = "Order would immediately trigger."
+        self.manager.place_algo_conditional_order = MagicMock(side_effect=error)
+        self.manager.future_client.get_position_risk.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "0.014"}
+        ]
+        self.manager.place_market_order = MagicMock(return_value={"orderId": 123})
+        self.manager.clientExceptionHandler = MagicMock()
+        self.manager.merge_trade_fields = MagicMock()
+
+        response = self.manager.place_sl_order(
+            "BTCUSDT", "SELL", 41000.0, 0.014, "trade-1"
+        )
+
+        self.assertIsNone(response)
+        self.manager.place_market_order.assert_called_once_with(
+            "BTCUSDT", "SELL", 0.014, reduce_only=True
+        )
+        self.manager.redis_client.set.assert_called_once_with(
+            "order:123", "trade-1"
+        )
+        self.manager.merge_trade_fields.assert_called_once_with(
+            "trade-1", {"emergency_close_order_id": "123"}
+        )
+        self.manager.mongo_handler.append_decision_event.assert_called_once_with(
+            "trade-1",
+            {
+                "status": "emergency_close_submitted",
+                "protective_order_type": "STOP_MARKET",
+                "error_code": -2021,
+                "order_id": 123,
+            },
+        )
+
+    def test_immediate_trigger_full_close_uses_exchange_position_quantity(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Order would immediately trigger")
+        error.status_code = 400
+        error.error_code = -2021
+        error.error_message = "Order would immediately trigger."
+        self.manager.place_algo_conditional_order = MagicMock(side_effect=error)
+        self.manager.future_client.get_position_risk.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "0.016"}
+        ]
+        self.manager.place_market_order = MagicMock(return_value={"orderId": 124})
+        self.manager.clientExceptionHandler = MagicMock()
+
+        self.manager.place_sl_order(
+            "BTCUSDT",
+            "SELL",
+            41000.0,
+            0.014,
+            "trade-1",
+            close_position=True,
+        )
+
+        self.manager.future_client.get_position_risk.assert_called_once_with(
+            symbol="BTCUSDT"
+        )
+        self.manager.place_market_order.assert_called_once_with(
+            "BTCUSDT", "SELL", 0.016, reduce_only=True
+        )
+
+    def test_full_short_close_uses_exchange_position_side_and_quantity(self):
+        self.manager.future_client.get_position_risk.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "-0.016"}
+        ]
+
+        side, quantity = self.manager._get_position_close_details("BTCUSDT")
+
+        self.assertEqual(side, "BUY")
+        self.assertEqual(quantity, 0.016)
+
+    def test_immediate_trigger_derives_short_close_side_from_exchange(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Order would immediately trigger")
+        error.status_code = 400
+        error.error_code = -2021
+        error.error_message = "Order would immediately trigger."
+        self.manager.place_algo_conditional_order = MagicMock(side_effect=error)
+        self.manager.future_client.get_position_risk.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "-0.016"}
+        ]
+        self.manager.place_market_order = MagicMock(return_value={"orderId": 125})
+        self.manager.clientExceptionHandler = MagicMock()
+        self.manager.merge_trade_fields = MagicMock()
+
+        self.manager.place_sl_order(
+            "BTCUSDT", "SELL", 41000.0, 0.014, "trade-1"
+        )
+
+        self.manager.place_market_order.assert_called_once_with(
+            "BTCUSDT", "BUY", 0.014, reduce_only=True
+        )
 
     def test_notional_rejection_is_attached_to_decision(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
@@ -707,6 +846,7 @@ class TestTradeChecker(unittest.TestCase):
 
         checker.order_manager.place_sl_order.assert_called_once_with(
             symbol="ATOMUSDT", side="SELL", stoploss_price=1.736, quantity=690.14,
+            trade_id="atom-trade",
             close_position=True,
         )
 

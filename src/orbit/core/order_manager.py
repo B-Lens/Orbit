@@ -242,6 +242,22 @@ class OrderManager(AuthenticationManager, RedisManager):
         """Return the opposite order side (``'BUY'`` ↔ ``'SELL'``)."""
         return "SELL" if side == "BUY" else "BUY"
 
+    def _get_position_close_details(self, symbol: str) -> Tuple[Optional[str], float]:
+        """Return the market side and quantity that close the exchange position."""
+        positions = self.future_client_for(symbol).get_position_risk(symbol=symbol)
+        if isinstance(positions, dict):
+            positions = [positions]
+        position_amount = sum(
+            float(position.get("positionAmt", 0) or 0)
+            for position in positions
+            if position.get("symbol") == symbol
+        )
+        if position_amount > 0:
+            return "SELL", position_amount
+        if position_amount < 0:
+            return "BUY", abs(position_amount)
+        return None, 0.0
+
     # -------------------------------------------------------------------------
     # SL / TP orders
     # -------------------------------------------------------------------------
@@ -458,7 +474,52 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
             return response
         except ClientError as error:
-            if trade_id and self.mongo_handler is not None:
+            if getattr(error, "error_code", None) == -2021:
+                logger.warning(
+                    "[%s] %s would immediately trigger; closing %s at market.",
+                    symbol,
+                    label,
+                    quantity,
+                )
+                market_side, position_quantity = self._get_position_close_details(
+                    symbol
+                )
+                close_quantity = position_quantity if close_position else quantity
+                market_response = (
+                    self.place_market_order(
+                        symbol,
+                        market_side,
+                        close_quantity,
+                        reduce_only=True,
+                    )
+                    if market_side is not None and close_quantity > 0
+                    else None
+                )
+                market_order_id = (
+                    market_response.get("orderId") if market_response else None
+                )
+                if market_order_id is not None:
+                    owner_trade_id = trade_id or symbol
+                    self.merge_trade_fields(
+                        owner_trade_id,
+                        {"emergency_close_order_id": str(market_order_id)},
+                    )
+                    self.register_order(str(market_order_id), owner_trade_id)
+                if trade_id and self.mongo_handler is not None:
+                    self.mongo_handler.append_decision_event(
+                        trade_id,
+                        {
+                            "status": (
+                                "emergency_close_submitted"
+                                if market_response
+                                else "emergency_close_failed"
+                            ),
+                            "protective_order_type": order_type,
+                            "error_code": -2021,
+                            "order_id": market_order_id,
+                        },
+                    )
+            elif trade_id and self.mongo_handler is not None:
                 self.mongo_handler.append_decision_event(
                     trade_id,
                     {
@@ -837,6 +898,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         side: str,
         quantity: float,
         leverage: int = 1,
+        reduce_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Place a ``MARKET`` order on Binance Futures.
 
@@ -845,13 +907,13 @@ class OrderManager(AuthenticationManager, RedisManager):
             side: ``"BUY"`` or ``"SELL"``.
             quantity: Coin quantity to submit.
             leverage: Multiplier applied to the computed quantity.
+            reduce_only: Restrict the order to reducing existing exposure. Closing
+                orders also bypass the entry-only minimum-notional precheck.
 
         Returns:
             The API response dict, or ``None`` on failure.
         """
         try:
-            current_price = self.get_symbol_price(symbol)
-
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity) * leverage, precision)
 
@@ -870,7 +932,13 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 return None
 
-            if not self.validate_notional(symbol, current_price, quantity):
+            current_price = None
+            if not reduce_only:
+                current_price = self.get_symbol_price(symbol)
+
+            if current_price is not None and not self.validate_notional(
+                symbol, current_price, quantity
+            ):
                 filters = self.get_symbol_filters(symbol)
                 min_notional = (
                     filters["MIN_NOTIONAL"]["notional"]
@@ -894,6 +962,8 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "quantity": quantity,
                 "recvWindow": 60000,
             }
+            if reduce_only:
+                market_order_params["reduceOnly"] = "true"
 
             order_response = self._order_client_for(symbol).new_order(
                 **market_order_params
