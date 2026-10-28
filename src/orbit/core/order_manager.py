@@ -242,19 +242,21 @@ class OrderManager(AuthenticationManager, RedisManager):
         """Return the opposite order side (``'BUY'`` ↔ ``'SELL'``)."""
         return "SELL" if side == "BUY" else "BUY"
 
-    def _get_position_close_quantity(self, symbol: str, side: str) -> float:
-        """Return the current exchange position quantity closed by *side*."""
+    def _get_position_close_details(self, symbol: str) -> Tuple[Optional[str], float]:
+        """Return the market side and quantity that close the exchange position."""
         positions = self.future_client_for(symbol).get_position_risk(symbol=symbol)
         if isinstance(positions, dict):
             positions = [positions]
-        amounts = [
+        position_amount = sum(
             float(position.get("positionAmt", 0) or 0)
             for position in positions
             if position.get("symbol") == symbol
-        ]
-        if side == "SELL":
-            return sum(amount for amount in amounts if amount > 0)
-        return abs(sum(amount for amount in amounts if amount < 0))
+        )
+        if position_amount > 0:
+            return "SELL", position_amount
+        if position_amount < 0:
+            return "BUY", abs(position_amount)
+        return None, 0.0
 
     # -------------------------------------------------------------------------
     # SL / TP orders
@@ -479,19 +481,18 @@ class OrderManager(AuthenticationManager, RedisManager):
                     label,
                     quantity,
                 )
-                close_quantity = (
-                    self._get_position_close_quantity(symbol, side)
-                    if close_position
-                    else quantity
+                market_side, position_quantity = self._get_position_close_details(
+                    symbol
                 )
+                close_quantity = position_quantity if close_position else quantity
                 market_response = (
                     self.place_market_order(
                         symbol,
-                        side,
+                        market_side,
                         close_quantity,
                         reduce_only=True,
                     )
-                    if close_quantity > 0
+                    if market_side is not None and close_quantity > 0
                     else None
                 )
                 market_order_id = (

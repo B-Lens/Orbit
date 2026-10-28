@@ -1335,7 +1335,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
 
             if new_stop_loss < stop_loss:
                 new_stop_order = self._place_and_replace_sl(
-                    symbol, new_stop_loss, stop_loss_order, quantity, "SELL"
+                    symbol, new_stop_loss, stop_loss_order, quantity, "BUY"
                 )
                 if new_stop_order:
                     self.trades[symbol]["stop_loss_price"] = new_stop_loss
