@@ -57,5 +57,5 @@ requires a strategy signal, a successful pre-trade LLM approval, an enabled
 per-asset execution mode, and acceptance by the risk guard. The LLM never places
 orders: entry reasoning gates the handoff to `OrderManager`, while exit reasoning
 runs only after Binance confirms the position is flat. Entry, execution, and exit
-events remain linked by the decision identifier so daily Testnet reports can
-publish auditable lifecycle evidence to the configured GitHub Project.
+events remain linked by the decision identifier so daily and weekly Testnet
+reports can present auditable lifecycle evidence.

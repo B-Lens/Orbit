@@ -32,7 +32,8 @@ Execution is configured per asset in `config/strategies.yaml` with the singular
   invalid values fail startup validation.
 - Symbols monitored only for existing positions are listed under
   `monitored_assets` with an explicit testnet or live environment.
-- BTC, ETH, BCH, and PAXG orders all route to Binance Futures Testnet.
+- All currently configured strategy and monitored-asset mappings route to Binance
+  Futures Testnet.
 
 There is no environment-variable execution-mode override. Testnet uses
 `BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_SECRET_KEY`, and
@@ -98,12 +99,10 @@ The unclosed lifecycle table is historical ledger evidence, not an exchange-posi
 snapshot; use the command center's exchange-backed Active positions table for
 current position state.
 
-GitHub reports, `/daily`, `/weekly`, and the Closed trades calendar use IST
-(Asia/Kolkata, UTC+05:30), regardless of the browser's timezone. Daily periods
-run midnight to midnight; weeks run Saturday 00:00 to the following Saturday
-00:00 (end exclusive). Weekly reports display both dates and the exact interval.
-The publisher switches days at IST midnight. Existing published UTC reports
-retain their old evidence until explicitly regenerated.
+The `/daily` and `/weekly` reports use IST (Asia/Kolkata, UTC+05:30), regardless
+of the browser's timezone. Daily periods run midnight to midnight; weeks run
+Saturday 00:00 to the following Saturday 00:00 (end exclusive). Weekly reports
+display both dates and the exact interval.
 
 Daily and weekly pages show account trading net P&L, the closing USDT wallet,
 trading return, wallet change, and realized trading drawdown. Details include
@@ -134,24 +133,13 @@ balance together, so later income-ledger gaps cannot silently change a saved
 report. The market-intelligence workflow also retains `sentiment_history`
 because its rolling 24-hour score is an input to the current signal filter.
 
-On Saturday IST, the Testnet reporter also publishes an idempotent report for the
-completed Saturday-through-Friday week. It distinguishes accepted signals,
-submitted orders, filled orders, order-stage rejections, and realized-PnL
-events. The weekly scorecard includes fee-aware net P&L, realized-PnL profit
-factor, ledger drawdown, protective-order failures, and symbol/strategy
-breakdowns. It does not label realized-PnL rows as closed trades or estimate
-slippage and uptime from data that the runtime does not persist.
-
-Weekly scorecards do not receive `ai-autonomous` and therefore cannot start the
-issue-implementation workflow.
-
 ## Risk policy
 
 `config/config.json` contains policy independent of strategy logic:
 
 - maximum leverage: 5
 - maximum position notional: 25% of wallet equity
-- maximum risk at stop: 1% of wallet equity per trade
+- maximum risk at stop: 0.25% of wallet equity per trade
 - daily net-loss halt: 2% of wallet equity
 - minimum expected reward/risk: 1.5
 
@@ -163,14 +151,13 @@ Exchange minimums do not override policy: if a minimum-sized order exceeds a
 limit, it is rejected.
 
 For example, with 1,000 USDT wallet equity, 200 USDT of unreserved available
-margin, 2x leverage, a 100 USDT entry, a 99 USDT stop, 1% risk, and the default
-25% notional limit, the independent limits are 10 units from stop risk, 2.5 units
-from position notional, and 4 units from available margin. Orbit selects 2.5,
-applies the 2% buffer, and submits at most 2.45 units after rounding down. The
-position notional is 245 USDT and its required margin at 2x is 122.50 USDT. If
-only 100 USDT were available, the margin limit would be 2 units and the buffered
-quantity would instead be 1.96. Leverage changes margin usage; it does not expand
+margin, 2x leverage, a 100 USDT entry, a 98 USDT stop, 0.25% risk, and the
+default 25% notional limit, the independent limits are 1.25 units from stop
+risk, 2.5 units from position notional, and 4 units from available margin. Orbit
+selects 1.25, applies the 2% buffer, and submits at most 1.225 units before
+exchange step-size rounding. Leverage changes margin usage; it does not expand
 the configured position-notional or stop-risk limits.
+
 Immediately before an order, the daily loss gate refreshes today's income from
 Binance and persists it locally. If this authenticated synchronization fails, the
 order path fails closed instead of trading with a stale daily-loss value.

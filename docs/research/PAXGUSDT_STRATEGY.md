@@ -5,7 +5,7 @@
 - Implementation: `src/orbit/strategies/paxgusdt_strategy.py` (`PAXGUSDTStrategy`)
 - Registry: `config/strategies.yaml`
 - Timeframe: 15 minutes; active candles are excluded
-- Current eligibility: **Paper and Testnet only**
+- Current eligibility: **Research and Testnet only**
 - Promotion rule: do not change `execution_mode` from `testnet` until the criteria below pass
 
 ## Signal contract

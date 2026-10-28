@@ -1,9 +1,9 @@
-# Orbit 🪐
+# Orbit
 
-Orbit is a Python framework for researching and running guarded Binance Futures
-strategies. It combines deterministic strategy signals, per-asset execution modes,
-pre-trade risk checks, position monitoring, and half-hourly web-grounded market
-intelligence.
+Orbit is a Python trading research and execution framework for guarded Binance
+USD-M Futures strategies. It combines deterministic signals, per-asset execution
+modes, pre-trade risk checks, position monitoring, performance reporting, and
+web-grounded market intelligence.
 
 ## Runtime
 
@@ -33,7 +33,7 @@ OHLCV history, sentiment results, trade decisions, and exchange income.
 See [safe adaptive trading](docs/operations/SAFE_ADAPTIVE_TRADING.md) for the
 risk policy, rollout, accounting, and rollback procedures.
 
-## Setup
+## Quick start
 
 Requirements: Python 3.10–3.12, Poetry, Redis, and MongoDB.
 
@@ -45,6 +45,10 @@ cp .env.example .env
 poetry run orbit
 ```
 
+The checked-in configuration uses Binance Futures Testnet. Add Testnet credentials
+to `.env` before exercising exchange paths; keep all credentials and webhook URLs
+out of version control.
+
 `config/strategies.yaml` is the single source of truth for strategy ownership and
 order mode. Its `strategies` map contains only assets enabled in the signal loop;
 symbols checked solely for pre-existing positions belong under `monitored_assets`.
@@ -52,7 +56,7 @@ All checked-in assets are pinned to Futures Testnet. Changing an asset to `live`
 routes that asset to Binance Futures production and requires production
 credentials. Missing, paper, and invalid modes fail startup.
 
-Market intelligence uses `OPENAI_AUTH_FILE`, pointing to a provisioned Codex
+Market intelligence uses `OPENAI_AUTH_FILE`, which points to a provisioned Codex
 CLI `auth.json`. To enable the backup, provision the Antigravity CLI token and
 project files, set their paths with `ANTIGRAVITY_TOKEN_FILE` and
 `ANTIGRAVITY_PROJECT_FILE`, and provide the OAuth client values used to refresh
@@ -67,9 +71,25 @@ first; if both grounded providers fail, the run preserves cached sentiment.
 | `config/strategies.yaml` | Symbol-to-strategy ownership and allowed execution modes. |
 | `.env` | Testnet/live credentials, service endpoints, and Discord alert/exception webhooks; it does not control execution modes. |
 
+## Dashboard and reports
+
+The API and React dashboard run separately from the trading process:
+
+```bash
+poetry run python -m orbit.api
+cd ui
+npm ci
+npm run dev
+```
+
+The API listens on port 8000; the Vite development server proxies `/api` to it.
+See the [dashboard guide](ui/README.md) for report behavior and production routing.
+
 ## Architecture
 
-Start with the [codebase map](docs/architecture/CODEBASE_MAP.md), then use the
+Use the [documentation index](docs/README.md) to find architecture, operations,
+and strategy research. Start with the
+[codebase map](docs/architecture/CODEBASE_MAP.md), then use the
 [core runtime flowchart](docs/architecture/core_module_flowchart.md) for component
 interactions. Operational automation is documented in
 [Codex automation](docs/operations/CODEX_AUTOMATION.md) and
