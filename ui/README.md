@@ -18,8 +18,12 @@ npm run dev
 Vite proxies `/api` requests to the local FastAPI service. Production hosting
 should route the UI and `/api` through the same origin.
 
-The dashboard builds reports only from MongoDB's immutable decision and income
-ledgers. It does not query Binance or consume GitHub report snapshots:
+The dashboard builds reports from MongoDB decisions, trade lifecycles, income,
+and archived accounting. For periods ending within the last 30 days, the API
+also attempts to verify income and closing equity directly against Binance
+Futures Testnet when credentials are configured. It falls back to archived
+verified accounting or the unverified MongoDB income ledger; it does not consume
+GitHub report snapshots.
 
 - `/daily` renders one completed IST day, from midnight through the following
   midnight.

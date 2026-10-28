@@ -1,43 +1,37 @@
-# Codex strict pull-request review
+# Codex pull-request review
 
-`.github/workflows/pr-code-review.yml` runs Codex as a production-safety gate on
-non-draft pull requests targeting `main`. It reviews the complete PR diff in an
-ephemeral read-only sandbox and returns schema-constrained findings.
+`.github/workflows/pr-code-review.yml` invokes the reusable review workflow in
+`b-lens/code-kit` for pull requests targeting `main`. The repository owns the
+trigger, permissions, authentication bindings, and review policy; `code-kit`
+owns the runner implementation.
 
-## Authentication
+## Repository configuration
 
-Create an Actions repository secret named `CODEX_AUTH_JSON` whose value is the
-complete contents of the Codex CLI `auth.json` file. Do not base64-encode it and
-do not commit it. The workflow writes the value to
-`$RUNNER_TEMP/codex-home/auth.json` with a restrictive umask, validates that it
-is JSON, and deletes it in an `always()` cleanup step.
+- `CODEX_AUTH_JSON` supplies the Codex CLI `auth.json` content. Store it only as
+  an Actions repository secret and rotate it after any suspected exposure.
+- `.github/codex/prompt-review.md` defines Orbit's production-safety policy and
+  is loaded from the pull request's base commit.
+- The wrapper grants read-only repository contents and permission to write pull
+  request comments.
 
-Treat this file as a credential. Rotate it if it appears in logs, artifacts,
-commits, caches, or pull-request content.
+## Behavior
 
-## Review behavior
+- Draft pull requests are skipped until they become ready for review.
+- A new commit cancels an obsolete run and starts a review of the new head.
+- Codex runs in an ephemeral, read-only sandbox and returns schema-constrained
+  findings. Any finding fails the review; an empty findings list passes.
+- Authentication, execution, validation, and malformed-output failures fail the
+  check rather than producing a pass.
+- Review diagnostics are retained as short-lived Actions artifacts.
 
-- Draft PRs are not reviewed until marked ready.
-- A new commit cancels the obsolete review and starts a new one.
-- Codex CLI is pinned to `0.147.0` for reproducibility.
-- The job installs `bubblewrap` and loads Ubuntu 24.04's extra AppArmor profile
-  so Codex can create the user namespace required by its Linux sandbox.
-- Repository/user Codex configuration is ignored; authentication still comes
-  from the temporary `CODEX_HOME`.
-- Codex cannot modify the checkout because the sandbox is read-only.
-- PASS requires an empty findings list.
-- P0, P1, or P2 findings produce FAIL and block the check.
-- Missing authentication, a Codex crash, empty output, malformed JSON, or an
-  inconsistent verdict fails closed.
-- A single bot comment is updated on each run to avoid comment spam.
+The reusable workflow reference currently tracks `code-kit`'s `main` branch, so
+its pinned tool versions and runner steps may change without an Orbit commit.
+Inspect the referenced workflow when diagnosing implementation details instead
+of duplicating them here.
 
-The workflow uploads the structured result, rendered comment, and Codex process
-log for seven days. Artifacts are diagnostics and must not contain `auth.json`.
-
-## Public-repository limitation
+## Fork limitation
 
 GitHub does not provide repository secrets to workflows triggered from forks.
-Fork PRs therefore cannot pass this credentialed check until a trusted maintainer
-recreates the change on a branch in the repository or uses a separately approved
-review process. Do not switch this workflow to `pull_request_target` and execute
-untrusted PR code with secrets.
+Fork pull requests therefore need a trusted maintainer branch or another approved
+review path. Do not execute untrusted pull request code through
+`pull_request_target` with repository secrets.
