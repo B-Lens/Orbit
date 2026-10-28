@@ -151,7 +151,7 @@ issue-implementation workflow.
 
 - maximum leverage: 5
 - maximum position notional: 25% of wallet equity
-- maximum risk at stop: 1% of wallet equity per trade
+- maximum risk at stop: 0.25% of wallet equity per trade
 - daily net-loss halt: 2% of wallet equity
 - minimum expected reward/risk: 1.5
 
@@ -163,14 +163,13 @@ Exchange minimums do not override policy: if a minimum-sized order exceeds a
 limit, it is rejected.
 
 For example, with 1,000 USDT wallet equity, 200 USDT of unreserved available
-margin, 2x leverage, a 100 USDT entry, a 99 USDT stop, 1% risk, and the default
-25% notional limit, the independent limits are 10 units from stop risk, 2.5 units
-from position notional, and 4 units from available margin. Orbit selects 2.5,
-applies the 2% buffer, and submits at most 2.45 units after rounding down. The
-position notional is 245 USDT and its required margin at 2x is 122.50 USDT. If
-only 100 USDT were available, the margin limit would be 2 units and the buffered
-quantity would instead be 1.96. Leverage changes margin usage; it does not expand
+margin, 2x leverage, a 100 USDT entry, a 98 USDT stop, 0.25% risk, and the
+default 25% notional limit, the independent limits are 1.25 units from stop
+risk, 2.5 units from position notional, and 4 units from available margin. Orbit
+selects 1.25, applies the 2% buffer, and submits at most 1.225 units before
+exchange step-size rounding. Leverage changes margin usage; it does not expand
 the configured position-notional or stop-risk limits.
+
 Immediately before an order, the daily loss gate refreshes today's income from
 Binance and persists it locally. If this authenticated synchronization fails, the
 order path fails closed instead of trading with a stale daily-loss value.
