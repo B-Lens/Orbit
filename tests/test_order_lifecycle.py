@@ -309,6 +309,18 @@ class TestOrderManager(unittest.TestCase):
         self.manager.place_market_order.assert_called_once_with(
             "BTCUSDT", "SELL", 0.014, reduce_only=True
         )
+        self.manager.redis_client.set.assert_called_once_with(
+            "order:123", "trade-1"
+        )
+        self.manager.mongo_handler.append_decision_event.assert_called_once_with(
+            "trade-1",
+            {
+                "status": "emergency_close_submitted",
+                "protective_order_type": "STOP_MARKET",
+                "error_code": -2021,
+                "order_id": 123,
+            },
+        )
 
     def test_notional_rejection_is_attached_to_decision(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)

@@ -465,13 +465,32 @@ class OrderManager(AuthenticationManager, RedisManager):
                     label,
                     quantity,
                 )
-                self.place_market_order(
+                market_response = self.place_market_order(
                     symbol,
                     side,
                     quantity,
                     reduce_only=True,
                 )
-            if trade_id and self.mongo_handler is not None:
+                market_order_id = (
+                    market_response.get("orderId") if market_response else None
+                )
+                if market_order_id is not None:
+                    self.register_order(str(market_order_id), trade_id or symbol)
+                if trade_id and self.mongo_handler is not None:
+                    self.mongo_handler.append_decision_event(
+                        trade_id,
+                        {
+                            "status": (
+                                "emergency_close_submitted"
+                                if market_response
+                                else "emergency_close_failed"
+                            ),
+                            "protective_order_type": order_type,
+                            "error_code": -2021,
+                            "order_id": market_order_id,
+                        },
+                    )
+            elif trade_id and self.mongo_handler is not None:
                 self.mongo_handler.append_decision_event(
                     trade_id,
                     {
