@@ -458,6 +458,19 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
             return response
         except ClientError as error:
+            if getattr(error, "error_code", None) == -2021:
+                logger.warning(
+                    "[%s] %s would immediately trigger; closing %s at market.",
+                    symbol,
+                    label,
+                    quantity,
+                )
+                self.place_market_order(
+                    symbol,
+                    side,
+                    quantity,
+                    reduce_only=True,
+                )
             if trade_id and self.mongo_handler is not None:
                 self.mongo_handler.append_decision_event(
                     trade_id,
@@ -837,6 +850,7 @@ class OrderManager(AuthenticationManager, RedisManager):
         side: str,
         quantity: float,
         leverage: int = 1,
+        reduce_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Place a ``MARKET`` order on Binance Futures.
 
@@ -845,6 +859,8 @@ class OrderManager(AuthenticationManager, RedisManager):
             side: ``"BUY"`` or ``"SELL"``.
             quantity: Coin quantity to submit.
             leverage: Multiplier applied to the computed quantity.
+            reduce_only: Restrict the order to reducing existing exposure. Closing
+                orders also bypass the entry-only minimum-notional precheck.
 
         Returns:
             The API response dict, or ``None`` on failure.
@@ -870,7 +886,9 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 return None
 
-            if not self.validate_notional(symbol, current_price, quantity):
+            if not reduce_only and not self.validate_notional(
+                symbol, current_price, quantity
+            ):
                 filters = self.get_symbol_filters(symbol)
                 min_notional = (
                     filters["MIN_NOTIONAL"]["notional"]
@@ -894,6 +912,8 @@ class OrderManager(AuthenticationManager, RedisManager):
                 "quantity": quantity,
                 "recvWindow": 60000,
             }
+            if reduce_only:
+                market_order_params["reduceOnly"] = "true"
 
             order_response = self._order_client_for(symbol).new_order(
                 **market_order_params

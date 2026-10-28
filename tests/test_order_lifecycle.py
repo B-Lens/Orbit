@@ -274,6 +274,42 @@ class TestOrderManager(unittest.TestCase):
         self.assertEqual(params["quantity"], "0.01")
         self.assertNotIn("reduceOnly", params)
 
+    def test_reduce_only_market_close_uses_same_quantity(self):
+        self.manager.get_symbol_price = MagicMock(return_value=50000.0)
+
+        response = self.manager.place_market_order(
+            "BTCUSDT", "SELL", 0.01, reduce_only=True
+        )
+
+        self.assertEqual(response, self.manager.future_client.new_order.return_value)
+        self.manager.future_client.new_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side="SELL",
+            type="MARKET",
+            quantity=0.01,
+            recvWindow=60000,
+            reduceOnly="true",
+        )
+
+    def test_immediate_trigger_rejection_closes_same_quantity_at_market(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Order would immediately trigger")
+        error.status_code = 400
+        error.error_code = -2021
+        error.error_message = "Order would immediately trigger."
+        self.manager.place_algo_conditional_order = MagicMock(side_effect=error)
+        self.manager.place_market_order = MagicMock(return_value={"orderId": 123})
+        self.manager.clientExceptionHandler = MagicMock()
+
+        response = self.manager.place_sl_order(
+            "BTCUSDT", "SELL", 41000.0, 0.014, "trade-1"
+        )
+
+        self.assertIsNone(response)
+        self.manager.place_market_order.assert_called_once_with(
+            "BTCUSDT", "SELL", 0.014, reduce_only=True
+        )
+
     def test_notional_rejection_is_attached_to_decision(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
         self.manager.calculate_risk_position_size = MagicMock(return_value=(0.004, 2))
