@@ -250,13 +250,17 @@ class RedisManager:
     def delete_trade_with_orders(self, trade_id: str) -> None:
         """Remove ``trade:{trade_id}`` and all associated ``order:*`` keys.
 
-        Reads ``sl_order_id`` and ``tp_order_id`` from the stored trade
+        Reads protective and emergency-close order IDs from the stored trade
         before deleting.
         """
         try:
             trade = self.load_trade(trade_id)
             if trade:
-                for field in ("sl_order_id", "tp_order_id"):
+                for field in (
+                    "sl_order_id",
+                    "tp_order_id",
+                    "emergency_close_order_id",
+                ):
                     oid = trade.get(field)
                     if oid:
                         self.redis_client.delete(_order_key(str(oid)))

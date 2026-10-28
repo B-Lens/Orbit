@@ -773,11 +773,19 @@ class TradeChecker(AuthenticationManager, RedisManager):
         current_trade = self.load_trade(trade_id) or {}
         persisted_order_ids = {
             str(persisted_trade.get(field) or "")
-            for field in ("sl_order_id", "tp_order_id")
+            for field in (
+                "sl_order_id",
+                "tp_order_id",
+                "emergency_close_order_id",
+            )
         }
         current_order_ids = {
             str(current_trade.get(field) or "")
-            for field in ("sl_order_id", "tp_order_id")
+            for field in (
+                "sl_order_id",
+                "tp_order_id",
+                "emergency_close_order_id",
+            )
         }
         if current_order_ids != persisted_order_ids or not self._position_is_flat(
             symbol

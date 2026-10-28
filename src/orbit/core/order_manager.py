@@ -498,7 +498,12 @@ class OrderManager(AuthenticationManager, RedisManager):
                     market_response.get("orderId") if market_response else None
                 )
                 if market_order_id is not None:
-                    self.register_order(str(market_order_id), trade_id or symbol)
+                    owner_trade_id = trade_id or symbol
+                    self.merge_trade_fields(
+                        owner_trade_id,
+                        {"emergency_close_order_id": str(market_order_id)},
+                    )
+                    self.register_order(str(market_order_id), owner_trade_id)
                 if trade_id and self.mongo_handler is not None:
                     self.mongo_handler.append_decision_event(
                         trade_id,
@@ -908,8 +913,6 @@ class OrderManager(AuthenticationManager, RedisManager):
             The API response dict, or ``None`` on failure.
         """
         try:
-            current_price = self.get_symbol_price(symbol)
-
             precision = self.config["trading_pairs_precision"][symbol]
             quantity = round(float(quantity) * leverage, precision)
 
@@ -928,7 +931,11 @@ class OrderManager(AuthenticationManager, RedisManager):
                 )
                 return None
 
-            if not reduce_only and not self.validate_notional(
+            current_price = None
+            if not reduce_only:
+                current_price = self.get_symbol_price(symbol)
+
+            if current_price is not None and not self.validate_notional(
                 symbol, current_price, quantity
             ):
                 filters = self.get_symbol_filters(symbol)
