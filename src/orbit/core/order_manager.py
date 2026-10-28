@@ -242,6 +242,20 @@ class OrderManager(AuthenticationManager, RedisManager):
         """Return the opposite order side (``'BUY'`` ↔ ``'SELL'``)."""
         return "SELL" if side == "BUY" else "BUY"
 
+    def _get_position_close_quantity(self, symbol: str, side: str) -> float:
+        """Return the current exchange position quantity closed by *side*."""
+        positions = self.future_client_for(symbol).get_position_risk(symbol=symbol)
+        if isinstance(positions, dict):
+            positions = [positions]
+        amounts = [
+            float(position.get("positionAmt", 0) or 0)
+            for position in positions
+            if position.get("symbol") == symbol
+        ]
+        if side == "SELL":
+            return sum(amount for amount in amounts if amount > 0)
+        return abs(sum(amount for amount in amounts if amount < 0))
+
     # -------------------------------------------------------------------------
     # SL / TP orders
     # -------------------------------------------------------------------------
@@ -465,11 +479,20 @@ class OrderManager(AuthenticationManager, RedisManager):
                     label,
                     quantity,
                 )
-                market_response = self.place_market_order(
-                    symbol,
-                    side,
-                    quantity,
-                    reduce_only=True,
+                close_quantity = (
+                    self._get_position_close_quantity(symbol, side)
+                    if close_position
+                    else quantity
+                )
+                market_response = (
+                    self.place_market_order(
+                        symbol,
+                        side,
+                        close_quantity,
+                        reduce_only=True,
+                    )
+                    if close_quantity > 0
+                    else None
                 )
                 market_order_id = (
                     market_response.get("orderId") if market_response else None

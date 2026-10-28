@@ -407,6 +407,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
                     stoploss_price=sl_price,
                     quantity=trade["quantity"],
+                    trade_id=trade_id,
                     close_position=True,
                 )
                 time.sleep(0.5)
@@ -432,6 +433,7 @@ class TradeChecker(AuthenticationManager, RedisManager):
                     side=("SELL" if trade["positionSide"] == "BUY" else "BUY"),
                     target_price=target_price,
                     quantity=trade["quantity"],
+                    trade_id=trade_id,
                     close_position=True,
                 )
                 time.sleep(0.5)
@@ -1130,7 +1132,9 @@ class TradeChecker(AuthenticationManager, RedisManager):
         try:
             trade_id = self.trades.get(symbol, {}).get("trade_id") or symbol
 
-            placed = self.order_manager.place_sl_order(symbol, side, new_sl, quantity)
+            placed = self.order_manager.place_sl_order(
+                symbol, side, new_sl, quantity, trade_id=trade_id
+            )
             time.sleep(0.5)
 
             if placed:

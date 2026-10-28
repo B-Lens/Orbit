@@ -322,6 +322,35 @@ class TestOrderManager(unittest.TestCase):
             },
         )
 
+    def test_immediate_trigger_full_close_uses_exchange_position_quantity(self):
+        error = ClientError.__new__(ClientError)
+        Exception.__init__(error, "Order would immediately trigger")
+        error.status_code = 400
+        error.error_code = -2021
+        error.error_message = "Order would immediately trigger."
+        self.manager.place_algo_conditional_order = MagicMock(side_effect=error)
+        self.manager.future_client.get_position_risk.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "0.016"}
+        ]
+        self.manager.place_market_order = MagicMock(return_value={"orderId": 124})
+        self.manager.clientExceptionHandler = MagicMock()
+
+        self.manager.place_sl_order(
+            "BTCUSDT",
+            "SELL",
+            41000.0,
+            0.014,
+            "trade-1",
+            close_position=True,
+        )
+
+        self.manager.future_client.get_position_risk.assert_called_once_with(
+            symbol="BTCUSDT"
+        )
+        self.manager.place_market_order.assert_called_once_with(
+            "BTCUSDT", "SELL", 0.016, reduce_only=True
+        )
+
     def test_notional_rejection_is_attached_to_decision(self):
         self.manager.get_usdt_balance = MagicMock(return_value=1000)
         self.manager.calculate_risk_position_size = MagicMock(return_value=(0.004, 2))
@@ -755,6 +784,7 @@ class TestTradeChecker(unittest.TestCase):
 
         checker.order_manager.place_sl_order.assert_called_once_with(
             symbol="ATOMUSDT", side="SELL", stoploss_price=1.736, quantity=690.14,
+            trade_id="atom-trade",
             close_position=True,
         )
 
